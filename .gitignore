@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test and tooling caches
+coverage/
+.vitest/
+.turbo/
+
+# Environment: never commit credentials. RIUS_API_KEY belongs here, not in git.
+.env
+.env.*
+!.env.example
+
+# Internal planning docs. This repo becomes public, and git history survives a
+# visibility flip, so design and plan documents live in Linear instead.
+# Design: linear.app/glassflow/document/ts-sdk-design-rius-197-a1b3d53810f0
+docs/superpowers/
+
+# Scratch workspace for plan execution (ledger, briefs, review packages)
+.superpowers/
+
+# Editors
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
