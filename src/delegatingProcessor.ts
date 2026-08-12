@@ -16,6 +16,18 @@ export class DelegatingSpanProcessor implements SpanProcessor {
     this.delegates.push(processor);
   }
 
+  /**
+   * Insert ahead of existing delegates, for a processor that must observe a span
+   * before the exporting processor queues it.
+   *
+   * Required by attribute-transforming processors: once a span is queued for
+   * export, later mutation is not guaranteed to be seen, and attributes a
+   * transform ADDS would bypass the masking applied in the exporter chain.
+   */
+  addFirst(processor: SpanProcessor): void {
+    this.delegates.unshift(processor);
+  }
+
   onStart(span: Span, parentContext: Context): void {
     for (const delegate of this.delegates) delegate.onStart(span, parentContext);
   }

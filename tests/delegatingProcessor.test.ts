@@ -46,6 +46,47 @@ describe("DelegatingSpanProcessor", () => {
     expect(late.onEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("gives an addFirst delegate the span before the delegates already present", () => {
+    const processors = new DelegatingSpanProcessor();
+    const order: string[] = [];
+    const existing = stub();
+    existing.onEnd = vi.fn(() => {
+      order.push("existing");
+    });
+    const transform = stub();
+    transform.onEnd = vi.fn(() => {
+      order.push("transform");
+    });
+
+    processors.add(existing);
+    processors.addFirst(transform);
+    processors.onEnd(span);
+
+    // Not merely "both were called": an attribute transform that runs after the
+    // exporting processor has queued the span is useless, and content it adds
+    // would skip masking.
+    expect(order).toEqual(["transform", "existing"]);
+  });
+
+  it("keeps addFirst delegates ahead of ones added later", () => {
+    const processors = new DelegatingSpanProcessor();
+    const order: string[] = [];
+    const first = stub();
+    first.onStart = vi.fn(() => {
+      order.push("first");
+    });
+    const last = stub();
+    last.onStart = vi.fn(() => {
+      order.push("last");
+    });
+
+    processors.addFirst(first);
+    processors.add(last);
+    processors.onStart(span, context);
+
+    expect(order).toEqual(["first", "last"]);
+  });
+
   it("awaits every delegate on forceFlush", async () => {
     const processors = new DelegatingSpanProcessor();
     let resolved = false;

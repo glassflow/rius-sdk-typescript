@@ -1,11 +1,18 @@
 import type { TracerProvider } from "@opentelemetry/api";
-import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
+import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 
 export type EntryKind = "instrumentation" | "processor";
 
 export interface RegistryEntry {
   name: string;
   kind: EntryKind;
+  /**
+   * Where a `processor` entry goes in the sink. `"first"` for a processor that
+   * must see a span before the exporting processor queues it. Ignored by
+   * `instrumentation` entries. Defaults to `"last"`.
+   */
+  insert?: "first" | "last";
   /** Resolves undefined when the optional package is not installed. */
   load(): Promise<unknown | undefined>;
 }
@@ -18,6 +25,7 @@ export interface RegistryEntry {
  */
 export interface ProcessorSink {
   add(processor: SpanProcessor): void;
+  addFirst(processor: SpanProcessor): void;
 }
 
 // esbuild rewrites a bare `import()` into `require()` in the CJS build, and
@@ -25,74 +33,105 @@ export interface ProcessorSink {
 // condition), so a rewritten call throws ERR_PACKAGE_PATH_NOT_EXPORTED and the
 // integration would silently vanish for every CommonJS consumer. Building the
 // function at runtime keeps a real dynamic import in both output formats.
+//
+// Do not "simplify" this to a literal import(): it is the only thing keeping the
+// ESM-only integrations working for CommonJS consumers.
 const dynamicImport = new Function("s", "return import(s)") as (
   s: string,
 ) => Promise<Record<string, unknown>>;
 
-async function importModule(specifier: string): Promise<Record<string, unknown>> {
-  try {
-    return await dynamicImport(specifier);
-  } catch (error) {
-    // Sandboxed module runners (a vm context without an import callback) reject
-    // dynamic import from a runtime-built function. Falling back keeps the
-    // registry resolvable there, so an absent package is still reported as
-    // absent rather than as broken. Shipped CJS consumers use the path above.
-    if ((error as { code?: string }).code !== "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING") throw error;
-    try {
-      return (await import(specifier)) as Record<string, unknown>;
-    } catch (fallbackError) {
-      // Such loaders report an unresolvable specifier as a codeless Error, so a
-      // resolution failure is normalised to the code the caller checks. Only
-      // resolution failures: any other error still surfaces as "installed but
-      // broken", which must stay loud.
-      const message = (fallbackError as Error).message ?? "";
-      if (
-        (fallbackError as { code?: string }).code === undefined &&
-        /cannot find (module|package)|could not resolve|failed to load url|is it installed|does the file exist/i.test(
-          message,
-        )
-      ) {
-        (fallbackError as { code?: string }).code = "ERR_MODULE_NOT_FOUND";
-      }
-      throw fallbackError;
-    }
-  }
+/**
+ * Whether an error means "the specifier did not resolve" for that specifier.
+ *
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export function isUnresolved(error: unknown, specifier: string): boolean {
+  // Anything can be thrown, including null and primitives, so read the message
+  // defensively: this runs inside the error path and must not throw itself.
+  if (typeof error !== "object" || error === null) return false;
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string") return false;
+  // Anchored on the specifier immediately after the loader's phrase, so a
+  // failure to resolve one of the package's OWN dependencies is not mistaken
+  // for the package being absent: those messages name the missing dependency
+  // and mention our specifier only as the importer's path, if at all. Codes are
+  // not enough on their own; loaders disagree, and some report no code.
+  const quoted = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:cannot find (?:module|package)|could not resolve|failed to load url)\\s*['"\`]?${quoted}['"\`]?`,
+    "i",
+  ).test(message);
 }
 
 async function optional(specifier: string): Promise<Record<string, unknown> | undefined> {
   try {
-    return await importModule(specifier);
+    return await dynamicImport(specifier);
   } catch (error) {
-    const code = (error as { code?: string }).code;
-    // Not installed is the normal optional-peer case and stays quiet. Anything
-    // else means the package IS present but failed to load, which must be loud:
-    // a silent skip here looks identical to "user did not install it".
-    if (code !== "MODULE_NOT_FOUND" && code !== "ERR_MODULE_NOT_FOUND") {
-      console.warn(
-        `[rius] integration "${specifier}" is installed but failed to load: ${(error as Error).message}`,
-      );
+    if (isUnresolved(error, specifier)) return undefined;
+
+    // Sandboxed module runners (a vm context with no import callback) reject
+    // dynamic import from a runtime-built function, so retry through the
+    // loader's own import. NOTE: esbuild rewrites this literal import() to
+    // require() in the CJS bundle. That is tolerable only because this branch is
+    // unreachable in a normal Node process; the path above is the one shipped
+    // consumers execute, and it must stay.
+    if ((error as { code?: string }).code === "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING") {
+      try {
+        return (await import(specifier)) as Record<string, unknown>;
+      } catch (fallbackError) {
+        if (isUnresolved(fallbackError, specifier)) return undefined;
+        warnBroken(specifier, fallbackError);
+        return undefined;
+      }
     }
+
+    // The package IS present but failed to load, which must be loud: a silent
+    // skip here looks identical to "user did not install it".
+    warnBroken(specifier, error);
     return undefined;
   }
+}
+
+function warnBroken(specifier: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[rius] integration "${specifier}" is installed but failed to load: ${message}`);
 }
 
 /**
  * Bundled integrations. Packages are imported lazily so none is a hard
  * dependency; install them as optional peers and init() enables what it finds.
  *
- * Two kinds on purpose: OpenInference ships the Vercel AI SDK support as a
- * SPAN PROCESSOR, which must reach the provider through the processor sink,
- * while OpenAI support is a conventional instrumentation.
+ * Two kinds on purpose: the Vercel AI SDK support is contributed as a SPAN
+ * PROCESSOR, while OpenAI support is a conventional instrumentation.
  */
 export const REGISTRY: RegistryEntry[] = [
   {
     name: "vercel-ai",
     kind: "processor",
+    // The transform can ADD content attributes such as input.value. Masking
+    // runs in the exporter chain, which executes after a span is queued, so the
+    // transform has to run before the exporting processor sees the span or the
+    // attributes it added would never be sanitised.
+    insert: "first",
     async load() {
-      const mod = await optional("@arizeai/openinference-vercel");
-      const Ctor = (mod?.OpenInferenceBatchSpanProcessor ??
-        mod?.OpenInferenceSimpleSpanProcessor) as (new () => unknown) | undefined;
-      return Ctor ? new Ctor() : undefined;
+      // Deliberately NOT the package's own OpenInferenceBatchSpanProcessor /
+      // OpenInferenceSimpleSpanProcessor: both require an exporter and export
+      // through it, so adding one alongside our exporting processor would send
+      // every span twice, once raw and once transformed. Only the attribute
+      // transform is wanted, wrapped in a processor of ours that never exports.
+      const utils = await optional("@arizeai/openinference-vercel/utils");
+      const add = utils?.addOpenInferenceAttributesToSpan as
+        | ((span: ReadableSpan) => void)
+        | undefined;
+      if (add === undefined) return undefined;
+      return {
+        onStart() {},
+        onEnd(span: ReadableSpan) {
+          add(span);
+        },
+        async forceFlush() {},
+        async shutdown() {},
+      } satisfies SpanProcessor;
     },
   },
   {
@@ -126,14 +165,13 @@ export async function enableInstrumentations(
       if (loaded === undefined) continue;
 
       if (entry.kind === "processor") {
-        sink.add(loaded as SpanProcessor);
+        if (entry.insert === "first") sink.addFirst(loaded as SpanProcessor);
+        else sink.add(loaded as SpanProcessor);
       } else {
-        const core = await optional("@opentelemetry/instrumentation");
-        const register = core?.registerInstrumentations as
-          | ((cfg: { instrumentations: unknown[]; tracerProvider: TracerProvider }) => void)
-          | undefined;
-        if (register === undefined) continue;
-        register({ instrumentations: [loaded], tracerProvider });
+        registerInstrumentations({
+          instrumentations: [loaded as Instrumentation],
+          tracerProvider,
+        });
       }
       enabled.push(entry.name);
     } catch {
