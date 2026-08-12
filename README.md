@@ -300,4 +300,4 @@ can be removed.
 
 ## License
 
-Apache-2.0
+MIT

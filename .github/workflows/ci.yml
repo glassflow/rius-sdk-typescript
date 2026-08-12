@@ -54,7 +54,7 @@ jobs:
       - run: npm run build
       - run: npx publint
       - run: npx --yes @arethetypeswrong/cli --pack .
-      - name: LICENSE file exists and matches package.json license field
+      - name: LICENSE file and README agree with package.json license field
         if: matrix.node-version == '20'
         run: |
           if [ ! -f LICENSE ]; then
@@ -78,6 +78,23 @@ jobs:
           ACTUAL=$(head -n1 LICENSE)
           if [ "$ACTUAL" != "$EXPECTED" ]; then
             echo "::error::package.json license is '$SPDX' but LICENSE begins with '$ACTUAL' (expected '$EXPECTED')"
+            exit 1
+          fi
+          # README.md must state the same SPDX id under its own "## License"
+          # heading. Scope extraction to the text between that heading and the
+          # next "## " heading (or EOF) rather than grepping the whole file,
+          # so incidental mentions of a license name elsewhere in the prose
+          # cannot produce a false pass or a false fail. If the section is
+          # renamed or removed this intentionally finds nothing and fails
+          # loudly below, rather than silently skipping the check.
+          README_SECTION=$(awk '/^## License/{flag=1; next} /^## /{flag=0} flag' README.md)
+          if [ -z "$(echo "$README_SECTION" | tr -d '[:space:]')" ]; then
+            echo "::error::README.md has no non-empty '## License' section; add one stating the SPDX id ('$SPDX')"
+            exit 1
+          fi
+          README_LICENSE=$(echo "$README_SECTION" | grep -v '^[[:space:]]*$' | head -n1 | xargs)
+          if [ "$README_LICENSE" != "$SPDX" ]; then
+            echo "::error::package.json license is '$SPDX' but README.md's ## License section says '$README_LICENSE'"
             exit 1
           fi
       - name: ESM and CJS entrypoints both resolve
