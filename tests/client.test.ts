@@ -139,11 +139,17 @@ describe("init", () => {
     ).rejects.toThrow(leak);
     await client.flush();
 
-    const event = exporter.getFinishedSpans()[0].events[0];
+    const span = exporter.getFinishedSpans()[0];
+    const event = span.events[0];
     expect(event.name).toBe("exception");
     expect(event.attributes?.["exception.type"]).toBe("Error");
     expect(event.attributes?.["exception.message"]).toBeUndefined();
     expect(event.attributes?.["exception.stacktrace"]).toBeUndefined();
+
+    // recordException() also copies the message onto the span's own status,
+    // a separate carrier from the exception event above; captureContent:
+    // false must scrub that too, or the same leak ships via status.message.
+    expect(span.status.message).toBeUndefined();
   });
 
   it("keeps the exception message when captureContent is left at its default", async () => {
@@ -182,8 +188,14 @@ describe("init", () => {
     // Compile-time assertion, enforced by `npm run typecheck`: a
     // caller-constructed client is not the global one, so its shutdown() would
     // skip trace.disable() and silently leave the SDK registered.
+    //
+    // The argument matters: `new RiusClient()` alone would also be flagged
+    // by `@ts-expect-error` on pure arity grounds (RiusClient's constructor
+    // takes one argument), which would stay green even if the constructor
+    // became public. Passing an argument means the only remaining error is
+    // "constructor is private".
     // @ts-expect-error the constructor is private; init() is the sole factory.
-    expect(() => new RiusClient()).toBeTypeOf("function");
+    expect(() => new RiusClient({} as never)).toBeTypeOf("function");
   });
 
   it("drops a child of a remote UNSAMPLED parent even at sampleRate 1", async () => {

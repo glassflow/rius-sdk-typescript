@@ -1,3 +1,4 @@
+import { SpanStatusCode } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { Mask } from "./config.js";
@@ -63,6 +64,16 @@ export class MaskingSpanExporter implements SpanExporter {
 
     for (const link of span.links ?? []) {
       this.sanitizeAttributes(link.attributes as Record<string, unknown> | undefined);
+    }
+
+    if (!this.opts.captureContent && span.status?.code === SpanStatusCode.ERROR) {
+      // `recordException` copies the thrown error's message onto the status,
+      // which is the same leak the exception event's `exception.message` is
+      // stripped for above. `status` is mutable and exposed by reference on
+      // the SDK span, same as `attributes`, so mutating it in place here
+      // reaches the span that is about to be handed to the inner exporter.
+      // The ERROR code itself is left alone so the failure stays visible.
+      span.status.message = undefined;
     }
 
     return span;
