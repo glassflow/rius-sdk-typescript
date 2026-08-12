@@ -54,6 +54,17 @@ const dynamicImport = new Function("s", "return import(s)") as (
   s: string,
 ) => Promise<Record<string, unknown>>;
 
+/** The installable package a specifier belongs to: `@scope/name`, or `name`. */
+function packageOf(specifier: string): string {
+  const segments = specifier.split("/");
+  const take = specifier.startsWith("@") ? 2 : 1;
+  return segments.slice(0, take).join("/");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Whether an error means "the specifier did not resolve" for that specifier.
  *
@@ -65,14 +76,24 @@ export function isUnresolved(error: unknown, specifier: string): boolean {
   if (typeof error !== "object" || error === null) return false;
   const message = (error as { message?: unknown }).message;
   if (typeof message !== "string") return false;
-  // Anchored on the specifier immediately after the loader's phrase, so a
-  // failure to resolve one of the package's OWN dependencies is not mistaken
-  // for the package being absent: those messages name the missing dependency
-  // and mention our specifier only as the importer's path, if at all. Codes are
-  // not enough on their own; loaders disagree, and some report no code.
-  const quoted = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Matched immediately after the loader's resolution phrase, so a failure to
+  // resolve one of the package's OWN dependencies is not mistaken for the
+  // package being absent: those messages name the missing dependency, and
+  // mention our specifier only as the importer's path, if at all. Codes are not
+  // enough on their own; loaders disagree, and some report no code.
+  //
+  // Either the full specifier or just its package: importing a subpath such as
+  // "<pkg>/utils" fails with a message naming only "<pkg>", so requiring the
+  // full specifier would classify a plainly absent optional peer as installed
+  // and warn every consumer who skipped it.
+  //
+  // The trailing boundary is what keeps the package alternative honest: without
+  // it, "<pkg>" would match "<pkg>-nope", laundering a missing sibling package
+  // back into the quiet path.
+  const alternatives = [specifier, packageOf(specifier)].map(escapeRegExp).join("|");
   return new RegExp(
-    `(?:cannot find (?:module|package)|could not resolve|failed to load url)\\s*['"\`]?${quoted}['"\`]?`,
+    `(?:cannot find (?:module|package)|could not resolve|failed to load url)\\s*['"\`]?(?:${alternatives})['"\`]?(?![\\w./@-])`,
     "i",
   ).test(message);
 }

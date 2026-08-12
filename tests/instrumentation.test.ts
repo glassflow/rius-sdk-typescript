@@ -7,7 +7,7 @@ import {
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it, vi } from "vitest";
-import { init } from "../src/client.js";
+import { getTracer, init, spanProcessorSink } from "../src/client.js";
 import {
   REGISTRY,
   type RegistryEntry,
@@ -42,6 +42,16 @@ async function withEntry(entry: RegistryEntry, body: () => Promise<void>): Promi
   }
 }
 
+/** Attributes as the Vercel AI SDK sets them on a generateText span. */
+const VERCEL_SPAN_ATTRIBUTES = {
+  "operation.name": "ai.generateText.doGenerate",
+  "ai.model.id": "gpt-4o-mini",
+  "ai.model.provider": "openai",
+  "ai.prompt": JSON.stringify({ prompt: "what is 2+2" }),
+  "ai.response.text": "4",
+  "ai.settings.maxOutputTokens": 100,
+};
+
 /** A finished span shaped like one the Vercel AI SDK emits. */
 function vercelSpan(): ReadableSpan {
   const exporter = new InMemorySpanExporter();
@@ -49,14 +59,7 @@ function vercelSpan(): ReadableSpan {
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
   const span = provider.getTracer("test").startSpan("ai.generateText.doGenerate", {
-    attributes: {
-      "operation.name": "ai.generateText.doGenerate",
-      "ai.model.id": "gpt-4o-mini",
-      "ai.model.provider": "openai",
-      "ai.prompt": JSON.stringify({ prompt: "what is 2+2" }),
-      "ai.response.text": "4",
-      "ai.settings.maxOutputTokens": 100,
-    },
+    attributes: VERCEL_SPAN_ATTRIBUTES,
   });
   span.end();
   const finished = exporter.getFinishedSpans()[0];
@@ -98,6 +101,38 @@ describe("isUnresolved", () => {
     }
   });
 
+  it("treats a SUBPATH specifier as absent when the message names only the package", () => {
+    // The case production actually hits: the vercel-ai entry imports
+    // "<pkg>/utils", but Node's resolution error names only "<pkg>". Requiring
+    // the full specifier warned every consumer who skipped the optional peer.
+    const subpath = `${spec}/utils`;
+    const messages = [
+      `Cannot find package '${spec}' imported from /app/node_modules/@glassflow/rius/dist/index.js`,
+      `Cannot find module '${spec}'`,
+      `Could not resolve "${spec}" imported by "@glassflow/rius". Is it installed?`,
+      // and still absent when the loader does echo the full subpath
+      `Failed to load url ${subpath} (resolved id: ${subpath}). Does the file exist?`,
+    ];
+    for (const message of messages) {
+      expect(isUnresolved(new Error(message), subpath)).toBe(true);
+    }
+  });
+
+  it("does NOT treat a different package sharing our name as a prefix as absent", () => {
+    // Without a right-hand boundary, "<pkg>" matches "<pkg>-nope" and a missing
+    // sibling package is laundered into the quiet path.
+    for (const requested of [spec, `${spec}/utils`]) {
+      expect(isUnresolved(new Error(`Cannot find package '${spec}-nope'`), requested)).toBe(false);
+      expect(
+        isUnresolved(
+          new Error(`Cannot find package '${spec}-nope' imported from /app/node_modules/x/i.js`),
+          requested,
+        ),
+      ).toBe(false);
+      expect(isUnresolved(new Error(`Cannot find module '${spec}2/utils'`), requested)).toBe(false);
+    }
+  });
+
   it("does NOT treat a failure inside the package as absent, even when the message names its path", () => {
     // The laundering case: the package IS installed but one of ITS OWN
     // dependencies is missing. The resolution phrase names that dependency, and
@@ -105,7 +140,10 @@ describe("isUnresolved", () => {
     const error = new Error(
       `Cannot find package 'zod' imported from /app/node_modules/${spec}/dist/esm/index.js`,
     );
+    // Both request forms, since the package alternative is now accepted: the
+    // importer path must never be enough to call the package absent.
     expect(isUnresolved(error, spec)).toBe(false);
+    expect(isUnresolved(error, `${spec}/utils`)).toBe(false);
   });
 
   it("does NOT treat an ESM-only require failure or a runtime error as absent", () => {
@@ -119,6 +157,22 @@ describe("isUnresolved", () => {
     expect(isUnresolved(undefined, spec)).toBe(false);
     expect(isUnresolved(null, spec)).toBe(false);
     expect(isUnresolved(`Cannot find module '${spec}'`, spec)).toBe(false);
+  });
+
+  it("classifies the error the real loader throws for an absent scoped subpath", async () => {
+    // Not a transcribed message: whatever the active loader actually throws for
+    // a subpath import of a package that is not installed. This is the shape the
+    // vercel-ai entry hits on every machine without the optional peer, and it is
+    // the case a hand-written table missed.
+    const absent = "@totally/absent-pkg/utils";
+    let thrown: unknown = "nothing was thrown";
+    try {
+      await import(/* @vite-ignore */ absent);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).not.toBe("nothing was thrown");
+    expect(isUnresolved(thrown, absent)).toBe(true);
   });
 
   it("classifies a frozen error without attempting to mutate it", () => {
@@ -190,7 +244,14 @@ describe("enableInstrumentations", () => {
   });
 });
 
-describe("the vercel-ai entry", () => {
+// The @arizeai/openinference-vercel devDependency declares engines: >=22, and
+// its own peers (ai, @ai-sdk/otel) target the same floor, so loading it on the
+// Node 18 and 20 legs of the CI matrix is not expected to work. Only the tests
+// that actually load the package are gated; everything else runs on every leg.
+const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+const describeWithVercelPackage = describe.skipIf(nodeMajor < 22);
+
+describeWithVercelPackage("the vercel-ai entry", () => {
   it("loads a transforming processor from the installed package", async () => {
     const entry = REGISTRY.find((e) => e.name === "vercel-ai");
     expect(entry).toBeDefined();
@@ -252,12 +313,34 @@ describe("init().ready", () => {
     expect(outcome.settled === "resolved" && Array.isArray(outcome.names)).toBe(true);
     await client.shutdown();
   });
+});
 
-  it("attaches the vercel-ai transform ahead of the exporting processor", async () => {
-    const exporter = new InMemorySpanExporter();
-    const client = init({ spanExporter: exporter });
-    const enabled = await client.ready;
-    expect(enabled).toContain("vercel-ai");
+describeWithVercelPackage("init() processor ordering", () => {
+  it("gives the vercel-ai transform the span before the exporting processor", async () => {
+    const client = init({ spanExporter: new InMemorySpanExporter() });
+    expect(await client.ready).toContain("vercel-ai");
+
+    // A delegate appended with add() sits in the same relative position as the
+    // exporting processor init() registered: after anything addFirst placed. If
+    // it already sees the OpenInference attributes, the transform ran before the
+    // exporting processor could queue the span, which is the ordering that
+    // masking depends on.
+    let kindSeenDownstream: unknown = "downstream delegate never ran";
+    spanProcessorSink(client).add({
+      onStart() {},
+      onEnd(span) {
+        kindSeenDownstream = span.attributes["openinference.span.kind"];
+      },
+      async forceFlush() {},
+      async shutdown() {},
+    });
+
+    const span = getTracer().startSpan("ai.generateText.doGenerate", {
+      attributes: VERCEL_SPAN_ATTRIBUTES,
+    });
+    span.end();
+
+    expect(kindSeenDownstream).toBe("LLM");
     await client.shutdown();
   });
 });
