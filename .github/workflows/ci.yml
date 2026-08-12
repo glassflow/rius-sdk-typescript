@@ -37,3 +37,60 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # @arizeai/openinference-vercel declares engines.node >=22, and this
+          # job installs it to verify a CJS consumer can load it; the whole
+          # job runs on 22+ so that step is valid.
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx publint
+      - run: npx --yes @arethetypeswrong/cli --pack .
+      - name: ESM and CJS entrypoints both resolve
+        run: |
+          npm pack --pack-destination /tmp >/dev/null
+          mkdir -p /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
+          npm i /tmp/glassflow-rius-*.tgz @opentelemetry/api >/dev/null
+          node -e "const m=require('@glassflow/rius'); if(!m.init) throw new Error('CJS require broken')"
+          node --input-type=module -e "import * as m from '@glassflow/rius'; if(!m.init) throw new Error('ESM import broken')"
+      - name: ESM-only integrations still load from a CJS consumer
+        run: |
+          # tsup code-splits the ESM output into content-hashed chunk files, so
+          # this cannot grep a fixed filename. Assert the dynamic-import helper
+          # survives somewhere in dist/, and that the CJS build was not
+          # rewritten to a require() form of the same call.
+          if ! grep -rq "return import(s)" dist/*.js dist/*.cjs; then
+            echo "::error::dynamic import helper not found anywhere in dist/"; exit 1
+          fi
+          if grep -q "require(s)" dist/index.cjs; then
+            echo "::error::dynamic import was rewritten to require() in the CJS build"; exit 1
+          fi
+          cd /tmp/consumer
+          npm i @arizeai/openinference-vercel >/dev/null
+          node -e "
+            const { init } = require('@glassflow/rius');
+            const client = init({ disabled: true });
+            client.ready.then((enabled) => {
+              if (!enabled.includes('vercel-ai')) {
+                throw new Error('vercel-ai did not load under CJS: ' + JSON.stringify(enabled));
+              }
+              return client.shutdown();
+            }).catch((e) => { console.error(e.message); process.exit(1); });
+          "
+      - name: '@opentelemetry/api is a peer and is not bundled'
+        run: |
+          node -e "
+            const p = require('./package.json');
+            if (!p.peerDependencies?.['@opentelemetry/api']) throw new Error('must be a peerDependency');
+            if (p.dependencies?.['@opentelemetry/api']) throw new Error('must not be a dependency');
+          "
+          if grep -rq "AsyncLocalStorageContextManager" dist/*.js dist/*.cjs; then
+            echo "::error::@opentelemetry/api appears bundled into dist"; exit 1
+          fi

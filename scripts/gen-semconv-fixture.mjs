@@ -7,8 +7,14 @@ const SOURCE =
   process.env.SEMCONV_SOURCE ??
   "https://raw.githubusercontent.com/glassflow/rius-sdk-python/main/src/rius/semconv.py";
 
+// rius-sdk-python is a private repo, so the default raw-GitHub URL 404s
+// unauthenticated. When a token is available, send it; raw.githubusercontent.com
+// honors a GitHub token in the Authorization header for private-repo content.
+const token = process.env.SEMCONV_SOURCE_TOKEN;
 const text = SOURCE.startsWith("http")
-  ? await fetch(SOURCE).then((r) => {
+  ? await fetch(SOURCE, {
+      headers: token ? { Authorization: `token ${token}` } : {},
+    }).then((r) => {
       if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
       return r.text();
     })
