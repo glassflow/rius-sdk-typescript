@@ -60,6 +60,13 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "gen_ai.completion",
   "llm.input_messages",
   "llm.output_messages",
+  // Deliberate addition over Python (2026-08-12): the prefix list covers
+  // "llm.prompts." and "llm.prompt_template." but neither bare key was in
+  // either SDK's exact set, so an instrumentation emitting one unflattened
+  // array attribute leaked past captureContent: false. Python has the same
+  // gap and needs the same fix; this SDK does not wait for it.
+  "llm.prompts",
+  "llm.prompt_template",
   "mlflow.spanInputs",
   "mlflow.spanOutputs",
   "traceloop.entity.input",
