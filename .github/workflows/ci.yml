@@ -40,14 +40,15 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22", "24"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # @arizeai/openinference-vercel declares engines.node >=22, and this
-          # job installs it to verify a CJS consumer can load it; the whole
-          # job runs on 22+ so that step is valid.
-          node-version: "22"
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -60,7 +61,7 @@ jobs:
           npm i /tmp/glassflow-rius-*.tgz @opentelemetry/api >/dev/null
           node -e "const m=require('@glassflow/rius'); if(!m.init) throw new Error('CJS require broken')"
           node --input-type=module -e "import * as m from '@glassflow/rius'; if(!m.init) throw new Error('ESM import broken')"
-      - name: ESM-only integrations still load from a CJS consumer
+      - name: Dynamic import helper survives in dist/
         run: |
           # tsup code-splits the ESM output into content-hashed chunk files, so
           # this cannot grep a fixed filename. Assert the dynamic-import helper
@@ -71,6 +72,18 @@ jobs:
           fi
           if grep -q "require(s)" dist/index.cjs; then
             echo "::error::dynamic import was rewritten to require() in the CJS build"; exit 1
+          fi
+      - name: vercel-ai (ESM-only) loads from a CJS consumer
+        env:
+          NODE_MAJOR: ${{ matrix.node-version }}
+        run: |
+          # @arizeai/openinference-vercel declares engines.node >=22; only
+          # install and assert it on legs at or above that. Numeric comparison
+          # (-lt), not string comparison: "8" >= "22" lexicographically but
+          # 8 < 22 numerically, and every value here is a plain integer string.
+          if [ "$NODE_MAJOR" -lt 22 ]; then
+            echo "skipping vercel-ai assertion on Node $NODE_MAJOR (requires >=22)"
+            exit 0
           fi
           cd /tmp/consumer
           npm i @arizeai/openinference-vercel >/dev/null
