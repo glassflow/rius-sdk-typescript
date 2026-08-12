@@ -1,8 +1,18 @@
 import type { TracerProvider } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import type { McpClientLike } from "./instrumentationMcp.js";
 
-export type EntryKind = "instrumentation" | "processor";
+/**
+ * `"self-applying"` is for an entry whose `load()` has already taken full
+ * effect by the time it resolves (e.g. by monkey-patching a prototype)
+ * rather than returning something for `enableInstrumentations` to attach.
+ * There is nothing to hand to `registerInstrumentations` or a processor
+ * sink, so it is a distinct kind rather than a marker on the loaded value:
+ * dispatch stays a single switch on `kind`, and the loaded value's shape
+ * does not have to double as a signal.
+ */
+export type EntryKind = "instrumentation" | "processor" | "self-applying";
 
 export interface RegistryEntry {
   name: string;
@@ -10,10 +20,14 @@ export interface RegistryEntry {
   /**
    * Where a `processor` entry goes in the sink. `"first"` for a processor that
    * must see a span before the exporting processor queues it. Ignored by
-   * `instrumentation` entries. Defaults to `"last"`.
+   * `instrumentation` and `self-applying` entries. Defaults to `"last"`.
    */
   insert?: "first" | "last";
-  /** Resolves undefined when the optional package is not installed. */
+  /**
+   * Resolves undefined when the optional package is not installed.
+   * For a `self-applying` entry, resolving to anything other than undefined
+   * both means "installed" and confirms the patch already ran.
+   */
   load(): Promise<unknown | undefined>;
 }
 
@@ -143,6 +157,20 @@ export const REGISTRY: RegistryEntry[] = [
       return Ctor ? new Ctor() : undefined;
     },
   },
+  {
+    name: "mcp",
+    kind: "self-applying",
+    async load() {
+      const mod = await optional("@modelcontextprotocol/sdk/client/index.js");
+      const ClientClass = mod?.Client as McpClientLike | undefined;
+      if (ClientClass === undefined) return undefined;
+      const { instrumentMcpClient } = await import("./instrumentationMcp.js");
+      instrumentMcpClient(ClientClass);
+      // The patch already ran; the truthy return only tells the caller the
+      // package was present, there is nothing further to attach.
+      return true;
+    },
+  },
 ];
 
 /**
@@ -167,12 +195,14 @@ export async function enableInstrumentations(
       if (entry.kind === "processor") {
         if (entry.insert === "first") sink.addFirst(loaded as SpanProcessor);
         else sink.add(loaded as SpanProcessor);
-      } else {
+      } else if (entry.kind === "instrumentation") {
         registerInstrumentations({
           instrumentations: [loaded as Instrumentation],
           tracerProvider,
         });
       }
+      // "self-applying" entries already took effect inside load(); there is
+      // nothing further to attach.
       enabled.push(entry.name);
     } catch {
       // a failing integration is skipped, never fatal

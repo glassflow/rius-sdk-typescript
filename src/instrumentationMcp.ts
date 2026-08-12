@@ -1,0 +1,69 @@
+import { GEN_AI_TOOL_NAME, SpanKind } from "./semconv.js";
+import { startAsCurrentSpan } from "./spans.js";
+
+/**
+ * The slice of an MCP `Client` constructor this module needs: a prototype
+ * carrying `callTool`. Structural on purpose, so a real
+ * `@modelcontextprotocol/sdk` `Client` and a test double both satisfy it
+ * without an import-time dependency on the package.
+ */
+export interface McpClientLike {
+  prototype: {
+    callTool(params: { name: string; arguments?: unknown }, ...rest: unknown[]): Promise<unknown>;
+  };
+}
+
+type CallTool = McpClientLike["prototype"]["callTool"];
+
+/** Marks a wrapper with the true original, so a second wrap is detectable. */
+interface InstrumentedCallTool extends CallTool {
+  riusOriginal?: CallTool;
+}
+
+/**
+ * Wrap an MCP client's callTool so every tool invocation becomes a TOOL span.
+ * Mirrors instrumentation_mcp.py, which wraps ClientSession.call_tool.
+ *
+ * Idempotent: calling this twice on the same class does not stack wrappers.
+ * The second call detects the existing wrapper (via the marker it left on
+ * itself) and hands back an uninstall tied to the same true original, so
+ * either returned function restores the class to its pre-instrumentation
+ * state.
+ *
+ * Returns a function that restores the original method.
+ */
+export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
+  const current = ClientClass.prototype.callTool as InstrumentedCallTool;
+  const alreadyWrapped = current.riusOriginal;
+  if (alreadyWrapped !== undefined) {
+    return () => {
+      ClientClass.prototype.callTool = alreadyWrapped;
+    };
+  }
+
+  const original = ClientClass.prototype.callTool;
+
+  const instrumented: InstrumentedCallTool = function instrumentedCallTool(
+    this: unknown,
+    params: { name: string; arguments?: unknown },
+    ...rest: unknown[]
+  ): Promise<unknown> {
+    return startAsCurrentSpan(
+      params.name,
+      { kind: SpanKind.TOOL, input: params.arguments },
+      async (observation) => {
+        observation.setAttribute(GEN_AI_TOOL_NAME, params.name);
+        const result = await original.call(this, params, ...rest);
+        observation.setOutput(result);
+        return result;
+      },
+    );
+  };
+  instrumented.riusOriginal = original;
+
+  ClientClass.prototype.callTool = instrumented;
+
+  return () => {
+    ClientClass.prototype.callTool = original;
+  };
+}
