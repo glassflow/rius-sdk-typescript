@@ -7,6 +7,8 @@ tool calls and chains, generations for LLM calls, and a function wrapper
 that turns a plain `async` function into an instrumented one. Traces are
 sent as OTLP over HTTP, so any OTLP-compatible backend can receive them.
 
+> Status: alpha and unpublished (0.1.0). APIs may change before the first release.
+
 ## Install
 
 ```bash
@@ -18,19 +20,57 @@ it alongside `@glassflow/rius` at a version satisfying `^1.9.0`.
 
 ## Quickstart
 
-Call `init()` once, at startup:
-
 ```ts
-import { init } from "@glassflow/rius";
+import {
+  init,
+  observe,
+  startAsCurrentSpan,
+  startAsCurrentGeneration,
+  SpanKind,
+} from "@glassflow/rius";
 
 const client = init({
-  apiKey: process.env.RIUS_API_KEY,
+  apiKey: process.env.RIUS_API_KEY, // or set RIUS_API_KEY
 });
 
-// Optional: wait for auto-instrumentations (OpenAI, Vercel AI SDK, MCP)
-// to finish attaching before the first span is created.
+// Optional: wait for auto-instrumentations to finish attaching before the
+// first span is created.
 await client.ready;
+
+// 1. Function wrapper — trace a whole call. Use a named function expression
+//    (or pass { name }): an arrow function has no inferrable name and its
+//    span would fall back to "anonymous".
+const handle = observe(async function handle(query: string) {
+  return await callModel(query);
+});
+
+// 2. Scoped span — trace a block
+await startAsCurrentSpan(
+  "retrieve",
+  { kind: SpanKind.RETRIEVER, input: query },
+  async (obs) => {
+    const docs = await retrieveDocuments(query);
+    obs.setOutput(docs);
+    return docs;
+  },
+);
+
+// 3. LLM generations — gen_ai-native
+await startAsCurrentGeneration(
+  "chat",
+  { model: "gpt-4o", input: messages },
+  async (gen) => {
+    const reply = await callModel(messages);
+    gen.setOutput(reply);
+    gen.setUsage({ inputTokens: 42, outputTokens: 17 });
+    return reply;
+  },
+);
 ```
+
+Each surface has more detail below: `observe` for the function wrapper,
+`startSpan`/`startAsCurrentSpan` for manual and scoped spans, and
+`startGeneration`/`startAsCurrentGeneration` for LLM calls.
 
 ### `observe`: wrap a function
 
@@ -125,6 +165,40 @@ Each `modelParameters` entry is recorded as `gen_ai.request.<key>`, so use the
 provider's own parameter names. `setFinishReasons` accepts one reason or a
 list.
 
+## Auto-instrumentation
+
+The SDK bundles three integrations. Each one is an optional peer
+dependency: install the packages you need and `init()` enables whatever
+it finds, so a plain `npm install @glassflow/rius` patches nothing.
+
+```bash
+npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference-vercel @modelcontextprotocol/sdk
+```
+
+Install only the ones you use:
+
+- **`openai`** wraps the OpenAI SDK, via `@arizeai/openinference-instrumentation-openai`, turning provider calls into spans.
+- **`vercel-ai`** attaches to spans the Vercel AI SDK's own OpenTelemetry integration produces, via `@arizeai/openinference-vercel`, adding OpenInference attributes to them. This package requires Node 22 or newer.
+- **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span, carrying the tool name, arguments, result, latency, and error status.
+
+There is no selection option: `init()` always attempts every bundled
+integration, so which ones actually attach is determined entirely by
+which optional peers are installed. `client.ready` resolves with the
+names that attached (for example `["openai", "mcp"]`) and never rejects,
+even if every peer is missing or one of them is broken. A package that
+is not installed stays quiet; a package that is installed but fails to
+load logs a warning naming the integration and the underlying error, and
+the SDK continues without it.
+
+Content captured by these integrations, prompts, tool arguments and
+results, and so on, is covered by the same `mask` and `captureContent`
+controls as our own spans, since sanitisation happens centrally at
+export rather than per integration.
+
+`disabled: true` now means no third-party patching happens at all: no
+optional package is even imported, and `client.ready` resolves to an
+empty array.
+
 ## Configuration
 
 Options passed to `init()` take priority, then `RIUS_*` environment
@@ -156,15 +230,73 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
-## Shutdown
+## Reliability
 
-Call `flush()` before your process exits to drain any queued spans, and
-`shutdown()` to tear the client down:
+Export is designed to never block or crash your application:
 
-```ts
-await client.flush();
-await client.shutdown();
+- **Async batched export.** Spans are queued in-process and exported in
+  batches from a background timer via OpenTelemetry's `BatchSpanProcessor`.
+  Span creation stays fast even when the backend is slow or unreachable.
+- **Retries.** The OTLP/HTTP transport retries transient and retryable
+  failures with exponential backoff and jitter, up to 5 attempts, bounded
+  by the export timeout.
+- **Graceful degradation.** If the backend stays unreachable, spans are
+  dropped and the failure is logged, it is never raised into application
+  code. Only the first export failure in a process is logged, naming
+  `RIUS_API_KEY`/`RIUS_ENDPOINT` as the likely cause; later failures stay
+  silent so a persistent outage does not spam your logs. `client.flush()`
+  returns `false` when the most recent export failed, so you can check
+  delivery explicitly instead of relying on logs alone.
+- **Mask failures fail safe.** If a `mask` callback throws, the affected
+  attribute value is replaced with the literal `"[mask error]"` rather
+  than dropping the batch or letting the exception escape.
+- **No automatic flush on exit.** The SDK does not register a process-exit
+  hook. Call `client.flush()` to force a pending export, or
+  `client.shutdown()` to drain the queue and tear the client down, before
+  your process exits:
+
+  ```ts
+  await client.flush();
+  await client.shutdown();
+  ```
+
+Batching is tunable via the standard OpenTelemetry env vars:
+`OTEL_BSP_MAX_QUEUE_SIZE` (default 2048; spans beyond this are dropped),
+`OTEL_BSP_SCHEDULE_DELAY` (default 5000 ms), `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`
+(default 512), and `OTEL_BSP_EXPORT_TIMEOUT` (default 30000 ms).
+
+## Development
+
+```bash
+npm install
+npm run lint
+npm run typecheck
+npm test
+npm run build
 ```
+
+## Releasing
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please)
+and published to npm.
+
+1. Merge changes to `main` using [Conventional Commits](https://www.conventionalcommits.org/)
+   (`feat:` → minor, `fix:` → patch, `feat!:`/`BREAKING CHANGE` → major).
+2. release-please keeps a **Release PR** open that bumps the package
+   version and updates the changelog. Merge it when you want to cut a
+   release.
+3. Merging the Release PR tags `vX.Y.Z`, creates a GitHub Release, and
+   publishes to npm automatically using npm trusted publishing, no token
+   required.
+
+Non-conventional commits are ignored for versioning.
+
+The package has not been published yet, so the very first release cannot
+use trusted publishing: npm requires a package to already exist before
+it can be linked to a trusted publisher. That first publish needs either
+a one-time manual `npm publish` or a temporary `NPM_TOKEN` secret; once
+the package exists on npm, trusted publishing takes over and the token
+can be removed.
 
 ## License
 
