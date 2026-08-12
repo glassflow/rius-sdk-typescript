@@ -1,5 +1,32 @@
-import { GEN_AI_TOOL_NAME, SpanKind } from "./semconv.js";
-import { startAsCurrentSpan } from "./spans.js";
+import { GEN_AI_TOOL_NAME, MCP_RESULT_TYPE, SpanKind } from "./semconv.js";
+import { type Observation, startAsCurrentSpan } from "./spans.js";
+
+/** The interim result type of a tools/call round that is asking for input. */
+const INPUT_REQUIRED = "input_required";
+
+/**
+ * Record a tools/call result on the span.
+ *
+ * An interim input-required result is NOT the tool's output: its input requests
+ * carry elicitation/sampling content, so recording them as `output.value` would
+ * leak conversation content onto a tool span. Interim rounds get only the
+ * `mcp.result_type` marker; the final round records output as usual.
+ *
+ * Both `result_type` and `resultType` are read, because the field is spelled
+ * each way across the MCP SDKs.
+ */
+function recordResult(observation: Observation, result: unknown): void {
+  const resultType =
+    typeof result === "object" && result !== null
+      ? ((result as Record<string, unknown>).result_type ??
+        (result as Record<string, unknown>).resultType)
+      : undefined;
+  if (resultType === INPUT_REQUIRED) {
+    observation.setAttribute(MCP_RESULT_TYPE, INPUT_REQUIRED);
+    return;
+  }
+  observation.setOutput(result);
+}
 
 /**
  * The slice of an MCP `Client` constructor this module needs: a prototype
@@ -54,7 +81,7 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
       async (observation) => {
         observation.setAttribute(GEN_AI_TOOL_NAME, params.name);
         const result = await original.call(this, params, ...rest);
-        observation.setOutput(result);
+        recordResult(observation, result);
         return result;
       },
     );

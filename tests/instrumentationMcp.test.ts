@@ -7,6 +7,12 @@ import { instrumentMcpClient } from "../src/instrumentationMcp.js";
 class FakeClient {
   async callTool(params: { name: string; arguments?: unknown }): Promise<unknown> {
     if (params.name === "explode") throw new Error("tool failed");
+    if (params.name === "asks") {
+      return { result_type: "input_required", input_requests: [{ prompt: "<PII>" }] };
+    }
+    if (params.name === "asks-camel") {
+      return { resultType: "input_required", inputRequests: [{ prompt: "<PII>" }] };
+    }
     return { content: [{ type: "text", text: "ok" }] };
   }
 }
@@ -40,6 +46,30 @@ describe("instrumentMcpClient", () => {
     expect(span.attributes["openinference.span.kind"]).toBe("TOOL");
     expect(span.attributes["gen_ai.tool.name"]).toBe("add");
     expect(span.attributes["gen_ai.operation.name"]).toBe("execute_tool");
+  });
+
+  it("marks an interim input-required round and records no output", async () => {
+    await new FakeClient().callTool({ name: "asks" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["mcp.result_type"]).toBe("input_required");
+    expect(span.attributes["output.value"]).toBeUndefined();
+  });
+
+  it("detects the camelCase spelling of the interim result type", async () => {
+    await new FakeClient().callTool({ name: "asks-camel" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["mcp.result_type"]).toBe("input_required");
+    expect(span.attributes["output.value"]).toBeUndefined();
+  });
+
+  it("records output and no result-type marker on a final round", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["mcp.result_type"]).toBeUndefined();
+    expect(span.attributes["output.value"]).toContain("ok");
   });
 
   it("marks failures as errors and rethrows", async () => {
