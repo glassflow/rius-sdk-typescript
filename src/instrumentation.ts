@@ -127,9 +127,14 @@ async function optional(specifier: string): Promise<Record<string, unknown> | un
   }
 }
 
-function warnBroken(specifier: string, error: unknown): void {
+/**
+ * The single warn path for "present but broken". `subject` is a module specifier
+ * when an import failed and an entry name when enabling one failed. Accepts an
+ * unknown throwable and never throws itself, so it is safe on any error path.
+ */
+function warnBroken(subject: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.warn(`[rius] integration "${specifier}" is installed but failed to load: ${message}`);
+  console.warn(`[rius] integration "${subject}" is installed but failed to load: ${message}`);
 }
 
 /**
@@ -225,8 +230,18 @@ export async function enableInstrumentations(
       // "self-applying" entries already took effect inside load(); there is
       // nothing further to attach.
       enabled.push(entry.name);
-    } catch {
-      // a failing integration is skipped, never fatal
+    } catch (error) {
+      // Only reached when load() THREW, which means the package was reachable
+      // but enabling it failed: a constructor rejecting its input, or a patch
+      // onto a prototype that is no longer writable. The user installed this
+      // optional peer deliberately and expects instrumentation, so a silent skip
+      // would leave them with nothing and no explanation. An ABSENT package
+      // returns undefined above and stays quiet, which is the distinction this
+      // whole loud/quiet split exists to preserve.
+      //
+      // Still not fatal: warn, then carry on to the next entry so one broken
+      // integration cannot block the others.
+      warnBroken(entry.name, error);
     }
   }
   return enabled;

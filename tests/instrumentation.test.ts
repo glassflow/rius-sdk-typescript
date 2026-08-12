@@ -29,6 +29,11 @@ const inertProcessor: SpanProcessor = {
   async shutdown() {},
 };
 
+/** Silences and records console.warn. Callers must mockRestore in a finally. */
+function spyOnWarn() {
+  return vi.spyOn(console, "warn").mockImplementation(() => {});
+}
+
 /** Adds a synthetic entry for the duration of `body`, then removes it. */
 async function withEntry(entry: RegistryEntry, body: () => Promise<void>): Promise<void> {
   REGISTRY.push(entry);
@@ -235,10 +240,98 @@ describe("enableInstrumentations", () => {
         load: () => Promise.reject(new Error("integration exploded")),
       },
       async () => {
-        const enabled = await enableInstrumentations(sink, tracerProvider, ["test-broken-entry"]);
-        expect(enabled).toEqual([]);
-        expect(sink.add).not.toHaveBeenCalled();
-        expect(sink.addFirst).not.toHaveBeenCalled();
+        const warn = spyOnWarn();
+        try {
+          const enabled = await enableInstrumentations(sink, tracerProvider, ["test-broken-entry"]);
+          expect(enabled).toEqual([]);
+          expect(sink.add).not.toHaveBeenCalled();
+          expect(sink.addFirst).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  });
+});
+
+describe("enableInstrumentations diagnostics", () => {
+  it("warns once naming the entry when load() throws, and still enables the others", async () => {
+    const sink = makeSink();
+    await withEntry(
+      { name: "test-healthy-entry", kind: "processor", load: async () => inertProcessor },
+      () =>
+        withEntry(
+          {
+            name: "test-throwing-entry",
+            kind: "self-applying",
+            load: () => Promise.reject(new Error("prototype is not writable")),
+          },
+          async () => {
+            const warn = spyOnWarn();
+            try {
+              const enabled = await enableInstrumentations(sink, tracerProvider, [
+                "test-throwing-entry",
+                "test-healthy-entry",
+              ]);
+
+              // One broken integration must not block the others.
+              expect(enabled).toEqual(["test-healthy-entry"]);
+
+              // A post-import failure is NOT silent: the user installed this peer
+              // deliberately and would otherwise get nothing, with no explanation.
+              expect(warn).toHaveBeenCalledTimes(1);
+              const message = String(warn.mock.calls[0]?.[0]);
+              expect(message).toContain("test-throwing-entry");
+              expect(message).toContain("prototype is not writable");
+              expect(message).not.toContain("test-healthy-entry");
+            } finally {
+              warn.mockRestore();
+            }
+          },
+        ),
+    );
+  });
+
+  it("stays quiet when load() resolves undefined, because that means absent", async () => {
+    const sink = makeSink();
+    await withEntry(
+      { name: "test-absent-entry", kind: "processor", load: async () => undefined },
+      async () => {
+        const warn = spyOnWarn();
+        try {
+          const enabled = await enableInstrumentations(sink, tracerProvider, ["test-absent-entry"]);
+          expect(enabled).toEqual([]);
+          // The regression guard: warning here would make every consumer who
+          // skipped an optional peer see noise at startup.
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("warns without throwing when load() rejects with a non-Error value", async () => {
+    const sink = makeSink();
+    await withEntry(
+      {
+        name: "test-nonerror-entry",
+        kind: "processor",
+        load: () => Promise.reject("just a string"),
+      },
+      async () => {
+        const warn = spyOnWarn();
+        try {
+          await expect(
+            enableInstrumentations(sink, tracerProvider, ["test-nonerror-entry"]),
+          ).resolves.toEqual([]);
+          expect(warn).toHaveBeenCalledTimes(1);
+          const message = String(warn.mock.calls[0]?.[0]);
+          expect(message).toContain("test-nonerror-entry");
+          expect(message).toContain("just a string");
+        } finally {
+          warn.mockRestore();
+        }
       },
     );
   });
