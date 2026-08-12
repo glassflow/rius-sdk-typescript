@@ -167,17 +167,19 @@ list.
 
 ## Auto-instrumentation
 
-The SDK bundles three integrations. Each one is an optional peer
+The SDK bundles five integrations. Each one is an optional peer
 dependency: install the packages you need and `init()` enables whatever
 it finds, so a plain `npm install @glassflow/rius` patches nothing.
 
 ```bash
-npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference-vercel @modelcontextprotocol/sdk
+npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference-instrumentation-anthropic @arizeai/openinference-instrumentation-langchain @arizeai/openinference-vercel @modelcontextprotocol/sdk
 ```
 
 Install only the ones you use:
 
 - **`openai`** wraps the OpenAI SDK, via `@arizeai/openinference-instrumentation-openai`, turning provider calls into spans.
+- **`anthropic`** wraps the Anthropic SDK, via `@arizeai/openinference-instrumentation-anthropic`, turning Messages calls into LLM spans with model, messages and token counts.
+- **`langchain`** traces LangChain.js chains, models, tools and retrievers, via `@arizeai/openinference-instrumentation-langchain`. It patches the callback manager in `@langchain/core`, which every LangChain.js application already has, and the SDK resolves that module for you so nothing has to be passed in at `init()`.
 - **`vercel-ai`** attaches to spans the Vercel AI SDK's own OpenTelemetry integration produces, via `@arizeai/openinference-vercel`, adding OpenInference attributes to them. This package requires Node 22 or newer.
 - **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span, carrying the tool name, arguments, result, latency, and error status.
 
@@ -189,6 +191,15 @@ even if every peer is missing or one of them is broken. A package that
 is not installed stays quiet; a package that is installed but fails to
 load logs a warning naming the integration and the underlying error, and
 the SDK continues without it.
+
+The `openai` and `anthropic` integrations attach through
+OpenTelemetry's CommonJS module hook, so they patch a provider SDK that
+is reached by `require`. An application that is pure ESM, importing the
+provider SDK with `import` and never through `require`, will see those
+two report themselves as enabled while the SDK stays unpatched. This is
+a limitation of the underlying instrumentation packages rather than of
+`init()`. The `langchain`, `vercel-ai` and `mcp` integrations do not use
+that hook and work either way.
 
 Content captured by these integrations, prompts, tool arguments and
 results, and so on, is covered by the same `mask` and `captureContent`

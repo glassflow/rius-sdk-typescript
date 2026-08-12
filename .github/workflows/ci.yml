@@ -119,6 +119,80 @@ jobs:
           if grep -q "require(s)" dist/index.cjs; then
             echo "::error::dynamic import was rewritten to require() in the CJS build"; exit 1
           fi
+      - name: anthropic and langchain trace a real call from a CJS consumer
+        env:
+          NODE_MAJOR: ${{ matrix.node-version }}
+        run: |
+          # The unit tests run under vitest, which resolves @langchain/core
+          # through its own module graph. @langchain/core ships separate CJS and
+          # ESM builds, so a copy the SDK patched under one of them would not be
+          # the copy a plain `require` returns. This asserts a span comes out the
+          # far end of a packed install, which is the only proof that survives
+          # that difference. Anthropic is asserted here too because its module
+          # hook watches CJS require, so this is where it is expected to fire.
+          #
+          # @langchain/core 1.x declares engines.node >=20, so the langchain half
+          # is asserted only from that leg up. Numeric comparison (-lt), not
+          # string: "8" >= "20" lexicographically but 8 < 20 numerically.
+          cd /tmp/consumer
+          WANT_LANGCHAIN=1
+          if [ "$NODE_MAJOR" -lt 20 ]; then
+            echo "skipping the langchain half on Node $NODE_MAJOR (@langchain/core requires >=20)"
+            WANT_LANGCHAIN=0
+          fi
+          export WANT_LANGCHAIN
+          npm i @arizeai/openinference-instrumentation-anthropic @anthropic-ai/sdk @opentelemetry/sdk-trace-base >/dev/null
+          if [ "$WANT_LANGCHAIN" = "1" ]; then
+            npm i @arizeai/openinference-instrumentation-langchain @langchain/core >/dev/null
+          fi
+          node -e "
+            const http = require('node:http');
+            const { init } = require('@glassflow/rius');
+            const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+            const exporter = new InMemorySpanExporter();
+            const client = init({ spanExporter: exporter });
+            const reply = { id: 'm', type: 'message', role: 'assistant', model: 'claude-test',
+              content: [{ type: 'text', text: '4' }], stop_reason: 'end_turn',
+              usage: { input_tokens: 5, output_tokens: 1 } };
+            const wantLangchain = process.env.WANT_LANGCHAIN === '1';
+            client.ready.then(async (enabled) => {
+              const want = wantLangchain ? ['anthropic', 'langchain'] : ['anthropic'];
+              for (const name of want) {
+                if (!enabled.includes(name)) {
+                  throw new Error(name + ' did not load under CJS: ' + JSON.stringify(enabled));
+                }
+              }
+              if (wantLangchain) {
+                const { RunnableLambda } = require('@langchain/core/runnables');
+                await RunnableLambda.from((x) => 'echo:' + x).withConfig({ runName: 'CiEcho' }).invoke('hi');
+              }
+
+              const server = http.createServer((request, response) => {
+                request.resume();
+                request.on('end', () => {
+                  response.writeHead(200, { 'content-type': 'application/json' });
+                  response.end(JSON.stringify(reply));
+                });
+              });
+              await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+              const Anthropic = require('@anthropic-ai/sdk').default;
+              const anthropic = new Anthropic({ apiKey: 'not-a-real-key', baseURL: 'http://127.0.0.1:' + server.address().port });
+              await anthropic.messages.create({ model: 'claude-test', max_tokens: 8, messages: [{ role: 'user', content: '2+2' }] });
+              server.close();
+
+              // Read before shutdown(): InMemorySpanExporter.shutdown() clears
+              // what it collected. The wait covers the batch processor's delay.
+              await new Promise((resolve) => setTimeout(resolve, 7000));
+              const names = exporter.getFinishedSpans().map((span) => span.name);
+              const expectedNames = wantLangchain ? ['CiEcho', 'Anthropic Messages'] : ['Anthropic Messages'];
+              for (const expected of expectedNames) {
+                if (!names.includes(expected)) {
+                  throw new Error('no ' + expected + ' span was exported: ' + JSON.stringify(names));
+                }
+              }
+              process.exit(0);
+            }).catch((e) => { console.error(e.message); process.exit(1); });
+          "
       - name: vercel-ai (ESM-only) loads from a CJS consumer
         env:
           NODE_MAJOR: ${{ matrix.node-version }}

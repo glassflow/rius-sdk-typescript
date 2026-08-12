@@ -77,6 +77,8 @@ describe("REGISTRY", () => {
     const kinds = Object.fromEntries(REGISTRY.map((e) => [e.name, e.kind]));
     expect(kinds["vercel-ai"]).toBe("processor");
     expect(kinds.openai).toBe("instrumentation");
+    expect(kinds.anthropic).toBe("instrumentation");
+    expect(kinds.langchain).toBe("instrumentation");
   });
 
   it("has unique names", () => {

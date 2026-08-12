@@ -142,7 +142,8 @@ function warnBroken(subject: string, error: unknown): void {
  * dependency; install them as optional peers and init() enables what it finds.
  *
  * Two kinds on purpose: the Vercel AI SDK support is contributed as a SPAN
- * PROCESSOR, while OpenAI support is a conventional instrumentation.
+ * PROCESSOR, while the OpenAI, Anthropic and LangChain support are conventional
+ * instrumentations.
  */
 export const REGISTRY: RegistryEntry[] = [
   {
@@ -181,6 +182,47 @@ export const REGISTRY: RegistryEntry[] = [
       const mod = await optional("@arizeai/openinference-instrumentation-openai");
       const Ctor = mod?.OpenAIInstrumentation as (new () => unknown) | undefined;
       return Ctor ? new Ctor() : undefined;
+    },
+  },
+  {
+    name: "anthropic",
+    kind: "instrumentation",
+    async load() {
+      const mod = await optional("@arizeai/openinference-instrumentation-anthropic");
+      const Ctor = mod?.AnthropicInstrumentation as (new () => unknown) | undefined;
+      return Ctor ? new Ctor() : undefined;
+    },
+  },
+  {
+    name: "langchain",
+    kind: "instrumentation",
+    async load() {
+      const mod = await optional("@arizeai/openinference-instrumentation-langchain");
+      const Ctor = mod?.LangChainInstrumentation as
+        | (new () => { manuallyInstrument(module: object): void })
+        | undefined;
+      if (Ctor === undefined) return undefined;
+
+      // @langchain/core exposes its callback manager only as a subpath, and the
+      // instrumentation's own module hook targets an internal file inside that
+      // package that a normal import never routes through. The package therefore
+      // documents manuallyInstrument() as the only way to patch it. Resolving the
+      // subpath here rather than asking the caller for it keeps the entry lazy and
+      // keeps the patch from being a no-op: a consumer who installs the
+      // instrumentation but never calls manuallyInstrument gets nothing.
+      //
+      // This resolves the same copy the consumer's own chains use, so long as
+      // there is one copy of @langchain/core on the resolution path, which is why
+      // it is declared as an optional peer rather than imported blind.
+      const callbacks = await optional("@langchain/core/callbacks/manager");
+      if (callbacks?.CallbackManager === undefined) return undefined;
+
+      const instrumentation = new Ctor();
+      instrumentation.manuallyInstrument(callbacks);
+      // Returned rather than treated as self-applying: the patched callback
+      // manager reads the instrumentation's tracer on every call, so it still has
+      // to be registered against our tracer provider to emit anywhere.
+      return instrumentation;
     },
   },
   {
