@@ -9,9 +9,20 @@ describe("semconv", () => {
   });
 
   it("matches every Python constant verbatim", () => {
+    // Constants Python has that this SDK deliberately does not implement.
+    // Declared explicitly: a NEW unported constant must fail here so a human
+    // decides whether to port it, rather than being skipped silently.
+    const PYTHON_ONLY = new Set(["GLASSFLOW_SPAN_PENDING"]);
+
     for (const [name, value] of Object.entries(fixture as Record<string, string>)) {
       const ours = (semconv as Record<string, unknown>)[name];
-      if (ours === undefined) continue; // Python-only constants are allowed
+      if (ours === undefined) {
+        expect(
+          PYTHON_ONLY.has(name),
+          `${name} exists in Python but not here, and is not declared in PYTHON_ONLY`,
+        ).toBe(true);
+        continue;
+      }
       expect(ours, `${name} drifted from Python`).toBe(value);
     }
   });
