@@ -1,3 +1,4 @@
+import { hrTimeToMilliseconds } from "@opentelemetry/core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
@@ -52,6 +53,79 @@ describe("generations", () => {
     expect(exporter.getFinishedSpans()[0].events.map((e) => e.name)).toContain(
       "gen_ai.first_token",
     );
+  });
+
+  it("recordFirstToken called twice produces exactly one gen_ai.first_token event", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.recordFirstToken();
+    gen.recordFirstToken();
+    gen.end();
+    await client.flush();
+    const events = exporter
+      .getFinishedSpans()[0]
+      .events.filter((e) => e.name === "gen_ai.first_token");
+    expect(events).toHaveLength(1);
+  });
+
+  it("recordFirstToken called ten times in a streaming loop still produces exactly one event", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    for (let i = 0; i < 10; i++) {
+      gen.recordFirstToken();
+    }
+    gen.end();
+    await client.flush();
+    const events = exporter
+      .getFinishedSpans()[0]
+      .events.filter((e) => e.name === "gen_ai.first_token");
+    expect(events).toHaveLength(1);
+  });
+
+  it("recordFirstToken records the timestamp of the FIRST call, not the last", async () => {
+    // Real, monotonically increasing delays between calls (no clock mocking):
+    // the assertion only needs event time to be ordered closer to the first
+    // call than the last, which a real delay establishes deterministically
+    // as long as the gap comfortably exceeds scheduling jitter (tens of ms
+    // here vs. sub-ms overhead per call).
+    const gen = startGeneration("chat", { model: "m" });
+    gen.recordFirstToken();
+    const firstCallTime = Date.now();
+    for (let i = 0; i < 9; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      gen.recordFirstToken();
+    }
+    const lastCallTime = Date.now();
+    gen.end();
+    await client.flush();
+    const events = exporter
+      .getFinishedSpans()[0]
+      .events.filter((e) => e.name === "gen_ai.first_token");
+    expect(events).toHaveLength(1);
+    const eventTimeMs = hrTimeToMilliseconds(events[0].time);
+    const distanceToFirst = Math.abs(eventTimeMs - firstCallTime);
+    const distanceToLast = Math.abs(eventTimeMs - lastCallTime);
+    expect(distanceToFirst).toBeLessThan(distanceToLast);
+  });
+
+  it("recordFirstToken's guard is per-instance: a second Generation still records its own event", async () => {
+    const first = startGeneration("chat", { model: "m" });
+    first.recordFirstToken();
+    first.recordFirstToken();
+    first.end();
+
+    const second = startGeneration("chat2", { model: "m" });
+    second.recordFirstToken();
+    second.end();
+
+    await client.flush();
+    const spans = exporter.getFinishedSpans();
+    const firstEvents = spans
+      .find((s) => s.name === "chat")
+      ?.events.filter((e) => e.name === "gen_ai.first_token");
+    const secondEvents = spans
+      .find((s) => s.name === "chat2")
+      ?.events.filter((e) => e.name === "gen_ai.first_token");
+    expect(firstEvents).toHaveLength(1);
+    expect(secondEvents).toHaveLength(1);
   });
 
   it("scoped form nests, auto-ends and returns the result", async () => {

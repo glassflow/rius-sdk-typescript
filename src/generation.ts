@@ -30,6 +30,8 @@ export interface GenerationOptions {
 
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
 export class Generation extends Observation {
+  private firstTokenRecorded = false;
+
   setInput(value: unknown): this {
     this.span.setAttribute(GEN_AI_INPUT_MESSAGES, toAttributeValue(value));
     return this;
@@ -68,9 +70,18 @@ export class Generation extends Observation {
     return this;
   }
 
-  /** The TTFT anchor: event time minus span start. */
+  /**
+   * The TTFT anchor: event time minus span start. Idempotent: only the
+   * first call records the event, so a streaming loop can call this
+   * unconditionally on every chunk without inflating the span. A no-op
+   * after the span has ended.
+   */
   recordFirstToken(): this {
+    if (this.firstTokenRecorded || !this.span.isRecording()) {
+      return this;
+    }
     this.span.addEvent(GEN_AI_FIRST_TOKEN_EVENT);
+    this.firstTokenRecorded = true;
     return this;
   }
 }
