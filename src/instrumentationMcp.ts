@@ -12,8 +12,11 @@ const INPUT_REQUIRED = "input_required";
  * leak conversation content onto a tool span. Interim rounds get only the
  * `mcp.result_type` marker; the final round records output as usual.
  *
- * Both `result_type` and `resultType` are read, because the field is spelled
- * each way across the MCP SDKs.
+ * Both `result_type` and `resultType` are read. `result_type` is the spelling
+ * seen on the wire; `resultType` is a speculative fallback in case a server
+ * or SDK ever camelCases it, since the result shape here is loosely typed and
+ * not guaranteed to stay snake_case. Kept even though no camelCase source is
+ * currently known.
  */
 function recordResult(observation: Observation, result: unknown): void {
   const resultType =
