@@ -42,6 +42,24 @@ export function spanProcessorSink(client: RiusClient): DelegatingSpanProcessor {
   return sink;
 }
 
+/** The internals `init()` hands to a new client. Never part of the public API. */
+interface ClientParts {
+  provider: NodeTracerProvider;
+  processors: DelegatingSpanProcessor;
+  health?: ExportOutcomeExporter;
+  ready: Promise<string[]>;
+}
+
+/**
+ * The only way to construct a `RiusClient`, assigned by the static block in the
+ * class below. `init()` is the sole public factory: a caller-built client is not
+ * `globalClient`, so its `shutdown()` would skip `trace.disable()` and leave the
+ * SDK registered. A `private constructor` alone cannot be reached from a
+ * module-scoped function, and a static factory method would put the internal
+ * types straight back into the published `.d.ts`.
+ */
+let createClient!: (parts: ClientParts) => RiusClient;
+
 export class RiusClient {
   private readonly provider: NodeTracerProvider;
   private readonly health?: ExportOutcomeExporter;
@@ -49,16 +67,15 @@ export class RiusClient {
   /** Resolves with the names of the auto-instrumentations that attached. */
   readonly ready: Promise<string[]>;
 
-  constructor(
-    provider: NodeTracerProvider,
-    processors: DelegatingSpanProcessor,
-    health?: ExportOutcomeExporter,
-    ready: Promise<string[]> = Promise.resolve([]),
-  ) {
-    this.provider = provider;
-    this.health = health;
-    this.ready = ready;
-    sinks.set(this, processors);
+  private constructor(parts: ClientParts) {
+    this.provider = parts.provider;
+    this.health = parts.health;
+    this.ready = parts.ready;
+    sinks.set(this, parts.processors);
+  }
+
+  static {
+    createClient = (parts) => new RiusClient(parts);
   }
 
   /** Drains the queue. Resolves false if the most recent export failed. */
@@ -130,10 +147,23 @@ export function init(options: InitOptions = {}): RiusClient {
 
   // Registry resolution is async. init() stays synchronous; callers who need
   // instrumentation attached before their first span await client.ready.
-  const ready = enableInstrumentations(processors, provider).catch(() => [] as string[]);
+  //
+  // Skipped entirely when disabled. Enabling an integration is not a private
+  // act: it registers instrumentation hooks and monkey-patches third-party
+  // prototypes in the caller's process. Someone who sets RIUS_DISABLED to take
+  // this SDK out of the picture must be left with an unpatched process, so
+  // `ready` resolves empty rather than advertising integrations that are not
+  // recording anything.
+  const ready = config.disabled
+    ? Promise.resolve<string[]>([])
+    : enableInstrumentations(processors, provider).catch(() => [] as string[]);
 
+  // Registered even when disabled: a provider whose only processor has no
+  // delegates costs nothing, and it keeps getTracer() returning a real tracer,
+  // so caller code that starts spans behaves the same either way and
+  // shutdown() has a registration to release.
   provider.register();
-  globalClient = new RiusClient(provider, processors, health, ready);
+  globalClient = createClient({ provider, processors, health, ready });
   return globalClient;
 }
 

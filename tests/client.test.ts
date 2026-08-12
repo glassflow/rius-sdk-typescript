@@ -1,7 +1,9 @@
 import { ROOT_CONTEXT, TraceFlags, context, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, getTracer, init } from "../src/client.js";
+import { RiusClient, getTracer, init } from "../src/client.js";
+import { REGISTRY } from "../src/instrumentation.js";
+import { startAsCurrentSpan } from "../src/spans.js";
 
 let client: RiusClient | undefined;
 
@@ -123,6 +125,65 @@ describe("init", () => {
 
     await client.flush();
     expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["child"]);
+  });
+
+  it("strips exception content from a recorded error when captureContent is false", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = init({ captureContent: false, spanExporter: exporter });
+
+    const leak = 'BadRequest 400: {"messages":[{"role":"user","content":"<PII>"}]}';
+    await expect(
+      startAsCurrentSpan("s", () => {
+        throw new Error(leak);
+      }),
+    ).rejects.toThrow(leak);
+    await client.flush();
+
+    const event = exporter.getFinishedSpans()[0].events[0];
+    expect(event.name).toBe("exception");
+    expect(event.attributes?.["exception.type"]).toBe("Error");
+    expect(event.attributes?.["exception.message"]).toBeUndefined();
+    expect(event.attributes?.["exception.stacktrace"]).toBeUndefined();
+  });
+
+  it("keeps the exception message when captureContent is left at its default", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = init({ mask: () => "[redacted]", spanExporter: exporter });
+
+    await expect(
+      startAsCurrentSpan("s", () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    await client.flush();
+
+    expect(exporter.getFinishedSpans()[0].events[0].attributes?.["exception.message"]).toBe("boom");
+  });
+
+  it("loads no integration and reports none when disabled", async () => {
+    // Spying on every registry entry's load() is what proves the short-circuit:
+    // enabling an integration registers hooks and patches third-party
+    // prototypes in the caller's process, and someone who disables this SDK must
+    // be left with an unpatched process, not merely an unexported one.
+    const loads = REGISTRY.map((entry) => vi.spyOn(entry, "load"));
+    client = init({ disabled: true, spanExporter: new InMemorySpanExporter() });
+    await expect(client.ready).resolves.toEqual([]);
+    for (const load of loads) expect(load).not.toHaveBeenCalled();
+  });
+
+  it("still registers the provider when disabled, so getTracer() keeps working", async () => {
+    client = init({ disabled: true, spanExporter: new InMemorySpanExporter() });
+    const span = getTracer().startSpan("s");
+    expect(span.spanContext().traceId).not.toBe("00000000000000000000000000000000");
+    span.end();
+  });
+
+  it("is not constructible outside init()", () => {
+    // Compile-time assertion, enforced by `npm run typecheck`: a
+    // caller-constructed client is not the global one, so its shutdown() would
+    // skip trace.disable() and silently leave the SDK registered.
+    // @ts-expect-error the constructor is private; init() is the sole factory.
+    expect(() => new RiusClient()).toBeTypeOf("function");
   });
 
   it("drops a child of a remote UNSAMPLED parent even at sampleRate 1", async () => {

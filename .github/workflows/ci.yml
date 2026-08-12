@@ -87,9 +87,14 @@ jobs:
           fi
           cd /tmp/consumer
           npm i @arizeai/openinference-vercel >/dev/null
+          # NOT disabled: true. Disabling short-circuits before the registry so
+          # nothing in the caller's process is patched, which is the point of the
+          # flag and would make this assertion vacuous. An unroutable endpoint
+          # keeps the exporter off the network instead, so the integration really
+          # does load.
           node -e "
             const { init } = require('@glassflow/rius');
-            const client = init({ disabled: true });
+            const client = init({ endpoint: 'http://127.0.0.1:1' });
             client.ready.then((enabled) => {
               if (!enabled.includes('vercel-ai')) {
                 throw new Error('vercel-ai did not load under CJS: ' + JSON.stringify(enabled));
