@@ -14,10 +14,26 @@ export function isContentKey(key: string): boolean {
   return CONTENT_ATTRIBUTE_SUFFIXES.some((s) => key.endsWith(s));
 }
 
+/** OTel's name for the event `recordException` adds. */
+const EXCEPTION_EVENT_NAME = "exception";
+
+/**
+ * The exception-event attributes that can carry user content. A provider error
+ * routinely echoes the offending request back in its message, and a stacktrace
+ * can carry it in a frame argument, so both are stripped under
+ * `captureContent: false`. `exception.type` is a class name, never content, and
+ * survives together with the event itself so a failure is still visible.
+ */
+const EXCEPTION_CONTENT_KEYS: readonly string[] = ["exception.message", "exception.stacktrace"];
+
 /**
  * Strips or masks content attributes before spans leave the process. Covers our
  * own spans and any bundled third-party instrumentation, which is why the key
  * sets live in semconv rather than here.
+ *
+ * Span attributes are not the only carrier: the GenAI semantic conventions also
+ * describe an event-based shape for messages, and links can carry attributes
+ * too, so events and links are sanitised on the same rules.
  *
  * Never throws into the export pipeline.
  */
@@ -35,7 +51,26 @@ export class MaskingSpanExporter implements SpanExporter {
   }
 
   private sanitized(span: ReadableSpan): ReadableSpan {
-    const attributes = span.attributes as Record<string, unknown>;
+    this.sanitizeAttributes(span.attributes as Record<string, unknown> | undefined);
+
+    for (const event of span.events ?? []) {
+      const attributes = event.attributes as Record<string, unknown> | undefined;
+      this.sanitizeAttributes(attributes);
+      if (this.opts.captureContent || attributes === undefined) continue;
+      if (event.name !== EXCEPTION_EVENT_NAME) continue;
+      for (const key of EXCEPTION_CONTENT_KEYS) delete attributes[key];
+    }
+
+    for (const link of span.links ?? []) {
+      this.sanitizeAttributes(link.attributes as Record<string, unknown> | undefined);
+    }
+
+    return span;
+  }
+
+  /** Strips or masks the content keys of one attribute bag, in place. */
+  private sanitizeAttributes(attributes: Record<string, unknown> | undefined): void {
+    if (attributes === undefined) return;
     for (const key of Object.keys(attributes)) {
       if (!isContentKey(key)) continue;
       if (!this.opts.captureContent) {
@@ -49,7 +84,6 @@ export class MaskingSpanExporter implements SpanExporter {
         attributes[key] = "[mask error]";
       }
     }
-    return span;
   }
 
   shutdown(): Promise<void> {
