@@ -26,9 +26,23 @@ export interface ResolvedConfig {
 
 type Env = Record<string, string | undefined>;
 
-function bool(raw: string | undefined, fallback: boolean): boolean {
+const AFFIRMATIVE = new Set(["1", "true", "yes", "on"]);
+const NEGATIVE = new Set(["0", "false", "no", "off"]);
+
+/**
+ * Parses a boolean env var. An unrecognised value falls back to the default
+ * and warns: treating it as false would silently turn off a default-on flag
+ * such as captureContent, which is the SDK's main value.
+ */
+function bool(name: string, raw: string | undefined, fallback: boolean): boolean {
   if (raw === undefined) return fallback;
-  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+  const value = raw.trim().toLowerCase();
+  if (AFFIRMATIVE.has(value)) return true;
+  if (NEGATIVE.has(value)) return false;
+  console.warn(
+    `[rius] ${name}="${raw}" is not a recognised boolean; using the default (${fallback}). Accepted: 1/true/yes/on, 0/false/no/off.`,
+  );
+  return fallback;
 }
 
 function rate(raw: string | undefined, fallback: number): number {
@@ -48,9 +62,10 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     endpoint,
     apiKey: options.apiKey ?? env.RIUS_API_KEY,
     serviceName: options.serviceName ?? env.RIUS_SERVICE_NAME ?? DEFAULT_SERVICE_NAME,
-    disabled: options.disabled ?? bool(env.RIUS_DISABLED, false),
+    disabled: options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false),
     sampleRate: options.sampleRate ?? rate(env.RIUS_SAMPLE_RATE, 1.0),
-    captureContent: options.captureContent ?? bool(env.RIUS_CAPTURE_CONTENT, true),
+    captureContent:
+      options.captureContent ?? bool("RIUS_CAPTURE_CONTENT", env.RIUS_CAPTURE_CONTENT, true),
     mask: options.mask,
   };
 }

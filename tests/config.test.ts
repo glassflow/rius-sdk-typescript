@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_ENDPOINT, resolveConfig } from "../src/config.js";
 
 describe("resolveConfig", () => {
@@ -53,5 +53,39 @@ describe("resolveConfig", () => {
 
   it("strips a trailing slash from the endpoint so path joining stays correct", () => {
     expect(resolveConfig({ endpoint: "https://x.test/" }, {}).endpoint).toBe("https://x.test");
+  });
+
+  it("treats empty string and unrecognized values for RIUS_CAPTURE_CONTENT as default (true), not false", () => {
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "" }).captureContent).toBe(true);
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "enabled" }).captureContent).toBe(true);
+  });
+
+  it("recognizes explicit negative values for RIUS_CAPTURE_CONTENT", () => {
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "false" }).captureContent).toBe(false);
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "off" }).captureContent).toBe(false);
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "0" }).captureContent).toBe(false);
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "no" }).captureContent).toBe(false);
+  });
+
+  it("handles case-insensitive boolean parsing for RIUS_CAPTURE_CONTENT", () => {
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "FALSE" }).captureContent).toBe(false);
+    expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "TRUE" }).captureContent).toBe(true);
+  });
+
+  it("recognizes explicit positive value for RIUS_DISABLED", () => {
+    expect(resolveConfig({}, { RIUS_DISABLED: "true" }).disabled).toBe(true);
+  });
+
+  it("treats unrecognized value for RIUS_DISABLED as default (false), not true", () => {
+    expect(resolveConfig({}, { RIUS_DISABLED: "garbage" }).disabled).toBe(false);
+  });
+
+  it("warns when a boolean env var has an unrecognized value", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resolveConfig({}, { RIUS_CAPTURE_CONTENT: "invalid" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[rius]") && expect.stringContaining("not a recognised boolean"),
+    );
+    warnSpy.mockRestore();
   });
 });
