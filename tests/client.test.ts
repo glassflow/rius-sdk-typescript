@@ -1,8 +1,22 @@
+import { ROOT_CONTEXT, TraceFlags, context, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, getTracer, init } from "../src/client.js";
 
 let client: RiusClient | undefined;
+
+/** Starts and ends a span whose parent arrived over the wire with `flags`. */
+function startSpanUnderRemoteParent(name: string, flags: TraceFlags): void {
+  const parent = trace.setSpanContext(ROOT_CONTEXT, {
+    traceId: "0af7651916cd43dd8448eb211c80319c",
+    spanId: "b7ad6b7169203331",
+    traceFlags: flags,
+    isRemote: true,
+  });
+  context.with(parent, () => {
+    getTracer().startSpan(name).end();
+  });
+}
 
 afterEach(async () => {
   await client?.shutdown();
@@ -93,11 +107,30 @@ describe("init", () => {
     expect(exporter.getFinishedSpans()[0].attributes["input.value"]).toBe("secret");
   });
 
-  it("samples whole traces so children follow the root decision", async () => {
+  it("drops a root span the ratio sampler rejects", async () => {
     const exporter = new InMemorySpanExporter();
     client = init({ sampleRate: 0, spanExporter: exporter });
-    const root = getTracer().startSpan("root");
-    root.end();
+    getTracer().startSpan("root").end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it("exports a child of a remote SAMPLED parent even at sampleRate 0", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = init({ sampleRate: 0, spanExporter: exporter });
+
+    startSpanUnderRemoteParent("child", TraceFlags.SAMPLED);
+
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["child"]);
+  });
+
+  it("drops a child of a remote UNSAMPLED parent even at sampleRate 1", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = init({ sampleRate: 1, spanExporter: exporter });
+
+    startSpanUnderRemoteParent("child", TraceFlags.NONE);
+
     await client.flush();
     expect(exporter.getFinishedSpans()).toHaveLength(0);
   });

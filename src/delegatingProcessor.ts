@@ -25,10 +25,13 @@ export class DelegatingSpanProcessor implements SpanProcessor {
   }
 
   async forceFlush(): Promise<void> {
-    await Promise.all(this.delegates.map((d) => d.forceFlush()));
+    // allSettled, not all: third-party processors are added here, and one
+    // rejecting delegate must not reject the user's flush() or leave the other
+    // delegates unflushed.
+    await Promise.allSettled(this.delegates.map((d) => d.forceFlush()));
   }
 
   async shutdown(): Promise<void> {
-    await Promise.all(this.delegates.map((d) => d.shutdown()));
+    await Promise.allSettled(this.delegates.map((d) => d.shutdown()));
   }
 }

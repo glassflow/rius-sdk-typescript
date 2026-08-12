@@ -82,6 +82,30 @@ describe("DelegatingSpanProcessor", () => {
     expect(b.shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps flushing and does not reject when one delegate rejects", async () => {
+    const processors = new DelegatingSpanProcessor();
+    const broken = stub();
+    broken.forceFlush = vi.fn().mockRejectedValue(new Error("boom"));
+    const healthy = stub();
+    processors.add(broken);
+    processors.add(healthy);
+
+    await expect(processors.forceFlush()).resolves.toBeUndefined();
+    expect(healthy.forceFlush).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps shutting down and does not reject when one delegate rejects", async () => {
+    const processors = new DelegatingSpanProcessor();
+    const broken = stub();
+    broken.shutdown = vi.fn().mockRejectedValue(new Error("boom"));
+    const healthy = stub();
+    processors.add(broken);
+    processors.add(healthy);
+
+    await expect(processors.shutdown()).resolves.toBeUndefined();
+    expect(healthy.shutdown).toHaveBeenCalledTimes(1);
+  });
+
   it("is a no-op with no delegates", async () => {
     const processors = new DelegatingSpanProcessor();
 

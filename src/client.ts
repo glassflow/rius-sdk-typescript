@@ -2,7 +2,6 @@ import { type Tracer, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
-  AlwaysOnSampler,
   BatchSpanProcessor,
   ParentBasedSampler,
   type SpanExporter,
@@ -21,10 +20,28 @@ export interface InitOptions extends RiusOptions {
   spanExporter?: SpanExporter;
 }
 
-export class RiusClient {
-  /** @internal Later-resolving instrumentation contributes processors here. */
-  readonly processors: DelegatingSpanProcessor;
+/**
+ * Where each client's delegating processor lives. Deliberately not a class
+ * field: a `private` field still appears in the emitted `.d.ts`, and there is
+ * no `stripInternal`, so a module-scoped map is the only storage that keeps the
+ * sink out of the published type surface entirely. Reached via
+ * `spanProcessorSink()` below.
+ */
+const sinks = new WeakMap<RiusClient, DelegatingSpanProcessor>();
 
+/**
+ * The processor sink for a client, so later-resolving instrumentation can
+ * contribute a span processor after the provider has been constructed.
+ *
+ * @internal Not re-exported from the package entry point; not public API.
+ */
+export function spanProcessorSink(client: RiusClient): DelegatingSpanProcessor {
+  const sink = sinks.get(client);
+  if (sink === undefined) throw new Error("[rius] client was not constructed by init()");
+  return sink;
+}
+
+export class RiusClient {
   private readonly provider: NodeTracerProvider;
   private readonly health?: ExportOutcomeExporter;
 
@@ -34,8 +51,8 @@ export class RiusClient {
     health?: ExportOutcomeExporter,
   ) {
     this.provider = provider;
-    this.processors = processors;
     this.health = health;
+    sinks.set(this, processors);
   }
 
   /** Drains the queue. Resolves false if the most recent export failed. */
@@ -96,10 +113,12 @@ export function init(options: InitOptions = {}): RiusClient {
 
   const provider = new NodeTracerProvider({
     resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: config.serviceName }),
-    sampler:
-      config.sampleRate >= 1
-        ? new AlwaysOnSampler()
-        : new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
+    // Always ParentBased, with no AlwaysOn shortcut at rate 1. They are not
+    // equivalent: ParentBased honours a remote UNSAMPLED parent and drops,
+    // while AlwaysOn records regardless, producing children of a span the
+    // upstream service dropped. Rate 1 is the default, so the shortcut would
+    // have been the default path for every user.
+    sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
     spanProcessors: [processors],
   });
 
