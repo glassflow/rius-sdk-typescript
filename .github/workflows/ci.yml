@@ -54,6 +54,32 @@ jobs:
       - run: npm run build
       - run: npx publint
       - run: npx --yes @arethetypeswrong/cli --pack .
+      - name: LICENSE file exists and matches package.json license field
+        if: matrix.node-version == '20'
+        run: |
+          if [ ! -f LICENSE ]; then
+            echo "::error::LICENSE file is missing from repo root"; exit 1
+          fi
+          SPDX=$(node -e "console.log(require('./package.json').license)")
+          # Map the SPDX id declared in package.json to the exact opening line
+          # the corresponding license text is expected to start with. This is
+          # a whitelist, not a substring match, precisely because a substring
+          # check would false-pass a mismatch (e.g. "Apache-2.0" is not a
+          # substring of "Apache License", so a naive check misses that swap
+          # entirely). Extend this map if the SDK's license ever changes.
+          case "$SPDX" in
+            MIT) EXPECTED="MIT License" ;;
+            Apache-2.0) EXPECTED="Apache License" ;;
+            *)
+              echo "::error::no known LICENSE text mapping for SPDX id '$SPDX'; add one to this step"
+              exit 1
+              ;;
+          esac
+          ACTUAL=$(head -n1 LICENSE)
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::package.json license is '$SPDX' but LICENSE begins with '$ACTUAL' (expected '$EXPECTED')"
+            exit 1
+          fi
       - name: ESM and CJS entrypoints both resolve
         run: |
           npm pack --pack-destination /tmp >/dev/null
