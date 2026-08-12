@@ -29,6 +29,21 @@ export class Observation {
     return this;
   }
 
+  /**
+   * Record an error on the span and set ERROR status. This is exactly what the
+   * `startAsCurrent*` helpers do on a thrown error, exposed so the manual
+   * `start*` path does not have to reach through `.span` to match it.
+   *
+   * Accepts `unknown` because that is what a `catch` binding is; a non-Error
+   * throwable is wrapped so `recordException` still gets a real Error.
+   */
+  recordException(error: unknown): this {
+    const wrapped = error instanceof Error ? error : new Error(String(error));
+    this.span.recordException(wrapped);
+    this.span.setStatus({ code: SpanStatusCode.ERROR, message: wrapped.message });
+    return this;
+  }
+
   end(): void {
     if (this.ended) return;
     this.ended = true;
@@ -57,15 +72,32 @@ export function startSpan(name: string, options: SpanOptions = {}): Observation 
   return configure(new Observation(span), options);
 }
 
+/** The body of a scoped span. */
+export type SpanBody<T> = (observation: Observation) => Promise<T> | T;
+
 /**
  * Run `fn` with a new span active, so spans created inside it nest under this
  * one across async boundaries. Auto-ends, records exceptions, rethrows.
+ *
+ * `options` is optional, so the common case is `startAsCurrentSpan(name, fn)`
+ * rather than `startAsCurrentSpan(name, {}, fn)`. The callback stays last.
  */
+export function startAsCurrentSpan<T>(name: string, fn: SpanBody<T>): Promise<T>;
 export function startAsCurrentSpan<T>(
   name: string,
   options: SpanOptions,
-  fn: (observation: Observation) => Promise<T> | T,
+  fn: SpanBody<T>,
+): Promise<T>;
+export function startAsCurrentSpan<T>(
+  name: string,
+  optionsOrFn: SpanOptions | SpanBody<T>,
+  maybeFn?: SpanBody<T>,
 ): Promise<T> {
+  const [options, fn] =
+    typeof optionsOrFn === "function"
+      ? [{} as SpanOptions, optionsOrFn]
+      : [optionsOrFn, maybeFn as SpanBody<T>];
+
   return getTracer().startActiveSpan(
     name,
     { attributes: kindAttributes(options.kind ?? SpanKind.CHAIN) },
@@ -74,8 +106,7 @@ export function startAsCurrentSpan<T>(
       try {
         return await fn(observation);
       } catch (error) {
-        span.recordException(error as Error);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+        observation.recordException(error);
         throw error;
       } finally {
         observation.end();

@@ -36,6 +36,25 @@ describe("startSpan", () => {
     expect(inner?.parentSpanContext).toBeUndefined();
   });
 
+  it("records an exception and ERROR status on the manual path", async () => {
+    const obs = startSpan("manual");
+    obs.recordException(new Error("nope"));
+    obs.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.status.code).toBe(2); // SpanStatusCode.ERROR
+    expect(span.status.message).toBe("nope");
+    expect(span.events.some((e) => e.name === "exception")).toBe(true);
+  });
+
+  it("wraps a non-Error throwable so recordException still gets an Error", async () => {
+    const obs = startSpan("manual-nonerror");
+    obs.recordException("just a string");
+    obs.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].status.message).toBe("just a string");
+  });
+
   it("ends at scope exit via Symbol.dispose", async () => {
     {
       using _obs = startSpan("disposed");
@@ -60,6 +79,25 @@ describe("startAsCurrentSpan", () => {
 
   it("returns the callback result", async () => {
     expect(await startAsCurrentSpan("s", {}, async () => 42)).toBe(42);
+  });
+
+  it("accepts the callback directly, with no options argument", async () => {
+    expect(await startAsCurrentSpan("no-options", async () => 7)).toBe(7);
+    await client.flush();
+    const span = exporter.getFinishedSpans().find((s) => s.name === "no-options");
+    expect(span?.attributes["openinference.span.kind"]).toBe("CHAIN");
+  });
+
+  it("still records exceptions in the options-free form", async () => {
+    await expect(
+      startAsCurrentSpan("no-options-boom", async () => {
+        throw new Error("nope");
+      }),
+    ).rejects.toThrow("nope");
+    await client.flush();
+    expect(exporter.getFinishedSpans().find((s) => s.name === "no-options-boom")?.status.code).toBe(
+      2,
+    );
   });
 
   it("records the exception, sets ERROR status, ends the span and rethrows", async () => {

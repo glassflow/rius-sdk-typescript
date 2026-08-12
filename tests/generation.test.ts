@@ -80,6 +80,47 @@ describe("generations", () => {
     expect(child?.parentSpanContext?.spanId).toBe(parent?.spanContext().spanId);
   });
 
+  it("records finish reasons, wrapping a single reason into a list", async () => {
+    startGeneration("chat", { model: "m" }).setFinishReasons("stop").end();
+    startGeneration("chat2", { model: "m" }).setFinishReasons(["length", "tool_calls"]).end();
+    await client.flush();
+    const spans = exporter.getFinishedSpans();
+    expect(
+      spans.find((s) => s.name === "chat")?.attributes["gen_ai.response.finish_reasons"],
+    ).toEqual(["stop"]);
+    expect(
+      spans.find((s) => s.name === "chat2")?.attributes["gen_ai.response.finish_reasons"],
+    ).toEqual(["length", "tool_calls"]);
+  });
+
+  it("records model parameters under the gen_ai.request prefix", async () => {
+    startGeneration("chat", {
+      model: "m",
+      modelParameters: { temperature: 0.2, max_tokens: 512, stop: "END" },
+    }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.request.temperature"]).toBe(0.2);
+    expect(span.attributes["gen_ai.request.max_tokens"]).toBe(512);
+    expect(span.attributes["gen_ai.request.stop"]).toBe("END");
+    // The request model keeps its own attribute, not a parameter-derived one.
+    expect(span.attributes["gen_ai.request.model"]).toBe("m");
+  });
+
+  it("records model parameters in the scoped form too", async () => {
+    await startAsCurrentGeneration("chat", { modelParameters: { top_p: 0.9 } }, async () => {});
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.request.top_p"]).toBe(0.9);
+  });
+
+  it("accepts the callback directly, with no options argument", async () => {
+    expect(await startAsCurrentGeneration("chat", async (gen) => gen.constructor.name)).toBe(
+      "Generation",
+    );
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["openinference.span.kind"]).toBe("LLM");
+  });
+
   it("setUsage writes zero-token usage as the number 0, not skipped", async () => {
     const gen = startGeneration("chat", { model: "m" });
     gen.setUsage({ inputTokens: 0, outputTokens: 0 });

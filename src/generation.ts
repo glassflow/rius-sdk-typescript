@@ -1,4 +1,3 @@
-import { SpanStatusCode } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import {
   GEN_AI_FIRST_TOKEN_EVENT,
@@ -6,6 +5,8 @@ import {
   GEN_AI_OUTPUT_MESSAGES,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
+  GEN_AI_REQUEST_PREFIX,
+  GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
@@ -19,6 +20,12 @@ export interface GenerationOptions {
   model?: string;
   provider?: string;
   input?: unknown;
+  /**
+   * Request parameters, each recorded as `gen_ai.request.<key>` — for example
+   * `{ temperature: 0.2, max_tokens: 512 }`. Keys are passed through verbatim,
+   * so use the provider's own parameter names.
+   */
+  modelParameters?: Record<string, unknown>;
 }
 
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
@@ -48,6 +55,19 @@ export class Generation extends Observation {
     return this;
   }
 
+  /**
+   * Why generation stopped (`gen_ai.response.finish_reasons`), e.g. `"stop"`,
+   * `"length"`, `"tool_calls"`. The convention is a list; a single reason is
+   * wrapped so callers do not have to.
+   */
+  setFinishReasons(reasons: string | string[]): this {
+    this.span.setAttribute(
+      GEN_AI_RESPONSE_FINISH_REASONS,
+      typeof reasons === "string" ? [reasons] : reasons,
+    );
+    return this;
+  }
+
   /** The TTFT anchor: event time minus span start. */
   recordFirstToken(): this {
     this.span.addEvent(GEN_AI_FIRST_TOKEN_EVENT);
@@ -63,6 +83,11 @@ function attributesFor(options: GenerationOptions): Record<string, string> {
 }
 
 function configure(generation: Generation, options: GenerationOptions): Generation {
+  // After creation rather than in attributesFor: request parameters are not
+  // identity attributes, and the key set is caller-supplied and open-ended.
+  for (const [key, value] of Object.entries(options.modelParameters ?? {})) {
+    generation.setAttribute(`${GEN_AI_REQUEST_PREFIX}${key}`, value);
+  }
   if (options.input !== undefined) generation.setInput(options.input);
   return generation;
 }
@@ -73,19 +98,37 @@ export function startGeneration(name: string, options: GenerationOptions = {}): 
   return configure(new Generation(span), options);
 }
 
-/** Run `fn` with a generation span active. Auto-ends, records exceptions. */
+/** The body of a scoped generation. */
+export type GenerationBody<T> = (generation: Generation) => Promise<T> | T;
+
+/**
+ * Run `fn` with a generation span active. Auto-ends, records exceptions.
+ *
+ * `options` is optional, so `startAsCurrentGeneration(name, fn)` works without
+ * an empty object. The callback stays last.
+ */
+export function startAsCurrentGeneration<T>(name: string, fn: GenerationBody<T>): Promise<T>;
 export function startAsCurrentGeneration<T>(
   name: string,
   options: GenerationOptions,
-  fn: (generation: Generation) => Promise<T> | T,
+  fn: GenerationBody<T>,
+): Promise<T>;
+export function startAsCurrentGeneration<T>(
+  name: string,
+  optionsOrFn: GenerationOptions | GenerationBody<T>,
+  maybeFn?: GenerationBody<T>,
 ): Promise<T> {
+  const [options, fn] =
+    typeof optionsOrFn === "function"
+      ? [{} as GenerationOptions, optionsOrFn]
+      : [optionsOrFn, maybeFn as GenerationBody<T>];
+
   return getTracer().startActiveSpan(name, { attributes: attributesFor(options) }, async (span) => {
     const generation = configure(new Generation(span), options);
     try {
       return await fn(generation);
     } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+      generation.recordException(error);
       throw error;
     } finally {
       generation.end();

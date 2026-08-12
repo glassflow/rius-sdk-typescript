@@ -73,7 +73,24 @@ await startAsCurrentSpan("fetch-documents", { input: query }, async (span) => {
 
 `startSpan` returns a handle you end yourself (or dispose with `using`);
 `startAsCurrentSpan` runs a callback with the span active, ending it
-automatically and recording any thrown exception.
+automatically and recording any thrown exception. The options argument is
+optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
+works when you have nothing to configure.
+
+On the manual path, `recordException()` does what the scoped form does for
+you: it records the error and sets ERROR status.
+
+```ts
+const span = startSpan("fetch-documents");
+try {
+  span.setOutput(await fetchDocuments(query));
+} catch (error) {
+  span.recordException(error);
+  throw error;
+} finally {
+  span.end();
+}
+```
 
 ### `startGeneration` / `startAsCurrentGeneration`: LLM calls
 
@@ -85,7 +102,12 @@ import { startAsCurrentGeneration } from "@glassflow/rius";
 
 await startAsCurrentGeneration(
   "chat-completion",
-  { model: "gpt-4o", provider: "openai", input: messages },
+  {
+    model: "gpt-4o",
+    provider: "openai",
+    input: messages,
+    modelParameters: { temperature: 0.2, max_tokens: 512 },
+  },
   async (generation) => {
     const response = await client.chat.completions.create({ model: "gpt-4o", messages });
     generation.setOutput(response.choices[0]?.message);
@@ -93,10 +115,15 @@ await startAsCurrentGeneration(
       inputTokens: response.usage?.prompt_tokens,
       outputTokens: response.usage?.completion_tokens,
     });
+    generation.setFinishReasons(response.choices[0]?.finish_reason ?? "stop");
     return response;
   },
 );
 ```
+
+Each `modelParameters` entry is recorded as `gen_ai.request.<key>`, so use the
+provider's own parameter names. `setFinishReasons` accepts one reason or a
+list.
 
 ## Configuration
 
@@ -118,7 +145,16 @@ Traces are posted to `<endpoint>/v1/traces`.
 `captureContent` controls whether input/output content (prompts,
 completions, tool arguments) is attached to spans. It defaults to
 `true`. Set it to `false`, or supply a `mask` function, if your spans
-must not carry raw content.
+must not carry raw content. Both apply to span attributes and to the
+attributes of span events and links. With `captureContent: false` the
+message of a recorded exception is stripped as well, since provider errors
+routinely echo the request back; the exception event and its
+`exception.type` are kept, so failures stay visible.
+
+`disabled` turns the SDK off completely: nothing is exported, and no
+optional integration is loaded, so no third-party module is patched in your
+process. `client.ready` resolves to an empty list. Spans can still be
+created and are simply dropped.
 
 ## Shutdown
 
