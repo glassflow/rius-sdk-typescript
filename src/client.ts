@@ -12,6 +12,7 @@ import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
+import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { TRACER_NAME } from "./semconv.js";
 
@@ -45,13 +46,18 @@ export class RiusClient {
   private readonly provider: NodeTracerProvider;
   private readonly health?: ExportOutcomeExporter;
 
+  /** Resolves with the names of the auto-instrumentations that attached. */
+  readonly ready: Promise<string[]>;
+
   constructor(
     provider: NodeTracerProvider,
     processors: DelegatingSpanProcessor,
     health?: ExportOutcomeExporter,
+    ready: Promise<string[]> = Promise.resolve([]),
   ) {
     this.provider = provider;
     this.health = health;
+    this.ready = ready;
     sinks.set(this, processors);
   }
 
@@ -122,8 +128,12 @@ export function init(options: InitOptions = {}): RiusClient {
     spanProcessors: [processors],
   });
 
+  // Registry resolution is async. init() stays synchronous; callers who need
+  // instrumentation attached before their first span await client.ready.
+  const ready = enableInstrumentations(processors, provider).catch(() => [] as string[]);
+
   provider.register();
-  globalClient = new RiusClient(provider, processors, health);
+  globalClient = new RiusClient(provider, processors, health, ready);
   return globalClient;
 }
 
