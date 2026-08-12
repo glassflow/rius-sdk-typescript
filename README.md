@@ -221,9 +221,14 @@ completions, tool arguments) is attached to spans. It defaults to
 `true`. Set it to `false`, or supply a `mask` function, if your spans
 must not carry raw content. Both apply to span attributes and to the
 attributes of span events and links. With `captureContent: false` the
-message of a recorded exception is stripped as well, since provider errors
-routinely echo the request back; the exception event and its
-`exception.type` are kept, so failures stay visible.
+message and stacktrace of a recorded exception are stripped as well,
+since provider errors routinely echo the request back; the exception
+event and its `exception.type` are kept, so failures stay visible.
+`mask` does not extend that far: with `captureContent: true`, a `mask`
+function scrubs content attributes on spans, events and links, but
+exception messages, stacktraces and the status message pass through
+unmasked, so a raw provider error can still reach your backend. Disable
+`captureContent` if you need those scrubbed too.
 
 `disabled` turns the SDK off completely: nothing is exported, and no
 optional integration is loaded, so no third-party module is patched in your
