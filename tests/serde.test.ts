@@ -37,4 +37,43 @@ describe("toAttributeValue", () => {
       typeof result === "string" || typeof result === "number" || typeof result === "boolean",
     ).toBe(true);
   });
+
+  it("serializes shared sibling references fully without false circular detection", () => {
+    const shared = { role: "system", content: "you are helpful" };
+    const result = toAttributeValue({ first: shared, second: shared });
+    const parsed = JSON.parse(result as string);
+    // Both first and second should have the full shared object, not [Circular]
+    expect(parsed.first).toEqual({ role: "system", content: "you are helpful" });
+    expect(parsed.second).toEqual({ role: "system", content: "you are helpful" });
+    // Verify no [Circular] marker exists anywhere in the output
+    expect(result).not.toContain("[Circular]");
+  });
+
+  it("still detects self-reference as circular", () => {
+    const selfRef: Record<string, unknown> = {};
+    selfRef.self = selfRef;
+    const result = toAttributeValue(selfRef);
+    expect(result).toContain("[Circular]");
+  });
+
+  it("detects deeper cycles and marks them circular", () => {
+    const obj: Record<string, unknown> = { value: "test" };
+    const child: Record<string, unknown> = {};
+    obj.child = child;
+    child.parent = obj;
+    const result = toAttributeValue(obj);
+    expect(result).toContain("[Circular]");
+  });
+
+  it("serializes shared references at different depths fully", () => {
+    const shared = { id: 42 };
+    const nested = { x: shared, y: { z: shared } };
+    const result = toAttributeValue(nested);
+    const parsed = JSON.parse(result as string);
+    // Both references to shared should be serialized fully
+    expect(parsed.x).toEqual({ id: 42 });
+    expect(parsed.y.z).toEqual({ id: 42 });
+    // No [Circular] marker
+    expect(result).not.toContain("[Circular]");
+  });
 });
