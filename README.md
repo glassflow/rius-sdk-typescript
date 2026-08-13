@@ -192,14 +192,19 @@ is not installed stays quiet; a package that is installed but fails to
 load logs a warning naming the integration and the underlying error, and
 the SDK continues without it.
 
-The `openai` and `anthropic` integrations attach through
-OpenTelemetry's CommonJS module hook, so they patch a provider SDK that
-is reached by `require`. An application that is pure ESM, importing the
-provider SDK with `import` and never through `require`, will see those
-two report themselves as enabled while the SDK stays unpatched. This is
-a limitation of the underlying instrumentation packages rather than of
-`init()`. The `langchain`, `vercel-ai` and `mcp` integrations do not use
-that hook and work either way.
+The `openai` and `anthropic` integrations work in both module systems:
+CommonJS applications that `require` the provider SDK and pure-ESM
+applications that `import` it are both patched, regardless of whether
+the provider was loaded before or after `init()`. One combination is
+not covered: the provider SDKs ship separate CommonJS and ESM builds,
+and the instrumentation packages can patch only one of them per process
+([Arize-ai/openinference#3557](https://github.com/Arize-ai/openinference/issues/3557)),
+so a CommonJS application whose *only* `require` of the provider
+happens lazily after `init()` — nothing required it at startup — gets
+the ESM build patched instead and produces no spans. Requiring the
+provider anywhere before `init()` avoids this. The `langchain`,
+`vercel-ai` and `mcp` integrations attach differently and have no such
+edge.
 
 Content captured by these integrations, prompts, tool arguments and
 results, and so on, is covered by the same `mask` and `captureContent`
