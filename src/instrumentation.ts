@@ -255,6 +255,18 @@ export function anthropicPatchable(exports: Record<string, unknown>): object | u
 }
 
 /**
+ * Shape test for the MCP SDK's client module: picks the exports carrying a
+ * `Client` whose prototype has the `callTool` this SDK wraps, so
+ * `cachedCjsExports` cannot mistake an internal file for the client module.
+ *
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export function mcpClientPatchable(exports: Record<string, unknown>): object | undefined {
+  const cls = exports.Client as McpClientLike | undefined;
+  return typeof cls?.prototype?.callTool === "function" ? { Client: cls } : undefined;
+}
+
+/**
  * Bundled integrations. Packages are imported lazily so none is a hard
  * dependency; install them as optional peers and init() enables what it finds.
  *
@@ -364,6 +376,18 @@ export const REGISTRY: RegistryEntry[] = [
       if (ClientClass === undefined) return undefined;
       const { instrumentMcpClient } = await import("./instrumentationMcp.js");
       instrumentMcpClient(ClientClass);
+      // The dynamic import above resolves the ESM build, but the MCP SDK
+      // dual-builds: a CJS consumer's require() returns a DIFFERENT Client
+      // class, whose tool calls would go unobserved while ready still
+      // reports "mcp". Patch the cached CJS build too when the app has
+      // required it. instrumentMcpClient is idempotent, so a package that
+      // resolves both conditions to one build is patched once. Residual gap,
+      // same as the providers': a CJS require that happens only after
+      // init() is not in the cache yet and stays unpatched.
+      const cjs = cachedCjsExports("@modelcontextprotocol/sdk", mcpClientPatchable) as
+        | { Client: McpClientLike }
+        | undefined;
+      if (cjs !== undefined) instrumentMcpClient(cjs.Client);
       // The patch already ran; the truthy return only tells the caller the
       // package was present, there is nothing further to attach.
       return true;
