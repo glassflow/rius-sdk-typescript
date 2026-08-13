@@ -192,14 +192,23 @@ is not installed stays quiet; a package that is installed but fails to
 load logs a warning naming the integration and the underlying error, and
 the SDK continues without it.
 
-The `openai` and `anthropic` integrations attach through
-OpenTelemetry's CommonJS module hook, so they patch a provider SDK that
-is reached by `require`. An application that is pure ESM, importing the
-provider SDK with `import` and never through `require`, will see those
-two report themselves as enabled while the SDK stays unpatched. This is
-a limitation of the underlying instrumentation packages rather than of
-`init()`. The `langchain`, `vercel-ai` and `mcp` integrations do not use
-that hook and work either way.
+The `openai` and `anthropic` integrations work in both module systems:
+CommonJS applications that `require` the provider SDK and pure-ESM
+applications that `import` it are both patched, regardless of whether
+the provider was loaded before or after `init()`. One combination is
+not covered: the provider SDKs ship separate CommonJS and ESM builds,
+and the instrumentation packages can patch only one of them per process
+([Arize-ai/openinference#3557](https://github.com/Arize-ai/openinference/issues/3557)),
+so exactly one build gets patched: the CommonJS build when anything in
+the process `require`d the provider before `init()`, the ESM build
+otherwise. Two combinations therefore stay uncovered until the
+upstream fix lands: a CommonJS application whose *only* `require` of
+the provider happens lazily after `init()` (requiring it anywhere
+before `init()` avoids this), and — the mirror image — an ESM
+application where some CommonJS dependency `require`d the provider
+before `init()`, which wins the choice away from the ESM build the
+application itself is calling. The `langchain`, `vercel-ai` and `mcp`
+integrations attach differently and have no such edge.
 
 Content captured by these integrations, prompts, tool arguments and
 results, and so on, is covered by the same `mask` and `captureContent`

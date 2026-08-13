@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import { join, sep } from "node:path";
 import type { TracerProvider } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -137,6 +139,121 @@ function warnBroken(subject: string, error: unknown): void {
   console.warn(`[rius] integration "${subject}" is installed but failed to load: ${message}`);
 }
 
+interface ManuallyInstrumentable {
+  manuallyInstrument(module: object): void;
+}
+
+/**
+ * The main CJS exports of `pkg` if this process has already `require`d it,
+ * mapped through `toPatchable`. Found by scanning `require.cache` rather than
+ * resolving the package from here: resolution from inside this SDK can fail
+ * under isolated installs (pnpm) for a package we do not declare, while the
+ * cache is process-global and keyed by absolute path. `toPatchable` doubles as
+ * the shape test that picks the package's main exports out of its internal
+ * files.
+ *
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export function cachedCjsExports(
+  pkg: string,
+  toPatchable: (exports: Record<string, unknown>) => object | undefined,
+): object | undefined {
+  let cache: Record<string, { exports?: unknown } | undefined>;
+  try {
+    // Any base file path gives the same process-global cache; the base only
+    // matters for resolution, which this deliberately never does.
+    cache = createRequire(join(process.cwd(), "noop.js")).cache;
+  } catch {
+    return undefined;
+  }
+  if (cache === undefined || cache === null) return undefined;
+
+  const needle = `${sep}node_modules${sep}${pkg.split("/").join(sep)}${sep}`;
+  for (const key of Object.keys(cache)) {
+    if (!key.includes(needle)) continue;
+    const exports = cache[key]?.exports;
+    if (typeof exports !== "object" || exports === null) continue;
+    const patchable = toPatchable(exports as Record<string, unknown>);
+    if (patchable !== undefined) return patchable;
+  }
+  return undefined;
+}
+
+/**
+ * Patch the build of a dual-package provider SDK that this process is actually
+ * using. `openai` and `@anthropic-ai/sdk` ship separate CJS and ESM builds
+ * with separate class objects, and the OpenInference require hook only ever
+ * sees the CJS one, so a pure-ESM app would silently get no spans. Their
+ * `patch()` is also guarded by a module-global flag
+ * (github.com/Arize-ai/openinference/issues/3557), so only ONE build can be
+ * patched per process and the choice matters:
+ *
+ * - CJS build already in `require.cache` → the app requires it, patch that
+ *   copy. This also covers a require that happened BEFORE init(), which the
+ *   require hook alone never repairs.
+ * - Otherwise → import the ESM build and patch it. In an ESM app every static
+ *   import already ran before init(), so this is the copy in use. The one
+ *   pattern this trades away is a CJS app whose only require of the provider
+ *   comes after init(): it gets the ESM build patched instead (documented).
+ *
+ * The patchable is a plain-object wrapper, never the ESM namespace itself:
+ * `patch()` writes an `openInferencePatched` marker onto what it receives, and
+ * a frozen ESM namespace would throw on that write.
+ *
+ * Prototype patching needs no import-order cooperation from the app — clients
+ * constructed before init() share the same prototype and are covered too.
+ */
+/** @internal Exported for tests. Not re-exported from the package entry point. */
+export async function patchActiveBuild(
+  instrumentation: ManuallyInstrumentable,
+  pkg: string,
+  toPatchable: (exports: Record<string, unknown>) => object | undefined,
+): Promise<void> {
+  const cached = cachedCjsExports(pkg, toPatchable);
+  if (cached !== undefined) {
+    instrumentation.manuallyInstrument(cached);
+    return;
+  }
+  // Provider not installed resolves undefined and stays quiet, matching the
+  // registry's loud/quiet split: the missing package here is the PROVIDER, not
+  // the instrumentation the user installed.
+  const ns = await optional(pkg);
+  if (ns === undefined) return;
+  const patchable = toPatchable(ns);
+  if (patchable === undefined) {
+    // The provider IS present but its exports are not a shape the OpenInference
+    // patch can wrap (say, a future major restructured the class). Loud, for
+    // the same reason a throwing load() is: the entry still reports itself
+    // enabled, and "enabled but silently unpatched" is the failure this whole
+    // change exists to eliminate.
+    warnBroken(pkg, new Error("unrecognised module shape, instrumentation not applied"));
+    return;
+  }
+  instrumentation.manuallyInstrument(patchable);
+}
+
+/**
+ * Shape tests for the provider exports, returning what each OpenInference
+ * `patch()` expects to receive. Checking down to the method being wrapped
+ * keeps `cachedCjsExports` from picking an internal file of the package.
+ *
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export function openaiPatchable(exports: Record<string, unknown>): object | undefined {
+  const cls = (exports.OpenAI ?? exports.default) as
+    | { Chat?: { Completions?: { prototype?: { create?: unknown } } } }
+    | undefined;
+  return cls?.Chat?.Completions?.prototype?.create ? { OpenAI: cls } : undefined;
+}
+
+/** @internal Exported for tests. Not re-exported from the package entry point. */
+export function anthropicPatchable(exports: Record<string, unknown>): object | undefined {
+  const cls = (exports.default ?? exports.Anthropic) as
+    | { Messages?: { prototype?: { create?: unknown } } }
+    | undefined;
+  return cls?.Messages?.prototype?.create ? { default: cls } : undefined;
+}
+
 /**
  * Bundled integrations. Packages are imported lazily so none is a hard
  * dependency; install them as optional peers and init() enables what it finds.
@@ -180,8 +297,17 @@ export const REGISTRY: RegistryEntry[] = [
     kind: "instrumentation",
     async load() {
       const mod = await optional("@arizeai/openinference-instrumentation-openai");
-      const Ctor = mod?.OpenAIInstrumentation as (new () => unknown) | undefined;
-      return Ctor ? new Ctor() : undefined;
+      const Ctor = mod?.OpenAIInstrumentation as (new () => ManuallyInstrumentable) | undefined;
+      if (Ctor === undefined) return undefined;
+      const instrumentation = new Ctor();
+      // The require hook registered by enableInstrumentations only covers CJS
+      // consumers, and only for requires that happen after init(). Patch the
+      // build in use directly so ESM apps and require-before-init both work.
+      await patchActiveBuild(instrumentation, "openai", openaiPatchable);
+      // Still returned for registration: the patched methods read the
+      // instrumentation's tracer per call, so it has to be bound to our tracer
+      // provider to emit anywhere.
+      return instrumentation;
     },
   },
   {
@@ -189,8 +315,12 @@ export const REGISTRY: RegistryEntry[] = [
     kind: "instrumentation",
     async load() {
       const mod = await optional("@arizeai/openinference-instrumentation-anthropic");
-      const Ctor = mod?.AnthropicInstrumentation as (new () => unknown) | undefined;
-      return Ctor ? new Ctor() : undefined;
+      const Ctor = mod?.AnthropicInstrumentation as (new () => ManuallyInstrumentable) | undefined;
+      if (Ctor === undefined) return undefined;
+      const instrumentation = new Ctor();
+      // Same dual-build handling as the openai entry above.
+      await patchActiveBuild(instrumentation, "@anthropic-ai/sdk", anthropicPatchable);
+      return instrumentation;
     },
   },
   {

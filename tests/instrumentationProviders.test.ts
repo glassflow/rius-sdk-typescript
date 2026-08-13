@@ -67,32 +67,22 @@ interface AnthropicModule {
 }
 
 describe("the anthropic entry", () => {
-  it("loads a real instrumentation from the installed package", async () => {
-    const entry = REGISTRY.find((e) => e.name === "anthropic");
-    expect(entry).toBeDefined();
-    const loaded = (await entry?.load()) as
-      | { instrumentationName?: string; disable(): void }
-      | undefined;
-    expect(loaded?.instrumentationName).toBe("@arizeai/openinference-instrumentation-anthropic");
+  // No standalone `entry.load()` test here: loading now patches the build in
+  // use and flips OpenInference's process-global patched flag
+  // (github.com/Arize-ai/openinference/issues/3557), so a throwaway load would
+  // steal the one patch this file gets. The e2e below asserts the load result.
 
-    // Constructing one registers a module hook immediately, and hooks patch in
-    // reverse registration order, so leaving this throwaway instance live would
-    // let it take the patch away from the instance the next test enables and
-    // send that test's spans to the global no-op provider instead.
-    loaded?.disable();
-  });
-
-  it("is reported as enabled and turns a real Anthropic call into an LLM span", async () => {
-    const { exporter, provider } = recordingProvider();
-    const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"]);
-    expect(enabled).toContain("anthropic");
-
-    // Loaded through Node's own CJS loader, which is what the package's module
-    // hook watches, and only after the entry was enabled: the hook fires on
-    // first load, so requiring the SDK earlier would leave it unpatched.
+  it("patches a CJS build required BEFORE enabling and turns a real call into an LLM span", async () => {
+    // Require first, enable second: the pre-init require used to be a silent
+    // no-spans hole (the require hook only fires on requires that happen after
+    // registration). The entry now patches the cached CJS exports directly.
     const { default: Anthropic } = createRequire(import.meta.url)(
       "@anthropic-ai/sdk",
     ) as AnthropicModule;
+
+    const { exporter, provider } = recordingProvider();
+    const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"]);
+    expect(enabled).toContain("anthropic");
 
     // A local stub rather than api.anthropic.com: the assertion is about the
     // span the instrumentation produces, and it needs no real credentials.

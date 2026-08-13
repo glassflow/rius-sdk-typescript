@@ -153,6 +153,11 @@ jobs:
             const http = require('node:http');
             const { init } = require('@glassflow/rius');
             const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+            // Required BEFORE init(), the way real CJS apps order their
+            // requires. The entry patches the cached CJS exports directly; a
+            // require that only happens after init() would get the ESM build
+            // patched instead (the documented residual gap).
+            const Anthropic = require('@anthropic-ai/sdk').default;
             const exporter = new InMemorySpanExporter();
             const client = init({ spanExporter: exporter });
             const reply = { id: 'm', type: 'message', role: 'assistant', model: 'claude-test',
@@ -179,14 +184,14 @@ jobs:
                 });
               });
               await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-              const Anthropic = require('@anthropic-ai/sdk').default;
               const anthropic = new Anthropic({ apiKey: 'not-a-real-key', baseURL: 'http://127.0.0.1:' + server.address().port });
               await anthropic.messages.create({ model: 'claude-test', max_tokens: 8, messages: [{ role: 'user', content: '2+2' }] });
               server.close();
 
               // Read before shutdown(): InMemorySpanExporter.shutdown() clears
-              // what it collected. The wait covers the batch processor's delay.
-              await new Promise((resolve) => setTimeout(resolve, 7000));
+              // what it collected. flush() drains the batch processor
+              // deterministically instead of guessing at its schedule delay.
+              await client.flush();
               const names = exporter.getFinishedSpans().map((span) => span.name);
               const expectedNames = wantLangchain ? ['CiEcho', 'Anthropic Messages'] : ['Anthropic Messages'];
               for (const expected of expectedNames) {
@@ -197,6 +202,55 @@ jobs:
               process.exit(0);
             }).catch((e) => { console.error(e.message); process.exit(1); });
           "
+      - name: anthropic traces a real call from a pure-ESM consumer
+        run: |
+          # The point of the dual-build patching: a consumer that only ever
+          # `import`s the provider gets spans. The require hook cannot see ESM
+          # importers, so before this feature the call below produced nothing —
+          # while ready still reported the integration enabled. Static imports
+          # on purpose: they all evaluate before init() runs, which is exactly
+          # the ordering a real ESM app has. Asserted from a packed install
+          # because vitest's module graph does not reproduce a real consumer's
+          # ESM/CJS split.
+          cd /tmp/consumer
+          cat > esm-check.mjs <<'EOF'
+          import http from "node:http";
+          import { init } from "@glassflow/rius";
+          import Anthropic from "@anthropic-ai/sdk";
+          import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+
+          const exporter = new InMemorySpanExporter();
+          const client = init({ spanExporter: exporter });
+          const enabled = await client.ready;
+          if (!enabled.includes("anthropic")) {
+            throw new Error("anthropic did not load under ESM: " + JSON.stringify(enabled));
+          }
+
+          const reply = { id: "m", type: "message", role: "assistant", model: "claude-test",
+            content: [{ type: "text", text: "4" }], stop_reason: "end_turn",
+            usage: { input_tokens: 5, output_tokens: 1 } };
+          const server = http.createServer((request, response) => {
+            request.resume();
+            request.on("end", () => {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify(reply));
+            });
+          });
+          await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+          const anthropic = new Anthropic({ apiKey: "not-a-real-key", baseURL: "http://127.0.0.1:" + server.address().port });
+          await anthropic.messages.create({ model: "claude-test", max_tokens: 8, messages: [{ role: "user", content: "2+2" }] });
+          server.close();
+
+          // Read before shutdown(): InMemorySpanExporter.shutdown() clears
+          // what it collected. flush() drains the batch processor
+          // deterministically instead of guessing at its schedule delay.
+          await client.flush();
+          const names = exporter.getFinishedSpans().map((span) => span.name);
+          if (!names.includes("Anthropic Messages")) {
+            throw new Error("no Anthropic Messages span from the ESM consumer: " + JSON.stringify(names));
+          }
+          EOF
+          node esm-check.mjs
       - name: vercel-ai (ESM-only) loads from a CJS consumer
         env:
           NODE_MAJOR: ${{ matrix.node-version }}
