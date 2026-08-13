@@ -251,7 +251,71 @@ jobs:
           }
           EOF
           node esm-check.mjs
-      - name: vercel-ai (ESM-only) loads from a CJS consumer
+      - name: mcp traces a real tool call from CJS and ESM consumers
+        run: |
+          # The MCP SDK dual-builds (import -> dist/esm, require -> dist/cjs),
+          # so the registry's dynamic import patches a DIFFERENT Client class
+          # from the one a CJS consumer requires. Before the cached-CJS
+          # patching, this exact leg reproduced ready:["mcp"] with zero spans.
+          # Asserted from a packed install for the same reason as the provider
+          # legs: vitest's module graph does not reproduce a real consumer's
+          # ESM/CJS split. The span-kind assertion is the functional proof;
+          # "reports enabled" alone has hidden three defects now.
+          cd /tmp/consumer
+          npm i @modelcontextprotocol/sdk >/dev/null
+          cat > mcp-body.js <<'EOF'
+          module.exports = async function run(init, InMemorySpanExporter, mcpSdk) {
+            const { Client, McpServer, InMemoryTransport } = mcpSdk;
+            const exporter = new InMemorySpanExporter();
+            const client = init({ spanExporter: exporter });
+            const enabled = await client.ready;
+            if (!enabled.includes("mcp")) {
+              throw new Error("mcp did not load: " + JSON.stringify(enabled));
+            }
+            const server = new McpServer({ name: "t", version: "1.0.0" });
+            server.tool("add", {}, async () => ({ content: [{ type: "text", text: "3" }] }));
+            const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+            await server.connect(serverTransport);
+            const mcp = new Client({ name: "c", version: "1.0.0" });
+            await mcp.connect(clientTransport);
+            await mcp.callTool({ name: "add", arguments: {} });
+            await client.flush();
+            const spans = exporter.getFinishedSpans();
+            const tool = spans.find((s) => s.name === "add");
+            if (!tool) {
+              throw new Error("no tool span exported: " + JSON.stringify(spans.map((s) => s.name)));
+            }
+            if (tool.attributes["openinference.span.kind"] !== "TOOL") {
+              throw new Error("span is not a TOOL span: " + JSON.stringify(tool.attributes));
+            }
+          };
+          EOF
+          cat > mcp-check.cjs <<'EOF'
+          const { init } = require("@glassflow/rius");
+          const { InMemorySpanExporter } = require("@opentelemetry/sdk-trace-base");
+          // Required BEFORE init(), the way real CJS apps order their requires;
+          // this is the require the cached-CJS patching exists to cover.
+          const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
+          const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
+          const { InMemoryTransport } = require("@modelcontextprotocol/sdk/inMemory.js");
+          const run = require("./mcp-body.js");
+          run(init, InMemorySpanExporter, { Client, McpServer, InMemoryTransport })
+            .then(() => process.exit(0))
+            .catch((e) => { console.error(e.message); process.exit(1); });
+          EOF
+          node mcp-check.cjs
+          cat > mcp-check.mjs <<'EOF'
+          import { createRequire } from "node:module";
+          import { init } from "@glassflow/rius";
+          import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+          import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+          import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+          import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+          const run = createRequire(import.meta.url)("./mcp-body.js");
+          await run(init, InMemorySpanExporter, { Client, McpServer, InMemoryTransport });
+          EOF
+          node mcp-check.mjs
+      - name: vercel-ai turns a mock generateText into OpenInference spans (CJS consumer)
         env:
           NODE_MAJOR: ${{ matrix.node-version }}
         run: |
@@ -259,27 +323,60 @@ jobs:
           # install and assert it on legs at or above that. Numeric comparison
           # (-lt), not string comparison: "8" >= "22" lexicographically but
           # 8 < 22 numerically, and every value here is a plain integer string.
+          #
+          # The functional shape on ai v7: the OTel spans come from the
+          # @ai-sdk/otel telemetry integration (ai itself no longer depends on
+          # @opentelemetry/api), and our processor entry transforms them with
+          # OpenInference attributes. Asserting on openinference.span.kind
+          # proves the PROCESSOR ran; "reports enabled" alone proves nothing.
+          # The ai package is ESM-only, so the CJS consumer reaches it through
+          # dynamic import, the way a real CJS app would.
           if [ "$NODE_MAJOR" -lt 22 ]; then
             echo "skipping vercel-ai assertion on Node $NODE_MAJOR (requires >=22)"
             exit 0
           fi
           cd /tmp/consumer
-          npm i @arizeai/openinference-vercel >/dev/null
-          # NOT disabled: true. Disabling short-circuits before the registry so
-          # nothing in the caller's process is patched, which is the point of the
-          # flag and would make this assertion vacuous. An unroutable endpoint
-          # keeps the exporter off the network instead, so the integration really
-          # does load.
-          node -e "
-            const { init } = require('@glassflow/rius');
-            const client = init({ endpoint: 'http://127.0.0.1:1' });
-            client.ready.then((enabled) => {
-              if (!enabled.includes('vercel-ai')) {
-                throw new Error('vercel-ai did not load under CJS: ' + JSON.stringify(enabled));
-              }
-              return client.shutdown();
-            }).catch((e) => { console.error(e.message); process.exit(1); });
-          "
+          npm i @arizeai/openinference-vercel ai @ai-sdk/otel >/dev/null
+          cat > vercel-check.cjs <<'EOF'
+          const { init } = require("@glassflow/rius");
+          const { InMemorySpanExporter } = require("@opentelemetry/sdk-trace-base");
+
+          const exporter = new InMemorySpanExporter();
+          const client = init({ spanExporter: exporter });
+
+          client.ready.then(async (enabled) => {
+            if (!enabled.includes("vercel-ai")) {
+              throw new Error("vercel-ai did not load under CJS: " + JSON.stringify(enabled));
+            }
+            const { generateText } = await import("ai");
+            const { MockLanguageModelV3 } = await import("ai/test");
+            const { OpenTelemetry } = await import("@ai-sdk/otel");
+            const mock = new MockLanguageModelV3({
+              doGenerate: async () => ({
+                content: [{ type: "text", text: "4" }],
+                finishReason: "stop",
+                usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 },
+                warnings: [],
+              }),
+            });
+            await generateText({
+              model: mock,
+              prompt: "2+2",
+              experimental_telemetry: { isEnabled: true, integrations: [new OpenTelemetry()] },
+            });
+            await client.flush();
+            const spans = exporter.getFinishedSpans();
+            const kinds = spans.map((s) => s.attributes["openinference.span.kind"]);
+            if (!kinds.includes("LLM")) {
+              throw new Error(
+                "no OpenInference LLM span; the processor did not transform: " +
+                JSON.stringify(spans.map((s) => [s.name, s.attributes["openinference.span.kind"]])),
+              );
+            }
+            process.exit(0);
+          }).catch((e) => { console.error(e.message); process.exit(1); });
+          EOF
+          node vercel-check.cjs
       - name: '@opentelemetry/api is a peer and is not bundled'
         run: |
           node -e "
