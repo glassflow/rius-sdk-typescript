@@ -99,7 +99,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx publint
-      - run: npx --yes @arethetypeswrong/cli --pack .
+      # attw analyzes the packed tarball, so its verdict is the same on every
+      # matrix leg — and the tool itself crashes under Node 18 ("Cannot read
+      # properties of undefined (reading 'filename')", exit 3).
+      - if: matrix.node-version != '18'
+        run: npx --yes @arethetypeswrong/cli --pack .
       - name: ESM and CJS entrypoints both resolve
         run: |
           npm pack --pack-destination /tmp >/dev/null

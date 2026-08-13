@@ -19,6 +19,8 @@ import { REGISTRY, enableInstrumentations } from "../src/instrumentation.js";
 // depend on execution order. One file per concern, and vitest's per-file module
 // isolation keeps that state to itself.
 
+const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+
 function makeSink() {
   return { add: vi.fn(), addFirst: vi.fn() };
 }
@@ -136,24 +138,30 @@ describe("the langchain entry", () => {
     expect(isWrapped(callbacks.CallbackManager._configureSync)).toBe(true);
   });
 
-  it("is reported as enabled and turns a real chain invocation into a CHAIN span", async () => {
-    const { exporter, provider } = recordingProvider();
-    const enabled = await enableInstrumentations(makeSink(), provider, ["langchain"]);
-    expect(enabled).toContain("langchain");
+  // @langchain/core requires Node >= 20: running a chain calls uuidv7, which
+  // reads globalThis.crypto — not a global until Node 19. Loading and patching
+  // still work on 18, so only the invocation test is gated.
+  it.skipIf(nodeMajor < 20)(
+    "is reported as enabled and turns a real chain invocation into a CHAIN span",
+    async () => {
+      const { exporter, provider } = recordingProvider();
+      const enabled = await enableInstrumentations(makeSink(), provider, ["langchain"]);
+      expect(enabled).toContain("langchain");
 
-    // A plain lambda rather than a model: it goes through the same callback
-    // manager every LangChain runnable does, with no provider call.
-    const { RunnableLambda } = await import("@langchain/core/runnables");
-    const chain = RunnableLambda.from((input: string) => `echo:${input}`).withConfig({
-      runName: "RiusEchoChain",
-    });
-    expect(await chain.invoke("what is 2+2")).toBe("echo:what is 2+2");
+      // A plain lambda rather than a model: it goes through the same callback
+      // manager every LangChain runnable does, with no provider call.
+      const { RunnableLambda } = await import("@langchain/core/runnables");
+      const chain = RunnableLambda.from((input: string) => `echo:${input}`).withConfig({
+        runName: "RiusEchoChain",
+      });
+      expect(await chain.invoke("what is 2+2")).toBe("echo:what is 2+2");
 
-    const chainSpan = exporter.getFinishedSpans().find((span) => span.name === "RiusEchoChain");
-    expect(chainSpan).toBeDefined();
-    const attributes = chainSpan?.attributes ?? {};
-    expect(attributes["openinference.span.kind"]).toBe("CHAIN");
-    expect(attributes["input.value"]).toBe("what is 2+2");
-    expect(attributes["output.value"]).toBe("echo:what is 2+2");
-  });
+      const chainSpan = exporter.getFinishedSpans().find((span) => span.name === "RiusEchoChain");
+      expect(chainSpan).toBeDefined();
+      const attributes = chainSpan?.attributes ?? {};
+      expect(attributes["openinference.span.kind"]).toBe("CHAIN");
+      expect(attributes["input.value"]).toBe("what is 2+2");
+      expect(attributes["output.value"]).toBe("echo:what is 2+2");
+    },
+  );
 });
