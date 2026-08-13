@@ -1,0 +1,238 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - name: LICENSE file and README agree with package.json license field
+        run: |
+          if [ ! -f LICENSE ]; then
+            echo "::error::LICENSE file is missing from repo root"; exit 1
+          fi
+          SPDX=$(node -e "console.log(require('./package.json').license)")
+          # Map the SPDX id declared in package.json to the exact opening line
+          # the corresponding license text is expected to start with. This is
+          # a whitelist, not a substring match, precisely because a substring
+          # check would false-pass a mismatch (e.g. "Apache-2.0" is not a
+          # substring of "Apache License", so a naive check misses that swap
+          # entirely). Only MIT is mapped: canonical Apache-2.0 text opens
+          # with an indented "Apache License" line, so a first-line
+          # comparison needs its own normalisation and is left for whoever
+          # adds Apache-2.0 support to get right and test, rather than
+          # carrying an entry here that would fail on a correct license.
+          # Extend this map if the SDK's license ever changes.
+          case "$SPDX" in
+            MIT) EXPECTED="MIT License" ;;
+            *)
+              echo "::error::no known LICENSE text mapping for SPDX id '$SPDX'; add one to this step"
+              exit 1
+              ;;
+          esac
+          ACTUAL=$(head -n1 LICENSE)
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::package.json license is '$SPDX' but LICENSE begins with '$ACTUAL' (expected '$EXPECTED')"
+            exit 1
+          fi
+          # README.md must state the same SPDX id under its own "## License"
+          # heading. Scope extraction to the text between that heading and the
+          # next "## " heading (or EOF) rather than grepping the whole file,
+          # so incidental mentions of a license name elsewhere in the prose
+          # cannot produce a false pass or a false fail. If the section is
+          # renamed or removed this intentionally finds nothing and fails
+          # loudly below, rather than silently skipping the check.
+          README_SECTION=$(awk '/^## License/{flag=1; next} /^## /{flag=0} flag' README.md)
+          if [ -z "$(echo "$README_SECTION" | tr -d '[:space:]')" ]; then
+            echo "::error::README.md has no non-empty '## License' section; add one stating the SPDX id ('$SPDX')"
+            exit 1
+          fi
+          README_LICENSE=$(echo "$README_SECTION" | grep -v '^[[:space:]]*$' | head -n1 | xargs)
+          if [ "$README_LICENSE" != "$SPDX" ]; then
+            echo "::error::package.json license is '$SPDX' but README.md's ## License section says '$README_LICENSE'"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22", "24"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  packaging:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22", "24"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx publint
+      # attw analyzes the packed tarball, so its verdict is the same on every
+      # matrix leg — and the tool itself crashes under Node 18 ("Cannot read
+      # properties of undefined (reading 'filename')", exit 3).
+      - if: matrix.node-version != '18'
+        run: npx --yes @arethetypeswrong/cli --pack .
+      - name: ESM and CJS entrypoints both resolve
+        run: |
+          npm pack --pack-destination /tmp >/dev/null
+          mkdir -p /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
+          npm i /tmp/glassflow-rius-*.tgz @opentelemetry/api >/dev/null
+          node -e "const m=require('@glassflow/rius'); if(!m.init) throw new Error('CJS require broken')"
+          node --input-type=module -e "import * as m from '@glassflow/rius'; if(!m.init) throw new Error('ESM import broken')"
+      - name: Dynamic import helper survives in dist/
+        run: |
+          # tsup code-splits the ESM output into content-hashed chunk files, so
+          # this cannot grep a fixed filename. Assert the dynamic-import helper
+          # survives somewhere in dist/, and that the CJS build was not
+          # rewritten to a require() form of the same call.
+          if ! grep -rq "return import(s)" dist/*.js dist/*.cjs; then
+            echo "::error::dynamic import helper not found anywhere in dist/"; exit 1
+          fi
+          if grep -q "require(s)" dist/index.cjs; then
+            echo "::error::dynamic import was rewritten to require() in the CJS build"; exit 1
+          fi
+      - name: anthropic and langchain trace a real call from a CJS consumer
+        env:
+          NODE_MAJOR: ${{ matrix.node-version }}
+        run: |
+          # The unit tests run under vitest, which resolves @langchain/core
+          # through its own module graph. @langchain/core ships separate CJS and
+          # ESM builds, so a copy the SDK patched under one of them would not be
+          # the copy a plain `require` returns. This asserts a span comes out the
+          # far end of a packed install, which is the only proof that survives
+          # that difference. Anthropic is asserted here too because its module
+          # hook watches CJS require, so this is where it is expected to fire.
+          #
+          # @langchain/core 1.x declares engines.node >=20, so the langchain half
+          # is asserted only from that leg up. Numeric comparison (-lt), not
+          # string: "8" >= "20" lexicographically but 8 < 20 numerically.
+          cd /tmp/consumer
+          WANT_LANGCHAIN=1
+          if [ "$NODE_MAJOR" -lt 20 ]; then
+            echo "skipping the langchain half on Node $NODE_MAJOR (@langchain/core requires >=20)"
+            WANT_LANGCHAIN=0
+          fi
+          export WANT_LANGCHAIN
+          npm i @arizeai/openinference-instrumentation-anthropic @anthropic-ai/sdk @opentelemetry/sdk-trace-base >/dev/null
+          if [ "$WANT_LANGCHAIN" = "1" ]; then
+            npm i @arizeai/openinference-instrumentation-langchain @langchain/core >/dev/null
+          fi
+          node -e "
+            const http = require('node:http');
+            const { init } = require('@glassflow/rius');
+            const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+            const exporter = new InMemorySpanExporter();
+            const client = init({ spanExporter: exporter });
+            const reply = { id: 'm', type: 'message', role: 'assistant', model: 'claude-test',
+              content: [{ type: 'text', text: '4' }], stop_reason: 'end_turn',
+              usage: { input_tokens: 5, output_tokens: 1 } };
+            const wantLangchain = process.env.WANT_LANGCHAIN === '1';
+            client.ready.then(async (enabled) => {
+              const want = wantLangchain ? ['anthropic', 'langchain'] : ['anthropic'];
+              for (const name of want) {
+                if (!enabled.includes(name)) {
+                  throw new Error(name + ' did not load under CJS: ' + JSON.stringify(enabled));
+                }
+              }
+              if (wantLangchain) {
+                const { RunnableLambda } = require('@langchain/core/runnables');
+                await RunnableLambda.from((x) => 'echo:' + x).withConfig({ runName: 'CiEcho' }).invoke('hi');
+              }
+
+              const server = http.createServer((request, response) => {
+                request.resume();
+                request.on('end', () => {
+                  response.writeHead(200, { 'content-type': 'application/json' });
+                  response.end(JSON.stringify(reply));
+                });
+              });
+              await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+              const Anthropic = require('@anthropic-ai/sdk').default;
+              const anthropic = new Anthropic({ apiKey: 'not-a-real-key', baseURL: 'http://127.0.0.1:' + server.address().port });
+              await anthropic.messages.create({ model: 'claude-test', max_tokens: 8, messages: [{ role: 'user', content: '2+2' }] });
+              server.close();
+
+              // Read before shutdown(): InMemorySpanExporter.shutdown() clears
+              // what it collected. The wait covers the batch processor's delay.
+              await new Promise((resolve) => setTimeout(resolve, 7000));
+              const names = exporter.getFinishedSpans().map((span) => span.name);
+              const expectedNames = wantLangchain ? ['CiEcho', 'Anthropic Messages'] : ['Anthropic Messages'];
+              for (const expected of expectedNames) {
+                if (!names.includes(expected)) {
+                  throw new Error('no ' + expected + ' span was exported: ' + JSON.stringify(names));
+                }
+              }
+              process.exit(0);
+            }).catch((e) => { console.error(e.message); process.exit(1); });
+          "
+      - name: vercel-ai (ESM-only) loads from a CJS consumer
+        env:
+          NODE_MAJOR: ${{ matrix.node-version }}
+        run: |
+          # @arizeai/openinference-vercel declares engines.node >=22; only
+          # install and assert it on legs at or above that. Numeric comparison
+          # (-lt), not string comparison: "8" >= "22" lexicographically but
+          # 8 < 22 numerically, and every value here is a plain integer string.
+          if [ "$NODE_MAJOR" -lt 22 ]; then
+            echo "skipping vercel-ai assertion on Node $NODE_MAJOR (requires >=22)"
+            exit 0
+          fi
+          cd /tmp/consumer
+          npm i @arizeai/openinference-vercel >/dev/null
+          # NOT disabled: true. Disabling short-circuits before the registry so
+          # nothing in the caller's process is patched, which is the point of the
+          # flag and would make this assertion vacuous. An unroutable endpoint
+          # keeps the exporter off the network instead, so the integration really
+          # does load.
+          node -e "
+            const { init } = require('@glassflow/rius');
+            const client = init({ endpoint: 'http://127.0.0.1:1' });
+            client.ready.then((enabled) => {
+              if (!enabled.includes('vercel-ai')) {
+                throw new Error('vercel-ai did not load under CJS: ' + JSON.stringify(enabled));
+              }
+              return client.shutdown();
+            }).catch((e) => { console.error(e.message); process.exit(1); });
+          "
+      - name: '@opentelemetry/api is a peer and is not bundled'
+        run: |
+          node -e "
+            const p = require('./package.json');
+            if (!p.peerDependencies?.['@opentelemetry/api']) throw new Error('must be a peerDependency');
+            if (p.dependencies?.['@opentelemetry/api']) throw new Error('must not be a dependency');
+          "
+          if grep -rq "AsyncLocalStorageContextManager" dist/*.js dist/*.cjs; then
+            echo "::error::@opentelemetry/api appears bundled into dist"; exit 1
+          fi

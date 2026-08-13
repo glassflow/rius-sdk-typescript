@@ -1,0 +1,45 @@
+name: semconv-parity
+
+on:
+  pull_request:
+    paths: ["src/semconv.ts", "tests/fixtures/semconv.json", "scripts/gen-semconv-fixture.mjs"]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+      - name: Check for a source-repo token
+        id: check
+        run: |
+          if [ -z "${{ secrets.SEMCONV_SOURCE_TOKEN }}" ]; then
+            echo "::warning::SEMCONV_SOURCE_TOKEN is not set; skipping the semconv parity check against rius-sdk-python."
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Regenerate the fixture from the Python SDK
+        if: steps.check.outputs.has_token == 'true'
+        env:
+          SEMCONV_SOURCE_TOKEN: ${{ secrets.SEMCONV_SOURCE_TOKEN }}
+        run: node scripts/gen-semconv-fixture.mjs
+      - name: Fail if it drifted
+        if: steps.check.outputs.has_token == 'true'
+        id: diff
+        run: git diff --exit-code tests/fixtures/semconv.json
+      - name: Open an issue when the schedule finds drift
+        if: failure() && steps.check.outputs.has_token == 'true' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "semconv drifted from rius-sdk-python" \
+            --body "The weekly parity check found differences. A changed attribute key is a wire change: review before updating the fixture."

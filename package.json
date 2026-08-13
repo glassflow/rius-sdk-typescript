@@ -1,0 +1,83 @@
+{
+  "name": "@glassflow/rius",
+  "version": "0.1.0",
+  "description": "OpenTelemetry-native tracing for AI agents and LLM applications",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+    "@opentelemetry/instrumentation": "^0.221.0",
+    "@opentelemetry/resources": "^2.10.0",
+    "@opentelemetry/sdk-trace-base": "^2.10.0",
+    "@opentelemetry/sdk-trace-node": "^2.10.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0"
+  },
+  "peerDependencies": {
+    "@arizeai/openinference-instrumentation-anthropic": "^0.1.20",
+    "@arizeai/openinference-instrumentation-langchain": "^4.0.17",
+    "@arizeai/openinference-instrumentation-openai": "^4.1.8",
+    "@arizeai/openinference-vercel": "^3.1.4",
+    "@langchain/core": "^1.0.0 || ^0.3.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@arizeai/openinference-instrumentation-anthropic": {
+      "optional": true
+    },
+    "@arizeai/openinference-instrumentation-langchain": {
+      "optional": true
+    },
+    "@arizeai/openinference-instrumentation-openai": {
+      "optional": true
+    },
+    "@arizeai/openinference-vercel": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "@arizeai/openinference-instrumentation-anthropic": "0.1.20",
+    "@arizeai/openinference-instrumentation-langchain": "4.0.17",
+    "@arizeai/openinference-vercel": "^3.1.4",
+    "@biomejs/biome": "^1.9.0",
+    "@langchain/core": "^1.2.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}
