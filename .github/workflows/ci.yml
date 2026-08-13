@@ -189,8 +189,9 @@ jobs:
               server.close();
 
               // Read before shutdown(): InMemorySpanExporter.shutdown() clears
-              // what it collected. The wait covers the batch processor's delay.
-              await new Promise((resolve) => setTimeout(resolve, 7000));
+              // what it collected. flush() drains the batch processor
+              // deterministically instead of guessing at its schedule delay.
+              await client.flush();
               const names = exporter.getFinishedSpans().map((span) => span.name);
               const expectedNames = wantLangchain ? ['CiEcho', 'Anthropic Messages'] : ['Anthropic Messages'];
               for (const expected of expectedNames) {
@@ -241,8 +242,9 @@ jobs:
           server.close();
 
           // Read before shutdown(): InMemorySpanExporter.shutdown() clears
-          // what it collected. The wait covers the batch processor's delay.
-          await new Promise((resolve) => setTimeout(resolve, 7000));
+          // what it collected. flush() drains the batch processor
+          // deterministically instead of guessing at its schedule delay.
+          await client.flush();
           const names = exporter.getFinishedSpans().map((span) => span.name);
           if (!names.includes("Anthropic Messages")) {
             throw new Error("no Anthropic Messages span from the ESM consumer: " + JSON.stringify(names));

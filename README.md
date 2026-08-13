@@ -199,12 +199,16 @@ the provider was loaded before or after `init()`. One combination is
 not covered: the provider SDKs ship separate CommonJS and ESM builds,
 and the instrumentation packages can patch only one of them per process
 ([Arize-ai/openinference#3557](https://github.com/Arize-ai/openinference/issues/3557)),
-so a CommonJS application whose *only* `require` of the provider
-happens lazily after `init()` — nothing required it at startup — gets
-the ESM build patched instead and produces no spans. Requiring the
-provider anywhere before `init()` avoids this. The `langchain`,
-`vercel-ai` and `mcp` integrations attach differently and have no such
-edge.
+so exactly one build gets patched: the CommonJS build when anything in
+the process `require`d the provider before `init()`, the ESM build
+otherwise. Two combinations therefore stay uncovered until the
+upstream fix lands: a CommonJS application whose *only* `require` of
+the provider happens lazily after `init()` (requiring it anywhere
+before `init()` avoids this), and — the mirror image — an ESM
+application where some CommonJS dependency `require`d the provider
+before `init()`, which wins the choice away from the ESM build the
+application itself is calling. The `langchain`, `vercel-ai` and `mcp`
+integrations attach differently and have no such edge.
 
 Content captured by these integrations, prompts, tool arguments and
 results, and so on, is covered by the same `mask` and `captureContent`

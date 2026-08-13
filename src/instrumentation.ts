@@ -203,7 +203,8 @@ export function cachedCjsExports(
  * Prototype patching needs no import-order cooperation from the app — clients
  * constructed before init() share the same prototype and are covered too.
  */
-async function patchActiveBuild(
+/** @internal Exported for tests. Not re-exported from the package entry point. */
+export async function patchActiveBuild(
   instrumentation: ManuallyInstrumentable,
   pkg: string,
   toPatchable: (exports: Record<string, unknown>) => object | undefined,
@@ -219,7 +220,16 @@ async function patchActiveBuild(
   const ns = await optional(pkg);
   if (ns === undefined) return;
   const patchable = toPatchable(ns);
-  if (patchable !== undefined) instrumentation.manuallyInstrument(patchable);
+  if (patchable === undefined) {
+    // The provider IS present but its exports are not a shape the OpenInference
+    // patch can wrap (say, a future major restructured the class). Loud, for
+    // the same reason a throwing load() is: the entry still reports itself
+    // enabled, and "enabled but silently unpatched" is the failure this whole
+    // change exists to eliminate.
+    warnBroken(pkg, new Error("unrecognised module shape, instrumentation not applied"));
+    return;
+  }
+  instrumentation.manuallyInstrument(patchable);
 }
 
 /**

@@ -1,6 +1,11 @@
 import { createRequire } from "node:module";
-import { describe, expect, it } from "vitest";
-import { anthropicPatchable, cachedCjsExports, openaiPatchable } from "../src/instrumentation.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  anthropicPatchable,
+  cachedCjsExports,
+  openaiPatchable,
+  patchActiveBuild,
+} from "../src/instrumentation.js";
 
 // Unit coverage for the dual-build helpers. In its own file because the
 // cache-scanning tests require() the real provider SDKs, which would poison
@@ -55,5 +60,35 @@ describe("cachedCjsExports", () => {
     // hypothetical "openai-extras" or a scoped lookalike from matching it.
     expect(cachedCjsExports("openai-extras", openaiPatchable)).toBeUndefined();
     expect(cachedCjsExports("open", openaiPatchable)).toBeUndefined();
+  });
+});
+
+describe("patchActiveBuild", () => {
+  it("warns loudly when the provider loads but has an unrecognised shape", async () => {
+    // @opentelemetry/api stands in for "a provider whose exports the shape
+    // test rejects": it imports fine, so the quiet not-installed path does not
+    // apply, and staying silent here would leave the entry enabled but
+    // unpatched — the failure mode this feature exists to eliminate.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const manuallyInstrument = vi.fn();
+      await patchActiveBuild({ manuallyInstrument }, "@opentelemetry/api", openaiPatchable);
+      expect(manuallyInstrument).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("unrecognised module shape"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays quiet when the provider is not installed at all", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const manuallyInstrument = vi.fn();
+      await patchActiveBuild({ manuallyInstrument }, "not-a-real-package", openaiPatchable);
+      expect(manuallyInstrument).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
