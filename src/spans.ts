@@ -3,6 +3,7 @@ import { getTracer } from "./client.js";
 import { INPUT_VALUE, OUTPUT_VALUE, SpanKind, kindAttributes } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 
+/** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
 export interface SpanOptions {
   kind?: SpanKind;
   input?: unknown;

@@ -23,6 +23,10 @@ export const MCP_RESULT_TYPE = "mcp.result_type";
 /** First streamed token arrived: the TTFT anchor. */
 export const GEN_AI_FIRST_TOKEN_EVENT = "gen_ai.first_token";
 
+/**
+ * Observation kind. Values are OpenInference `openinference.span.kind`
+ * values, the taxonomy the platform's agent analytics group by.
+ */
 export enum SpanKind {
   AGENT = "AGENT",
   LLM = "LLM",
