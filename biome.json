@@ -7,5 +7,11 @@
   },
   "organizeImports": { "enabled": true },
   "linter": { "enabled": true, "rules": { "recommended": true } },
-  "formatter": { "enabled": true, "indentStyle": "space", "lineWidth": 100 }
+  "formatter": { "enabled": true, "indentStyle": "space", "lineWidth": 100 },
+  "overrides": [
+    {
+      "include": ["package.json"],
+      "formatter": { "enabled": false }
+    }
+  ]
 }
