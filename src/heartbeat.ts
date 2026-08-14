@@ -106,6 +106,11 @@ function httpTransport(url: string, headers: Record<string, string>): HeartbeatT
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
     });
+    // The body is ignored by contract, but it must still be released: an
+    // unconsumed body holds its socket, and a process pinging every interval
+    // for its whole lifetime would retain one per ping on the Node versions
+    // whose fetch keeps connections alive that way.
+    await response.body?.cancel().catch(() => {});
     if (!response.ok) {
       throw new Error(`heartbeat POST ${url} returned ${response.status}`);
     }
