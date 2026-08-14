@@ -279,7 +279,16 @@ describe("default HTTP transport", () => {
     if (address === null || typeof address === "string") throw new Error("test setup: no port");
     return {
       url: `http://127.0.0.1:${address.port}/v1/heartbeat`,
-      close: () => new Promise((resolve) => server.close(() => resolve())),
+      close: () =>
+        new Promise((resolve) => {
+          // fetch keeps a pooled connection to the host alive after the
+          // response. Node 18's server.close() waits for idle connections to
+          // go away on their own, so it never settles and the test times out;
+          // Node 19+ drops them itself. Closing them explicitly makes the
+          // teardown behave the same on every supported version.
+          server.closeAllConnections?.();
+          server.close(() => resolve());
+        }),
     };
   }
 
