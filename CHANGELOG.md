@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.1.0...v0.2.0) (2026-08-14)
+
+
+### Features
+
+* agent heartbeat and partial spans (RIUS-394) ([#10](https://github.com/glassflow/rius-sdk-typescript/issues/10)) ([819dd54](https://github.com/glassflow/rius-sdk-typescript/commit/819dd54fd92a11bffe514982f680836c405a2408))
+
+
+### Bug Fixes
+
+* document the undocumented public API surface ([3a24429](https://github.com/glassflow/rius-sdk-typescript/commit/3a24429ced09c2395075a22333cc8ee85e0f7035))
+
 ## [0.1.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.1.0...v0.1.0) (2026-08-14)
 
 
