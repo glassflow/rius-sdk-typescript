@@ -233,6 +233,11 @@ variables, then the defaults below.
 | `sampleRate`       | `RIUS_SAMPLE_RATE`       | `1.0`                                         |
 | `captureContent`   | `RIUS_CAPTURE_CONTENT`   | `true`                                        |
 | `mask`             | (options only)           | none                                          |
+| `heartbeat`        | `RIUS_HEARTBEAT`         | `true`                                        |
+| `heartbeatInterval` | `RIUS_HEARTBEAT_INTERVAL` | `15` (seconds; clamped 5-300)               |
+| `agentName`        | `RIUS_AGENT_NAME`        | `serviceName`                                 |
+| `partialSpans`     | `RIUS_PARTIAL_SPANS`     | `false`                                       |
+| `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
 
 Traces are posted to `<endpoint>/v1/traces`.
 
@@ -254,6 +259,50 @@ unmasked, so a raw provider error can still reach your backend. Disable
 optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
+
+## Agent liveness
+
+Traces only leave the process when a span ends, so an idle-but-alive agent
+and a crashed one look identical from the outside. Two independent
+mechanisms close that gap: a heartbeat that reports the process is still
+running, and partial spans that leave a durable trace of in-flight work if
+the process disappears before finishing it.
+
+### Heartbeat
+
+With `heartbeat: true` (the default), the SDK posts to `<endpoint>/v1/heartbeat`
+for the life of the process: an immediate first ping when `init()` runs,
+then one every `heartbeatInterval` seconds (default 15, clamped to 5-300).
+Each ping reports the count of currently open root spans, which is what
+lets the backend tell a live-but-idle agent from one that has vanished.
+
+The final ping, carrying `stopped: true`, is sent by `client.shutdown()`.
+The SDK also makes a best-effort attempt to send it when the process ends
+naturally, on Node's `beforeExit` event. An application that never calls
+`shutdown()` and exits abruptly, killed, crashed, or via `process.exit()`,
+misses that last ping and reports as gone rather than stopped, the same way
+a hard-killed agent looks in any language. Call `client.shutdown()` on a
+graceful exit if you want that distinction to show up.
+
+The heartbeat never keeps the process alive, its timer is unref'd, and never
+throws into your code; delivery failures are logged once per process and
+silent after that. `agentName` identifies the agent in heartbeat payloads
+and defaults to `serviceName`.
+
+### Partial spans
+
+With `partialSpans: true` (default `false`), every sampled span additionally
+exports a content-free snapshot the moment it starts, on top of the normal
+export when it ends. The snapshot carries only identity and taxonomy
+attributes, trace id, span id, name and timestamps, never content, whatever
+instrumentation set on the span. The backend stores it as an unfinished row
+and replaces it with the real span at end, so a snapshot that is never
+replaced is the durable record of what a crashed agent was doing.
+
+`partialSpansDelay` (default `0`, clamped to 0-60 seconds) debounces the
+snapshot: it is held for that long and only sent if the span is still open
+once the delay elapses, so a span that finishes quickly costs zero network
+calls.
 
 ## Reliability
 
