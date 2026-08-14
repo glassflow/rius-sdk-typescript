@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.1...v0.2.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* bump the exported VERSION with releases and assert it matches package.json ([#15](https://github.com/glassflow/rius-sdk-typescript/issues/15)) ([6436e61](https://github.com/glassflow/rius-sdk-typescript/commit/6436e61cb4f3adfc095cc25c8b294c6564c72e36))
+
 ## [0.2.1](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.0...v0.2.1) (2026-08-14)
 
 
