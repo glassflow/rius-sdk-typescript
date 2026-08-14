@@ -2,6 +2,18 @@
   "name": "@glassflow-ai/rius",
   "version": "0.2.0",
   "description": "OpenTelemetry-native tracing for AI agents and LLM applications",
+  "keywords": [
+    "opentelemetry",
+    "otel",
+    "observability",
+    "tracing",
+    "llm",
+    "ai-agents",
+    "genai",
+    "instrumentation",
+    "rius",
+    "glassflow"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
