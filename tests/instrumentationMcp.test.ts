@@ -29,7 +29,8 @@ let uninstrument: () => void;
 
 beforeEach(() => {
   exporter = new InMemorySpanExporter();
-  client = init({ spanExporter: exporter });
+  // heartbeat defaults ON; a no-op transport keeps these tests off the network.
+  client = init({ spanExporter: exporter, heartbeatTransport: async () => {} });
   uninstrument = instrumentMcpClient(FakeClient);
 });
 afterEach(async () => {

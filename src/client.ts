@@ -12,13 +12,17 @@ import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
+import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
+import { PendingSpanProcessor } from "./pending.js";
 import { TRACER_NAME } from "./semconv.js";
 
 export interface InitOptions extends RiusOptions {
   /** Inject an exporter instead of OTLP. The test seam; prefer this to mocking. */
   spanExporter?: SpanExporter;
+  /** Override the heartbeat HTTP transport. The test seam; prefer this to mocking fetch. */
+  heartbeatTransport?: HeartbeatTransport;
 }
 
 /**
@@ -42,12 +46,24 @@ export function spanProcessorSink(client: RiusClient): DelegatingSpanProcessor {
   return sink;
 }
 
+/**
+ * Heartbeat internals for a client, kept off the class for the same reason as
+ * `sinks` above: the sender and the `beforeExit` handler `shutdown()` must
+ * reach are not public API, and a private class field would still put
+ * `HeartbeatSender` into the emitted `.d.ts`.
+ */
+const heartbeats = new WeakMap<
+  RiusClient,
+  { sender: HeartbeatSender; beforeExitHandler: () => void }
+>();
+
 /** The internals `init()` hands to a new client. Never part of the public API. */
 interface ClientParts {
   provider: NodeTracerProvider;
   processors: DelegatingSpanProcessor;
   health?: ExportOutcomeExporter;
   ready: Promise<string[]>;
+  heartbeat?: { sender: HeartbeatSender; beforeExitHandler: () => void };
 }
 
 /**
@@ -72,6 +88,7 @@ export class RiusClient {
     this.health = parts.health;
     this.ready = parts.ready;
     sinks.set(this, parts.processors);
+    if (parts.heartbeat) heartbeats.set(this, parts.heartbeat);
   }
 
   static {
@@ -87,8 +104,19 @@ export class RiusClient {
   /**
    * Drains and tears down the provider, then releases the global registration
    * so a later init() can reconfigure the SDK.
+   *
+   * The heartbeat's final `stopped: true` ping is sent before the provider
+   * shuts down, so the backend hears "stopped" while the trace pipeline can
+   * still export it. Idempotent: `sender.stop()` no-ops on a second call, and
+   * the `beforeExit` listener is removed here so repeated init/shutdown
+   * cycles never leak listeners.
    */
   async shutdown(): Promise<void> {
+    const heartbeat = heartbeats.get(this);
+    if (heartbeat) {
+      process.removeListener("beforeExit", heartbeat.beforeExitHandler);
+      await heartbeat.sender.stop();
+    }
     try {
       await this.provider.shutdown();
     } finally {
@@ -113,13 +141,19 @@ export function init(options: InitOptions = {}): RiusClient {
   const config = resolveConfig(options);
   const processors = new DelegatingSpanProcessor();
 
+  // Shared with the heartbeat sender below: both hit the same managed
+  // endpoint under the same API key.
+  const authHeaders: Record<string, string> = config.apiKey
+    ? { Authorization: `Bearer ${config.apiKey}` }
+    : {};
+
   let health: ExportOutcomeExporter | undefined;
   if (!config.disabled) {
     const base =
       options.spanExporter ??
       new OTLPTraceExporter({
         url: `${config.endpoint}/v1/traces`,
-        headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : undefined,
+        headers: config.apiKey ? authHeaders : undefined,
       });
     health = new ExportOutcomeExporter(base);
     // Masking is outermost so spans are sanitised before the health wrapper
@@ -131,7 +165,13 @@ export function init(options: InitOptions = {}): RiusClient {
             mask: config.mask,
           })
         : health;
-    processors.add(new BatchSpanProcessor(exporter));
+    const batch = new BatchSpanProcessor(exporter);
+    if (config.partialSpans) {
+      // Pending must see onStart/onEnd before the batch processor queues the
+      // span for export, so it goes in ahead of it.
+      processors.add(new PendingSpanProcessor(batch, { delayMs: config.partialSpansDelayMs }));
+    }
+    processors.add(batch);
   }
 
   const provider = new NodeTracerProvider({
@@ -163,7 +203,34 @@ export function init(options: InitOptions = {}): RiusClient {
   // so caller code that starts spans behaves the same either way and
   // shutdown() has a registration to release.
   provider.register();
-  globalClient = createClient({ provider, processors, health, ready });
+
+  // Heartbeat: process-lifetime liveness, independent of trace traffic. The
+  // tracker rides the delegating processor so payloads can carry the
+  // currently-open root trace ids; disabled kills it too.
+  let heartbeat: { sender: HeartbeatSender; beforeExitHandler: () => void } | undefined;
+  if (config.heartbeat && !config.disabled) {
+    const tracker = new OpenRootSpanTracker();
+    processors.add(tracker);
+    const sender = new HeartbeatSender({
+      url: config.heartbeatEndpoint,
+      headers: authHeaders,
+      intervalMs: config.heartbeatIntervalMs,
+      agentName: config.agentName,
+      tracker,
+      transport: options.heartbeatTransport,
+    });
+    sender.start();
+    // Best-effort: a process that exits without calling shutdown() should
+    // still tell the backend it stopped. shutdown() removes this listener so
+    // repeated init/shutdown cycles don't accumulate them.
+    const beforeExitHandler = (): void => {
+      void sender.stop();
+    };
+    process.once("beforeExit", beforeExitHandler);
+    heartbeat = { sender, beforeExitHandler };
+  }
+
+  globalClient = createClient({ provider, processors, health, ready, heartbeat });
   return globalClient;
 }
 
