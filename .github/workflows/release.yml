@@ -37,34 +37,29 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Check whether @glassflow-ai/rius exists on npm yet
+      - name: npm publish preflight
         id: npm_preflight
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -uo pipefail
-          if npm view @glassflow-ai/rius version >/dev/null 2>&1; then
-            exists=true
-          else
-            exists=false
+          # Idempotency: if THIS exact version is already on the registry —
+          # the bootstrap 0.1.0 published manually because npm trusted
+          # publishing cannot be linked to a package that does not exist yet,
+          # or a re-run of a partly-failed release — skip the publish step
+          # rather than fail on the duplicate. The tag, GitHub release, docs
+          # dispatch and Slack notification are still wanted.
+          version=$(node -p "require('./package.json').version")
+          if npm view "@glassflow-ai/rius@${version}" version >/dev/null 2>&1; then
+            echo "::notice::@glassflow-ai/rius@${version} is already on npm; skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          if [ "$exists" = "false" ] && [ -z "${NPM_TOKEN:-}" ]; then
-            echo "::error::@glassflow-ai/rius has never been published to npm. npm trusted publishing cannot be linked to a package that does not exist yet. Publish 0.1.0 once manually, or set an NPM_TOKEN secret for this first release, then re-run."
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if ! npm view @glassflow-ai/rius version >/dev/null 2>&1; then
+            echo "::error::@glassflow-ai/rius has never been published to npm, and OIDC trusted publishing cannot be linked to a package that does not exist yet. Bootstrap once by hand — npm login && npm publish --access public — then link trusted publishing (repo glassflow/rius-sdk-typescript, workflow release.yml, environment npm) and re-run this workflow; the preflight above will then skip the duplicate publish."
             exit 1
           fi
-          if [ "$exists" = "false" ]; then
-            echo "::warning::@glassflow-ai/rius does not exist on npm yet; publishing this first release with NPM_TOKEN instead of OIDC trusted publishing. Link npm trusted publishing after this release and remove NPM_TOKEN."
-            echo "use_token=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "use_token=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Publish (OIDC trusted publishing)
-        if: steps.npm_preflight.outputs.use_token != 'true'
-        run: npm publish --provenance --access public
-      - name: Publish (NPM_TOKEN fallback for first release)
-        if: steps.npm_preflight.outputs.use_token == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: steps.npm_preflight.outputs.skip != 'true'
         run: npm publish --provenance --access public
 
   dispatch-docs:
