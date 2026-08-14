@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [main]
+  # Recovery path: release-please tags a version once, so a publish that fails
+  # after the tag exists (the 0.2.0 npm-CLI failure) cannot be retried by any
+  # push. Dispatching runs the publish job against main's current version; the
+  # preflight below skips it when that version is already on the registry, so
+  # running this when nothing is pending is harmless.
+  workflow_dispatch:
 
 jobs:
   release-please:
@@ -21,7 +27,7 @@ jobs:
 
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.released == 'true' }}
+    if: ${{ needs.release-please.outputs.released == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -34,6 +40,16 @@ jobs:
           node-version: "20"
           cache: npm
           registry-url: https://registry.npmjs.org
+      # OIDC trusted publishing needs npm 11.5.1 or newer. Node 20 ships npm
+      # 10, whose publish sends no registry credential at all: it still signs
+      # provenance, then fails with "404 Not Found - PUT .../@glassflow-ai%2frius",
+      # which reads like a missing package rather than a missing credential.
+      # That cost the 0.2.0 release. Pin the CLI, not the Node version, so the
+      # publish job keeps testing on the same Node as the rest of CI.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
       - run: npm ci
       - run: npm test
       - run: npm run build
