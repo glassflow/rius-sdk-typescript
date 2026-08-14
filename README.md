@@ -1,4 +1,4 @@
-# @glassflow/rius
+# @glassflow-ai/rius
 
 OpenTelemetry-native tracing for AI agents and LLM applications.
 
@@ -12,11 +12,11 @@ sent as OTLP over HTTP, so any OTLP-compatible backend can receive them.
 ## Install
 
 ```bash
-npm install @glassflow/rius @opentelemetry/api
+npm install @glassflow-ai/rius @opentelemetry/api
 ```
 
 `@opentelemetry/api` is a peer dependency and is never bundled. Install
-it alongside `@glassflow/rius` at a version satisfying `^1.9.0`.
+it alongside `@glassflow-ai/rius` at a version satisfying `^1.9.0`.
 
 ## Quickstart
 
@@ -27,7 +27,7 @@ import {
   startAsCurrentSpan,
   startAsCurrentGeneration,
   SpanKind,
-} from "@glassflow/rius";
+} from "@glassflow-ai/rius";
 
 const client = init({
   apiKey: process.env.RIUS_API_KEY, // or set RIUS_API_KEY
@@ -82,7 +82,7 @@ real name. An arrow function has no inferrable name, and its span falls
 back to `"anonymous"`:
 
 ```ts
-import { observe } from "@glassflow/rius";
+import { observe } from "@glassflow-ai/rius";
 
 const handleQuery = observe(async function handleQuery(query: string) {
   return await callModel(query);
@@ -102,7 +102,7 @@ await handleQuery("hello");
 For finer control than `observe`, create spans directly:
 
 ```ts
-import { startAsCurrentSpan } from "@glassflow/rius";
+import { startAsCurrentSpan } from "@glassflow-ai/rius";
 
 await startAsCurrentSpan("fetch-documents", { input: query }, async (span) => {
   const docs = await fetchDocuments(query);
@@ -138,7 +138,7 @@ A `Generation` is a span specialised for LLM calls, with setters for the
 gen_ai message and usage attributes:
 
 ```ts
-import { startAsCurrentGeneration } from "@glassflow/rius";
+import { startAsCurrentGeneration } from "@glassflow-ai/rius";
 
 await startAsCurrentGeneration(
   "chat-completion",
@@ -169,7 +169,7 @@ list.
 
 The SDK bundles five integrations. Each one is an optional peer
 dependency: install the packages you need and `init()` enables whatever
-it finds, so a plain `npm install @glassflow/rius` patches nothing.
+it finds, so a plain `npm install @glassflow-ai/rius` patches nothing.
 
 ```bash
 npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference-instrumentation-anthropic @arizeai/openinference-instrumentation-langchain @arizeai/openinference-vercel @modelcontextprotocol/sdk

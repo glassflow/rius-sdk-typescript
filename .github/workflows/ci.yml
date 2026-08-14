@@ -108,9 +108,9 @@ jobs:
         run: |
           npm pack --pack-destination /tmp >/dev/null
           mkdir -p /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
-          npm i /tmp/glassflow-rius-*.tgz @opentelemetry/api >/dev/null
-          node -e "const m=require('@glassflow/rius'); if(!m.init) throw new Error('CJS require broken')"
-          node --input-type=module -e "import * as m from '@glassflow/rius'; if(!m.init) throw new Error('ESM import broken')"
+          npm i /tmp/glassflow-ai-rius-*.tgz @opentelemetry/api >/dev/null
+          node -e "const m=require('@glassflow-ai/rius'); if(!m.init) throw new Error('CJS require broken')"
+          node --input-type=module -e "import * as m from '@glassflow-ai/rius'; if(!m.init) throw new Error('ESM import broken')"
       - name: Dynamic import helper survives in dist/
         run: |
           # tsup code-splits the ESM output into content-hashed chunk files, so
@@ -151,7 +151,7 @@ jobs:
           fi
           node -e "
             const http = require('node:http');
-            const { init } = require('@glassflow/rius');
+            const { init } = require('@glassflow-ai/rius');
             const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
             // Required BEFORE init(), the way real CJS apps order their
             // requires. The entry patches the cached CJS exports directly; a
@@ -215,7 +215,7 @@ jobs:
           cd /tmp/consumer
           cat > esm-check.mjs <<'EOF'
           import http from "node:http";
-          import { init } from "@glassflow/rius";
+          import { init } from "@glassflow-ai/rius";
           import Anthropic from "@anthropic-ai/sdk";
           import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 
@@ -291,7 +291,7 @@ jobs:
           };
           EOF
           cat > mcp-check.cjs <<'EOF'
-          const { init } = require("@glassflow/rius");
+          const { init } = require("@glassflow-ai/rius");
           const { InMemorySpanExporter } = require("@opentelemetry/sdk-trace-base");
           // Required BEFORE init(), the way real CJS apps order their requires;
           // this is the require the cached-CJS patching exists to cover.
@@ -306,7 +306,7 @@ jobs:
           node mcp-check.cjs
           cat > mcp-check.mjs <<'EOF'
           import { createRequire } from "node:module";
-          import { init } from "@glassflow/rius";
+          import { init } from "@glassflow-ai/rius";
           import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
           import { Client } from "@modelcontextprotocol/sdk/client/index.js";
           import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -338,7 +338,7 @@ jobs:
           cd /tmp/consumer
           npm i @arizeai/openinference-vercel ai @ai-sdk/otel >/dev/null
           cat > vercel-check.cjs <<'EOF'
-          const { init } = require("@glassflow/rius");
+          const { init } = require("@glassflow-ai/rius");
           const { InMemorySpanExporter } = require("@opentelemetry/sdk-trace-base");
 
           const exporter = new InMemorySpanExporter();

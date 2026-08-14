@@ -1,5 +1,5 @@
 {
-  "name": "@glassflow/rius",
+  "name": "@glassflow-ai/rius",
   "version": "0.1.0",
   "description": "OpenTelemetry-native tracing for AI agents and LLM applications",
   "license": "MIT",
