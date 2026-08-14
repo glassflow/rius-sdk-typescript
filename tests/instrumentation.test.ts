@@ -96,11 +96,11 @@ describe("isUnresolved", () => {
   it("treats a failure to resolve the requested specifier as absent", () => {
     const messages = [
       // Node ESM
-      `Cannot find package '${spec}' imported from /app/node_modules/@glassflow/rius/dist/index.js`,
+      `Cannot find package '${spec}' imported from /app/node_modules/@glassflow-ai/rius/dist/index.js`,
       // Node CJS
       `Cannot find module '${spec}'`,
       // bundler / test-runner loaders
-      `Could not resolve "${spec}" imported by "@glassflow/rius". Is it installed?`,
+      `Could not resolve "${spec}" imported by "@glassflow-ai/rius". Is it installed?`,
       `Failed to load url ${spec} (resolved id: ${spec}). Does the file exist?`,
     ];
     for (const message of messages) {
@@ -114,9 +114,9 @@ describe("isUnresolved", () => {
     // the full specifier warned every consumer who skipped the optional peer.
     const subpath = `${spec}/utils`;
     const messages = [
-      `Cannot find package '${spec}' imported from /app/node_modules/@glassflow/rius/dist/index.js`,
+      `Cannot find package '${spec}' imported from /app/node_modules/@glassflow-ai/rius/dist/index.js`,
       `Cannot find module '${spec}'`,
-      `Could not resolve "${spec}" imported by "@glassflow/rius". Is it installed?`,
+      `Could not resolve "${spec}" imported by "@glassflow-ai/rius". Is it installed?`,
       // and still absent when the loader does echo the full subpath
       `Failed to load url ${subpath} (resolved id: ${subpath}). Does the file exist?`,
     ];

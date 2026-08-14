@@ -37,23 +37,23 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Check whether @glassflow/rius exists on npm yet
+      - name: Check whether @glassflow-ai/rius exists on npm yet
         id: npm_preflight
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -uo pipefail
-          if npm view @glassflow/rius version >/dev/null 2>&1; then
+          if npm view @glassflow-ai/rius version >/dev/null 2>&1; then
             exists=true
           else
             exists=false
           fi
           if [ "$exists" = "false" ] && [ -z "${NPM_TOKEN:-}" ]; then
-            echo "::error::@glassflow/rius has never been published to npm. npm trusted publishing cannot be linked to a package that does not exist yet. Publish 0.1.0 once manually, or set an NPM_TOKEN secret for this first release, then re-run."
+            echo "::error::@glassflow-ai/rius has never been published to npm. npm trusted publishing cannot be linked to a package that does not exist yet. Publish 0.1.0 once manually, or set an NPM_TOKEN secret for this first release, then re-run."
             exit 1
           fi
           if [ "$exists" = "false" ]; then
-            echo "::warning::@glassflow/rius does not exist on npm yet; publishing this first release with NPM_TOKEN instead of OIDC trusted publishing. Link npm trusted publishing after this release and remove NPM_TOKEN."
+            echo "::warning::@glassflow-ai/rius does not exist on npm yet; publishing this first release with NPM_TOKEN instead of OIDC trusted publishing. Link npm trusted publishing after this release and remove NPM_TOKEN."
             echo "use_token=true" >> "$GITHUB_OUTPUT"
           else
             echo "use_token=false" >> "$GITHUB_OUTPUT"
@@ -103,5 +103,5 @@ jobs:
             echo "::warning::SLACK_WEBHOOK_RELEASES not configured; no release announcement for ${TAG}"
             exit 0
           fi
-          jq -n --arg t "$TAG" '{text:(":package: *@glassflow/rius \($t)* published to npm")}' \
+          jq -n --arg t "$TAG" '{text:(":package: *@glassflow-ai/rius \($t)* published to npm")}' \
             | curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK"
