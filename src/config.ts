@@ -4,6 +4,11 @@ const DEFAULT_SERVICE_NAME = "unknown_service";
 /** Redacts content attribute values at export. Receives the key when it accepts one. */
 export type Mask = (value: unknown, context?: { key: string }) => unknown;
 
+/**
+ * Configuration shared by every client. Each option can also come from a
+ * `RIUS_*` environment variable; explicit options win over the environment,
+ * which wins over defaults.
+ */
 export interface RiusOptions {
   endpoint?: string;
   apiKey?: string;

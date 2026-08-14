@@ -1,6 +1,7 @@
 import type { SpanKind } from "./semconv.js";
 import { startAsCurrentSpan } from "./spans.js";
 
+/** Options for {@link observe}. */
 export interface ObserveOptions {
   name?: string;
   kind?: SpanKind;

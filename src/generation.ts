@@ -16,6 +16,10 @@ import {
 import { toAttributeValue } from "./serde.js";
 import { Observation } from "./spans.js";
 
+/**
+ * Options for {@link startGeneration} and {@link startAsCurrentGeneration}:
+ * the model identity and request parameters an LLM span carries.
+ */
 export interface GenerationOptions {
   model?: string;
   provider?: string;

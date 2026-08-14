@@ -16,6 +16,7 @@ import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { TRACER_NAME } from "./semconv.js";
 
+/** Options accepted by {@link init}, extending the shared configuration. */
 export interface InitOptions extends RiusOptions {
   /** Inject an exporter instead of OTLP. The test seam; prefer this to mocking. */
   spanExporter?: SpanExporter;
@@ -60,6 +61,11 @@ interface ClientParts {
  */
 let createClient!: (parts: ClientParts) => RiusClient;
 
+/**
+ * Handle over a configured tracer pipeline, returned by {@link init}.
+ * Exposes the lifecycle operations (`flush`, `shutdown`) and `ready`, which
+ * resolves with the auto-instrumentations that attached.
+ */
 export class RiusClient {
   private readonly provider: NodeTracerProvider;
   private readonly health?: ExportOutcomeExporter;
@@ -102,6 +108,20 @@ export class RiusClient {
 
 let globalClient: RiusClient | undefined;
 
+/**
+ * Initialize the SDK: build a tracer pipeline that exports OTLP traces and
+ * enable every bundled auto-instrumentation whose package is installed.
+ *
+ * Call it once, as early as possible in your process. A second call while a
+ * client is active logs a warning and returns the existing client unchanged;
+ * `shutdown()` releases the slot. `init()` is synchronous; await
+ * {@link RiusClient.ready} if instrumentation must be attached before your
+ * first span.
+ *
+ * The SDK installs no process exit hook: short-lived processes must call
+ * {@link RiusClient.flush} before exiting or spans still in the batch queue
+ * are lost.
+ */
 export function init(options: InitOptions = {}): RiusClient {
   if (globalClient !== undefined) {
     console.warn(
