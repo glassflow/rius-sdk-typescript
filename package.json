@@ -3,6 +3,12 @@
   "version": "0.2.0",
   "description": "OpenTelemetry-native tracing for AI agents and LLM applications",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glassflow/rius-sdk-typescript.git"
+  },
+  "homepage": "https://docs.glassflow.ai/rius/sdk",
+  "bugs": "https://github.com/glassflow/rius-sdk-typescript/issues",
   "type": "module",
   "engines": {
     "node": ">=18"
