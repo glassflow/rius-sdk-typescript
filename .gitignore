@@ -23,6 +23,10 @@ docs/superpowers/
 # Scratch workspace for plan execution (ledger, briefs, review packages)
 .superpowers/
 
+# Ad hoc standalone build used to verify heartbeat.ts resolves its own
+# version under CJS (see .github/workflows/ci.yml); not part of the package.
+.ci-heartbeat-check/
+
 # Editors
 .idea/
 .vscode/
