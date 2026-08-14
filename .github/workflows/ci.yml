@@ -123,38 +123,38 @@ jobs:
           if grep -q "require(s)" dist/index.cjs; then
             echo "::error::dynamic import was rewritten to require() in the CJS build"; exit 1
           fi
-      - name: heartbeat resolves its own version under a CJS build
+      - name: heartbeat resolves its own version in the shipped CJS build
         run: |
-          # heartbeat.ts resolves SDK_VERSION via createRequire(import.meta.url):
+          # heartbeat.ts resolves SDK_VERSION via createRequire(import.meta.url).
           # tsup's CJS output stubs import.meta as `{}` unless `shims: true` is
           # set in tsup.config.ts, which makes import.meta.url undefined,
           # createRequire throw, and sdk_version silently degrade to "0.0.0"
-          # forever. heartbeat.ts is not re-exported from src/index.ts yet (a
-          # later task wires it up), so this builds it as a standalone entry
-          # instead of relying on the real dist/ output, into a directory one
-          # level below the repo root -- the same depth as dist/index.cjs -- so
-          # "../package.json" resolves the same way it will in production.
-          npx tsup src/heartbeat.ts --format cjs --no-dts --out-dir .ci-heartbeat-check \
-            --target node18 --external @opentelemetry/api,@opentelemetry/sdk-trace-base
+          # forever. Nothing else in the repo needs the shim, so this guards
+          # against it being removed as dead config. Asserted against the real
+          # dist/index.cjs through the public init(), because that is what
+          # consumers execute; a rebuild with different flags would prove
+          # nothing about the shipped artifact.
           node -e "
-            const { HeartbeatSender, OpenRootSpanTracker } = require('./.ci-heartbeat-check/heartbeat.cjs');
+            const { init } = require('./dist/index.cjs');
             const pkgVersion = require('./package.json').version;
             let captured;
-            const sender = new HeartbeatSender({
-              url: 'http://example.invalid',
-              headers: {},
-              intervalMs: 999999,
-              agentName: 'ci-guard',
-              tracker: new OpenRootSpanTracker(),
-              transport: async (payload) => { captured = payload; },
+            const client = init({
+              endpoint: 'http://example.invalid',
+              heartbeatTransport: async (payload) => { captured = payload; },
             });
-            sender.start();
-            if (captured.sdk_version !== pkgVersion) {
-              console.error('sdk_version resolved to ' + JSON.stringify(captured.sdk_version) + ', expected ' + JSON.stringify(pkgVersion));
-              process.exit(1);
-            }
+            setTimeout(async () => {
+              await client.shutdown();
+              if (captured === undefined) {
+                console.error('no heartbeat payload was captured');
+                process.exit(1);
+              }
+              if (captured.sdk_version !== pkgVersion) {
+                console.error('sdk_version resolved to ' + JSON.stringify(captured.sdk_version) + ', expected ' + JSON.stringify(pkgVersion));
+                process.exit(1);
+              }
+              console.log('sdk_version in dist/index.cjs: ' + captured.sdk_version);
+            }, 100);
           "
-          rm -rf .ci-heartbeat-check
       - name: anthropic and langchain trace a real call from a CJS consumer
         env:
           NODE_MAJOR: ${{ matrix.node-version }}

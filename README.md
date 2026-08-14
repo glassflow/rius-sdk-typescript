@@ -285,7 +285,7 @@ a hard-killed agent looks in any language. Call `client.shutdown()` on a
 graceful exit if you want that distinction to show up.
 
 The heartbeat never keeps the process alive, its timer is unref'd, and never
-throws into your code; delivery failures are logged once per process and
+throws into your code; delivery failures are logged once per client and
 silent after that. `agentName` identifies the agent in heartbeat payloads
 and defaults to `serviceName`.
 

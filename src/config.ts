@@ -127,7 +127,9 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     heartbeat: options.heartbeat ?? bool("RIUS_HEARTBEAT", env.RIUS_HEARTBEAT, true),
     heartbeatIntervalMs: heartbeatIntervalSeconds * 1000,
     heartbeatEndpoint: `${endpoint}/v1/heartbeat`,
-    agentName: options.agentName ?? env.RIUS_AGENT_NAME ?? serviceName,
+    // Empty falls through to serviceName rather than shipping a blank identity
+    // on every heartbeat payload, so `??` would be wrong here.
+    agentName: options.agentName || env.RIUS_AGENT_NAME || serviceName,
     partialSpans: options.partialSpans ?? bool("RIUS_PARTIAL_SPANS", env.RIUS_PARTIAL_SPANS, false),
     partialSpansDelayMs: partialSpansDelaySeconds * 1000,
   };
