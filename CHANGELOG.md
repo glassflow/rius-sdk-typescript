@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.0...v0.2.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* add repository metadata required for npm provenance ([#12](https://github.com/glassflow/rius-sdk-typescript/issues/12)) ([ff58589](https://github.com/glassflow/rius-sdk-typescript/commit/ff5858926805d1f80210edca871bc9fd32e7b052))
+
 ## [0.2.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.1.0...v0.2.0) (2026-08-14)
 
 
