@@ -12,7 +12,7 @@ describe("semconv", () => {
     // Constants Python has that this SDK deliberately does not implement.
     // Declared explicitly: a NEW unported constant must fail here so a human
     // decides whether to port it, rather than being skipped silently.
-    const PYTHON_ONLY = new Set(["GLASSFLOW_SPAN_PENDING"]);
+    const PYTHON_ONLY = new Set<string>();
 
     for (const [name, value] of Object.entries(fixture as Record<string, string>)) {
       const ours = (semconv as Record<string, unknown>)[name];
@@ -52,6 +52,29 @@ describe("semconv", () => {
         semconv.CONTENT_ATTRIBUTES.has(bareKey),
         `prefix "${prefix}" has no matching bare key "${bareKey}" in CONTENT_ATTRIBUTES, so an instrumentation emitting one unflattened attribute would leak past captureContent: false`,
       ).toBe(true);
+    }
+  });
+
+  it("only allows known identity constants onto a pending snapshot", () => {
+    // Every member must be one of these exact constants (not just any string),
+    // so a future rename of the underlying constant can't silently desync the
+    // allowlist from the value it's supposed to track.
+    const knownIdentityConstants = new Set([
+      semconv.OPENINFERENCE_SPAN_KIND,
+      semconv.GEN_AI_OPERATION_NAME,
+      semconv.GEN_AI_PROVIDER_NAME,
+      semconv.GEN_AI_TOOL_NAME,
+    ]);
+    expect(semconv.PENDING_IDENTITY_ATTRIBUTES.size).toBe(knownIdentityConstants.size);
+    for (const attribute of semconv.PENDING_IDENTITY_ATTRIBUTES) {
+      expect(knownIdentityConstants.has(attribute)).toBe(true);
+    }
+  });
+
+  it("only allows the gen_ai.request. prefix onto a pending snapshot", () => {
+    expect(semconv.PENDING_IDENTITY_PREFIXES).toEqual([semconv.GEN_AI_REQUEST_PREFIX]);
+    for (const prefix of semconv.PENDING_IDENTITY_PREFIXES) {
+      expect(prefix.endsWith(".")).toBe(true);
     }
   });
 });

@@ -85,3 +85,26 @@ export const CONTENT_ATTRIBUTE_SUFFIXES: readonly string[] = [
   ".document.content",
   ".embedding.text",
 ];
+
+// --- Pending (partial) spans ---
+// Marks the content-free snapshot exported at span START; the backend maps it
+// to Finished=0 and the real span replaces it at end. This key knowingly bends
+// the convention-native rule (no glassflow.* namespace): OpenTelemetry has NO
+// pending-span mechanism to align with (spec #3732/#4646, semconv #2133, all
+// open, none planned), and the only shipping precedent (Logfire's
+// logfire.span_type) is equally vendor-namespaced.
+export const GLASSFLOW_SPAN_PENDING = "glassflow.span.pending";
+
+// Attributes allowed to ride a pending snapshot: identity/taxonomy known at
+// span start. An ALLOWLIST on purpose: content exclusion must hold for
+// third-party instrumentors' attribute families too, and a blocklist would
+// have to enumerate all of them.
+export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
+  OPENINFERENCE_SPAN_KIND,
+  GEN_AI_OPERATION_NAME,
+  GEN_AI_PROVIDER_NAME,
+  GEN_AI_TOOL_NAME,
+]);
+
+// gen_ai.request.* (model, temperature, ...) is identity, not content.
+export const PENDING_IDENTITY_PREFIXES: readonly string[] = [GEN_AI_REQUEST_PREFIX];
