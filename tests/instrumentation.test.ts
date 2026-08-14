@@ -390,13 +390,19 @@ describeWithVercelPackage("the vercel-ai entry", () => {
 
 describe("init().ready", () => {
   it("resolves with the enabled integration names and never rejects", async () => {
-    const client = init({ spanExporter: new InMemorySpanExporter() });
+    const client = init({
+      spanExporter: new InMemorySpanExporter(),
+      heartbeatTransport: async () => {},
+    });
     await expect(client.ready).resolves.toBeInstanceOf(Array);
     await client.shutdown();
   });
 
   it("resolves rather than rejects whichever optional peers are installed", async () => {
-    const client = init({ spanExporter: new InMemorySpanExporter() });
+    const client = init({
+      spanExporter: new InMemorySpanExporter(),
+      heartbeatTransport: async () => {},
+    });
     // Settle explicitly: `await client.ready` inside expect() would let a
     // rejection surface as a test error that reads the same as a real failure,
     // and a bare resolves-assertion cannot prove which branch ran.
@@ -412,7 +418,10 @@ describe("init().ready", () => {
 
 describeWithVercelPackage("init() processor ordering", () => {
   it("gives the vercel-ai transform the span before the exporting processor", async () => {
-    const client = init({ spanExporter: new InMemorySpanExporter() });
+    const client = init({
+      spanExporter: new InMemorySpanExporter(),
+      heartbeatTransport: async () => {},
+    });
     expect(await client.ready).toContain("vercel-ai");
 
     // A delegate appended with add() sits in the same relative position as the
