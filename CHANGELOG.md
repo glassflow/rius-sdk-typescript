@@ -10,7 +10,6 @@
 
 ### Bug Fixes
 
-* document the undocumented public API surface ([cc17adb](https://github.com/glassflow/rius-sdk-typescript/commit/cc17adb0ede9355d0b24318718679d181fc5cfa7))
 * document the undocumented public API surface ([3a24429](https://github.com/glassflow/rius-sdk-typescript/commit/3a24429ced09c2395075a22333cc8ee85e0f7035))
 
 ## [0.1.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.1.0...v0.1.0) (2026-08-14)
