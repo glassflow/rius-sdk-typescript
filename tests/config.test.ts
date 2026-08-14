@@ -88,4 +88,77 @@ describe("resolveConfig", () => {
     );
     warnSpy.mockRestore();
   });
+
+  it("defaults heartbeat and partial-spans options with an empty environment", () => {
+    const c = resolveConfig({}, {});
+    expect(c.heartbeat).toBe(true);
+    expect(c.heartbeatIntervalMs).toBe(15000);
+    expect(c.partialSpans).toBe(false);
+    expect(c.partialSpansDelayMs).toBe(0);
+    expect(c.agentName).toBe(c.serviceName);
+    expect(c.heartbeatEndpoint).toBe(`${DEFAULT_ENDPOINT}/v1/heartbeat`);
+  });
+
+  it("reads RIUS_ environment variables for heartbeat and partial-spans options", () => {
+    const c = resolveConfig(
+      {},
+      {
+        RIUS_HEARTBEAT: "false",
+        RIUS_HEARTBEAT_INTERVAL: "30",
+        RIUS_AGENT_NAME: "my-agent",
+        RIUS_PARTIAL_SPANS: "true",
+        RIUS_PARTIAL_SPANS_DELAY: "5",
+      },
+    );
+    expect(c.heartbeat).toBe(false);
+    expect(c.heartbeatIntervalMs).toBe(30000);
+    expect(c.agentName).toBe("my-agent");
+    expect(c.partialSpans).toBe(true);
+    expect(c.partialSpansDelayMs).toBe(5000);
+  });
+
+  it("prefers explicit heartbeat and partial-spans options over the environment", () => {
+    const c = resolveConfig(
+      {
+        heartbeat: true,
+        heartbeatInterval: 20,
+        agentName: "explicit-agent",
+        partialSpans: false,
+        partialSpansDelay: 10,
+      },
+      {
+        RIUS_HEARTBEAT: "false",
+        RIUS_HEARTBEAT_INTERVAL: "30",
+        RIUS_AGENT_NAME: "from-env",
+        RIUS_PARTIAL_SPANS: "true",
+        RIUS_PARTIAL_SPANS_DELAY: "5",
+      },
+    );
+    expect(c.heartbeat).toBe(true);
+    expect(c.heartbeatIntervalMs).toBe(20000);
+    expect(c.agentName).toBe("explicit-agent");
+    expect(c.partialSpans).toBe(false);
+    expect(c.partialSpansDelayMs).toBe(10000);
+  });
+
+  it("clamps an out-of-range heartbeatInterval and warns", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolveConfig({ heartbeatInterval: 1 }, {}).heartbeatIntervalMs).toBe(5000);
+    expect(resolveConfig({ heartbeatInterval: 999 }, {}).heartbeatIntervalMs).toBe(300000);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("[rius]"));
+    warnSpy.mockRestore();
+  });
+
+  it("clamps an out-of-range partialSpansDelay and warns", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolveConfig({ partialSpansDelay: -1 }, {}).partialSpansDelayMs).toBe(0);
+    expect(resolveConfig({ partialSpansDelay: 120 }, {}).partialSpansDelayMs).toBe(60000);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("[rius]"));
+    warnSpy.mockRestore();
+  });
+
+  it("falls back to defaults for non-numeric heartbeatInterval/partialSpansDelay env values", () => {
+    expect(resolveConfig({}, { RIUS_HEARTBEAT_INTERVAL: "abc" }).heartbeatIntervalMs).toBe(15000);
+    expect(resolveConfig({}, { RIUS_PARTIAL_SPANS_DELAY: "abc" }).partialSpansDelayMs).toBe(0);
+  });
 });
