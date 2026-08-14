@@ -90,6 +90,14 @@ jobs:
       fail-fast: false
       matrix:
         node-version: ["18", "20", "22", "24"]
+    # The consumer checks below call the real init(), which heartbeats by
+    # default to the real production endpoint with no API key: every run of
+    # this job put a burst of unauthenticated pings in the platform's
+    # auth-failure metrics. Off for the whole job so a consumer check added
+    # later cannot reintroduce that, and the one step that needs a heartbeat
+    # opts back in explicitly (an explicit option beats the environment).
+    env:
+      RIUS_HEARTBEAT: "false"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -140,6 +148,10 @@ jobs:
             let captured;
             const client = init({
               endpoint: 'http://example.invalid',
+              // Opts back in against the job-level RIUS_HEARTBEAT=false: this
+              // check reads a heartbeat payload. The injected transport keeps
+              // it off the network.
+              heartbeat: true,
               heartbeatTransport: async (payload) => { captured = payload; },
             });
             setTimeout(async () => {
