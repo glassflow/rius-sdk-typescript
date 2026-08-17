@@ -17,6 +17,7 @@ describe("public API", () => {
         "startAsCurrentSpan",
         "startGeneration",
         "startSpan",
+        "withSession",
       ].sort(),
     );
   });

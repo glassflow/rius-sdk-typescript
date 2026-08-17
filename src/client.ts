@@ -20,6 +20,7 @@ import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from ".
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { PendingSpanProcessor } from "./pending.js";
+import { SessionSpanProcessor } from "./session.js";
 import { TRACER_NAME } from "./semconv.js";
 
 /** Options accepted by {@link init}, extending the shared configuration. */
@@ -190,6 +191,10 @@ export function init(options: InitOptions = {}): RiusClient {
           })
         : health;
     const batch = new BatchSpanProcessor(exporter);
+    // Added BEFORE the pending processor: both act at onStart, and the
+    // pending snapshot is built from the attributes already on the span, so
+    // the session id must be stamped first to ride it.
+    processors.add(new SessionSpanProcessor(config.sessionId));
     if (config.partialSpans) {
       // Pending must see onStart/onEnd before the batch processor queues the
       // span for export, so it goes in ahead of it.

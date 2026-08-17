@@ -37,6 +37,12 @@ export interface RiusOptions {
   partialSpans?: boolean;
   /** Seconds to debounce a pending-span snapshot after span start. */
   partialSpansDelay?: number;
+  /**
+   * Process-wide session id, stamped as `session.id` on every span. For
+   * one-run-per-process agents; a server handling many sessions scopes each
+   * one with `withSession()` instead, which overrides this default.
+   */
+  sessionId?: string;
 }
 
 export interface ResolvedConfig {
@@ -53,6 +59,7 @@ export interface ResolvedConfig {
   agentName: string;
   partialSpans: boolean;
   partialSpansDelayMs: number;
+  sessionId?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -137,5 +144,8 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     agentName: options.agentName || env.RIUS_AGENT_NAME || serviceName,
     partialSpans: options.partialSpans ?? bool("RIUS_PARTIAL_SPANS", env.RIUS_PARTIAL_SPANS, false),
     partialSpansDelayMs: partialSpansDelaySeconds * 1000,
+    // Empty is unset, like agentName: a blank session id would group every
+    // span under the meaningless session "".
+    sessionId: options.sessionId || env.RIUS_SESSION_ID || undefined,
   };
 }
