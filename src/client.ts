@@ -20,8 +20,8 @@ import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from ".
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { PendingSpanProcessor } from "./pending.js";
-import { SessionSpanProcessor } from "./session.js";
 import { TRACER_NAME } from "./semconv.js";
+import { SessionSpanProcessor } from "./session.js";
 
 /** Options accepted by {@link init}, extending the shared configuration. */
 export interface InitOptions extends RiusOptions {

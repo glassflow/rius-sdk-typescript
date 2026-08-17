@@ -1,11 +1,7 @@
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
-import {
-  GLASSFLOW_SPAN_PENDING,
-  PENDING_IDENTITY_ATTRIBUTES,
-  SESSION_ID,
-} from "../src/semconv.js";
+import { GLASSFLOW_SPAN_PENDING, PENDING_IDENTITY_ATTRIBUTES, SESSION_ID } from "../src/semconv.js";
 import { withSession } from "../src/session.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 
@@ -108,14 +104,14 @@ describe("the init-level default", () => {
   });
 
   it("reads RIUS_SESSION_ID", async () => {
-    process.env.RIUS_SESSION_ID = "from-env";
+    vi.stubEnv("RIUS_SESSION_ID", "from-env");
     try {
       testInit();
       startSpan("s").end();
       await client.flush();
       expect(exporter.getFinishedSpans()[0].attributes[SESSION_ID]).toBe("from-env");
     } finally {
-      delete process.env.RIUS_SESSION_ID;
+      vi.unstubAllEnvs();
     }
   });
 });
@@ -130,9 +126,7 @@ describe("pending spans", () => {
       });
     });
     await client.flush();
-    const pending = exporter
-      .getFinishedSpans()
-      .filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING]);
+    const pending = exporter.getFinishedSpans().filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING]);
     expect(pending.length).toBeGreaterThan(0);
     expect(pending[0].attributes[SESSION_ID]).toBe("sess-p");
   });

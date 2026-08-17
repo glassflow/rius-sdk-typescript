@@ -57,9 +57,7 @@ export function withSession<T>(
     typeof sessionIdOrFn === "function"
       ? [randomUUID(), sessionIdOrFn]
       : [sessionIdOrFn, maybeFn as (sessionId: string) => T];
-  return apiContext.with(apiContext.active().setValue(SESSION_KEY, sessionId), () =>
-    fn(sessionId),
-  );
+  return apiContext.with(apiContext.active().setValue(SESSION_KEY, sessionId), () => fn(sessionId));
 }
 
 /**
