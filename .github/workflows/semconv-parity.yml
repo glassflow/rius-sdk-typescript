@@ -5,6 +5,9 @@ on:
     paths: ["src/semconv.ts", "tests/fixtures/semconv.json", "scripts/gen-semconv-fixture.mjs"]
   schedule:
     - cron: "0 6 * * 1"
+  # For verifying the check end-to-end (it silently skips without
+  # SEMCONV_SOURCE_TOKEN, so a green run is not proof by itself).
+  workflow_dispatch:
 
 jobs:
   parity:
