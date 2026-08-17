@@ -13,6 +13,12 @@ class FakeClient {
     if (params.name === "asks-camel") {
       return { resultType: "input_required", inputRequests: [{ prompt: "<PII>" }] };
     }
+    if (params.name === "fails-snake") {
+      return { is_error: true, content: [{ type: "text", text: "no such file" }] };
+    }
+    if (params.name === "fails-camel") {
+      return { isError: true, content: [{ type: "text", text: "no such file" }] };
+    }
     return { content: [{ type: "text", text: "ok" }] };
   }
 }
@@ -39,11 +45,14 @@ afterEach(async () => {
 });
 
 describe("instrumentMcpClient", () => {
-  it("creates a TOOL span named after the tool", async () => {
+  // Named `execute_tool <name>`, matching the Python SDK: the same tool call
+  // must produce the same span name in every language, or cross-language
+  // dashboards and saved searches split by SDK.
+  it("creates a TOOL span named execute_tool <name>", async () => {
     await new FakeClient().callTool({ name: "add", arguments: { a: 1 } });
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.name).toBe("add");
+    expect(span.name).toBe("execute_tool add");
     expect(span.attributes["openinference.span.kind"]).toBe("TOOL");
     expect(span.attributes["gen_ai.tool.name"]).toBe("add");
     expect(span.attributes["gen_ai.operation.name"]).toBe("execute_tool");
@@ -77,6 +86,31 @@ describe("instrumentMcpClient", () => {
     await expect(new FakeClient().callTool({ name: "explode" })).rejects.toThrow("tool failed");
     await client.flush();
     expect(exporter.getFinishedSpans()[0].status.code).toBe(2);
+  });
+
+  // The MCP protocol reports tool failures as a normal result with an error
+  // flag, not a thrown exception, so a resolved call can still be a failure.
+  // mcp 2.x spells the flag is_error; 1.x spelled it isError. Same as the
+  // Python SDK: the span keeps its output AND gets ERROR status.
+  it("sets ERROR status on a server-flagged error result (snake_case)", async () => {
+    await new FakeClient().callTool({ name: "fails-snake" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.status.code).toBe(2);
+    expect(span.status.message).toBe("tool returned an error result");
+    expect(span.attributes["output.value"]).toContain("no such file");
+  });
+
+  it("sets ERROR status on a server-flagged error result (camelCase)", async () => {
+    await new FakeClient().callTool({ name: "fails-camel" });
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].status.code).toBe(2);
+  });
+
+  it("leaves status unset on a successful result", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].status.code).toBe(0);
   });
 
   it("restores the original method on uninstrument", async () => {
