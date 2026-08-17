@@ -325,7 +325,7 @@ jobs:
             await mcp.callTool({ name: "add", arguments: {} });
             await client.flush();
             const spans = exporter.getFinishedSpans();
-            const tool = spans.find((s) => s.name === "add");
+            const tool = spans.find((s) => s.name === "execute_tool add");
             if (!tool) {
               throw new Error("no tool span exported: " + JSON.stringify(spans.map((s) => s.name)));
             }

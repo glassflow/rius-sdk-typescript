@@ -1,8 +1,19 @@
+import { SpanStatusCode } from "@opentelemetry/api";
 import { GEN_AI_TOOL_NAME, MCP_RESULT_TYPE, SpanKind } from "./semconv.js";
 import { type Observation, startAsCurrentSpan } from "./spans.js";
 
 /** The interim result type of a tools/call round that is asking for input. */
 const INPUT_REQUIRED = "input_required";
+
+/**
+ * The MCP error-result flag, on either major. mcp 2.x spells it `is_error`;
+ * 1.x spelled it `isError`. Never throws: the result shape is loosely typed.
+ */
+function resultIsError(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const record = result as Record<string, unknown>;
+  return Boolean(record.is_error ?? record.isError);
+}
 
 /**
  * Record a tools/call result on the span.
@@ -29,6 +40,16 @@ function recordResult(observation: Observation, result: unknown): void {
     return;
   }
   observation.setOutput(result);
+  // The protocol reports tool failures as a normal result carrying an error
+  // flag, so a resolved call can still be a failure. The output above is kept:
+  // the error content is exactly what a debugging user needs to see. Status
+  // message matches the Python SDK's.
+  if (resultIsError(result)) {
+    observation.span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: "tool returned an error result",
+    });
+  }
 }
 
 /**
@@ -78,8 +99,11 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
     params: { name: string; arguments?: unknown },
     ...rest: unknown[]
   ): Promise<unknown> {
+    // `execute_tool <name>`, matching the Python SDK: the same tool call must
+    // produce the same span name in every language, or cross-language
+    // dashboards and saved searches split by SDK.
     return startAsCurrentSpan(
-      params.name,
+      `execute_tool ${params.name}`,
       { kind: SpanKind.TOOL, input: params.arguments },
       async (observation) => {
         observation.setAttribute(GEN_AI_TOOL_NAME, params.name);
