@@ -1,5 +1,9 @@
 import { type Tracer, trace } from "@opentelemetry/api";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+// The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
+// opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
+// protobuf and refuses a JSON export with 415 Unsupported Media Type, so the
+// -http (JSON) exporter cannot deliver a single span to it.
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   BatchSpanProcessor,
