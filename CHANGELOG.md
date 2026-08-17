@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.2...v0.2.3) (2026-08-17)
+
+
+### Bug Fixes
+
+* match the Python SDK's MCP span name and error-result status ([#17](https://github.com/glassflow/rius-sdk-typescript/issues/17)) ([5251a09](https://github.com/glassflow/rius-sdk-typescript/commit/5251a099cbd9471da2d8cd8dbed61f2aa643dba6))
+
 ## [0.2.2](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.1...v0.2.2) (2026-08-14)
 
 
