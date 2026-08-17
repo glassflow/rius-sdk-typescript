@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.3...v0.2.4) (2026-08-17)
+
+
+### Bug Fixes
+
+* export OTLP protobuf, which the ingest requires, instead of JSON ([#20](https://github.com/glassflow/rius-sdk-typescript/issues/20)) ([c018bac](https://github.com/glassflow/rius-sdk-typescript/commit/c018bac11b6140fd0579b77760a89760ea3a2c77))
+
 ## [0.2.3](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.2...v0.2.3) (2026-08-17)
 
 
