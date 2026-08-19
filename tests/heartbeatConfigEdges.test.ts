@@ -45,6 +45,7 @@ it("(3) caps open_traces at 32 with 40 REAL root spans, count reports 40", async
     headers: {},
     intervalMs: 999999,
     agentName: "a",
+    instanceId: "test-instance",
     tracker,
     transport: async (p) => void payloads.push(p),
   });

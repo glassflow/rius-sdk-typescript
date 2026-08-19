@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type Tracer, trace } from "@opentelemetry/api";
 // The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
 // opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
@@ -20,7 +21,7 @@ import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from ".
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { PendingSpanProcessor } from "./pending.js";
-import { TRACER_NAME } from "./semconv.js";
+import { SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
 
 /** Options accepted by {@link init}, extending the shared configuration. */
@@ -203,8 +204,16 @@ export function init(options: InitOptions = {}): RiusClient {
     processors.add(batch);
   }
 
+  // One identity per client lifetime, shared by spans (resource) and
+  // heartbeats (payload instance_id) so the backend can join them and count
+  // replicas. Workers spawned after init() (cluster/fork patterns) should
+  // init() themselves for exact per-worker span identity.
+  const instanceId = randomUUID();
   const provider = new NodeTracerProvider({
-    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: config.serviceName }),
+    resource: resourceFromAttributes({
+      [ATTR_SERVICE_NAME]: config.serviceName,
+      [SERVICE_INSTANCE_ID]: instanceId,
+    }),
     // Always ParentBased, with no AlwaysOn shortcut at rate 1. They are not
     // equivalent: ParentBased honours a remote UNSAMPLED parent and drops,
     // while AlwaysOn records regardless, producing children of a span the
@@ -245,6 +254,7 @@ export function init(options: InitOptions = {}): RiusClient {
       headers: authHeaders,
       intervalMs: config.heartbeatIntervalMs,
       agentName: config.agentName,
+      instanceId,
       tracker,
       transport: options.heartbeatTransport,
     });
