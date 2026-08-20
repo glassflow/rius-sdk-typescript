@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -122,6 +121,12 @@ export interface HeartbeatSenderOptions {
   headers: Record<string, string>;
   intervalMs: number;
   agentName: string;
+  /**
+   * Identity of one process lifetime, injected by init(): the same value
+   * rides every span as the `service.instance.id` resource attribute, which
+   * is what lets the backend join heartbeats to traces.
+   */
+  instanceId: string;
   tracker: OpenRootSpanTracker;
   /** Injected transport for tests; defaults to the fetch-based HTTP POST above. */
   transport?: HeartbeatTransport;
@@ -131,8 +136,8 @@ export interface HeartbeatSenderOptions {
 
 /** Pings the heartbeat endpoint for the process lifetime; see module docs for the contract. */
 export class HeartbeatSender {
-  /** Identity of one process lifetime, fresh per sender. */
-  readonly instanceId = randomUUID();
+  /** Identity of one process lifetime; injected, shared with span resources. */
+  readonly instanceId: string;
 
   private readonly agentName: string;
   private readonly tracker: OpenRootSpanTracker;
@@ -146,6 +151,7 @@ export class HeartbeatSender {
   private deliveryWarned = false;
 
   constructor(opts: HeartbeatSenderOptions) {
+    this.instanceId = opts.instanceId;
     this.agentName = opts.agentName;
     this.tracker = opts.tracker;
     this.intervalMs = opts.intervalMs;

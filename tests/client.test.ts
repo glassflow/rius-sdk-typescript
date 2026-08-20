@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type InitOptions, RiusClient, getTracer, init } from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";
 import { REGISTRY } from "../src/instrumentation.js";
-import { GLASSFLOW_SPAN_PENDING } from "../src/semconv.js";
+import { GLASSFLOW_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
 import { startAsCurrentSpan } from "../src/spans.js";
 
 let client: RiusClient | undefined;
@@ -311,5 +311,61 @@ describe("init: partial spans", () => {
     await client.flush();
 
     expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+});
+
+describe("instance identity (service.instance.id)", () => {
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+  it("stamps a uuid as service.instance.id on the resource of every span", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", spanExporter: exporter });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    const id = exporter.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
+    expect(id).toMatch(UUID_PATTERN);
+  });
+
+  it("sends the same id on heartbeat payloads and span resources", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const exporter = new InMemorySpanExporter();
+    client = init({
+      serviceName: "svc",
+      spanExporter: exporter,
+      heartbeatTransport: async (payload) => {
+        payloads.push(payload);
+      },
+    });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    const resourceId = exporter.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
+    expect(payloads.length).toBeGreaterThan(0);
+    expect(payloads[0]?.instance_id).toBe(resourceId);
+  });
+
+  it("stamps the id even with the heartbeat disabled", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", heartbeat: false, spanExporter: exporter });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    const id = exporter.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
+    expect(id).toMatch(UUID_PATTERN);
+  });
+
+  it("gives two separately initialized clients distinct ids", async () => {
+    const exporterA = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", spanExporter: exporterA });
+    getTracer().startSpan("a").end();
+    await client.flush();
+    const idA = exporterA.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
+    await client.shutdown();
+
+    const exporterB = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", spanExporter: exporterB });
+    getTracer().startSpan("b").end();
+    await client.flush();
+    const idB = exporterB.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
+
+    expect(idA).not.toBe(idB);
   });
 });

@@ -88,6 +88,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker(["trace-1"]),
       transport,
     });
@@ -109,25 +110,20 @@ describe("HeartbeatSender", () => {
     expect(timeoutMs).toBe(3000);
   });
 
-  it("has a fresh instanceId per sender", () => {
+  it("carries the injected instanceId, the same identity spans get as service.instance.id", () => {
     const transport = vi.fn<HeartbeatTransport>().mockResolvedValue(undefined);
-    const a = new HeartbeatSender({
+    const sender = new HeartbeatSender({
       url: "http://example.invalid",
       headers: {},
       intervalMs: 15_000,
       agentName: "a",
+      instanceId: "injected-identity",
       tracker: fakeTracker([]),
       transport,
     });
-    const b = new HeartbeatSender({
-      url: "http://example.invalid",
-      headers: {},
-      intervalMs: 15_000,
-      agentName: "b",
-      tracker: fakeTracker([]),
-      transport,
-    });
-    expect(a.instanceId).not.toBe(b.instanceId);
+    sender.start();
+    expect(sender.instanceId).toBe("injected-identity");
+    expect(transport.mock.calls[0]?.[0]?.instance_id).toBe("injected-identity");
   });
 
   it("pings again on every interval tick", () => {
@@ -137,6 +133,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker([]),
       transport,
     });
@@ -159,6 +156,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker(traceIds),
       transport,
     });
@@ -179,6 +177,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker([]),
       transport,
     });
@@ -203,6 +202,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker([]),
       transport,
     });
@@ -220,6 +220,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker([]),
       transport,
     });
@@ -240,6 +241,7 @@ describe("HeartbeatSender", () => {
       headers: {},
       intervalMs: 15_000,
       agentName: "my-agent",
+      instanceId: "test-instance",
       tracker: fakeTracker([]),
       transport,
     });
@@ -305,6 +307,7 @@ describe("default HTTP transport", () => {
         headers: { authorization: "Bearer test-key" },
         intervalMs: 15_000,
         agentName: "my-agent",
+        instanceId: "test-instance",
         tracker: fakeTracker([]),
       });
       sender.start();
@@ -332,6 +335,7 @@ describe("default HTTP transport", () => {
         headers: {},
         intervalMs: 15_000,
         agentName: "my-agent",
+        instanceId: "test-instance",
         tracker: fakeTracker([]),
       });
       sender.start();

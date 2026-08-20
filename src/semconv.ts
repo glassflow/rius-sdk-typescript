@@ -1,6 +1,12 @@
 /** Wire-visible instrumentation scope name. The backend keys on this value. */
 export const TRACER_NAME = "glassflow";
 
+// OTel standard resource attribute: identity of one process lifetime (one
+// uuid per client, minted at init). The heartbeat payload's instance_id
+// carries the SAME value, which is what lets the backend join heartbeats to
+// traces and count replicas.
+export const SERVICE_INSTANCE_ID = "service.instance.id";
+
 // OpenInference
 export const OPENINFERENCE_SPAN_KIND = "openinference.span.kind";
 export const INPUT_VALUE = "input.value";
