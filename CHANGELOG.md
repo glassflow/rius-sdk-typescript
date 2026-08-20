@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.4...v0.3.0) (2026-08-20)
+
+
+### Features
+
+* session ids — a scoped withSession() plus an init-level default ([#22](https://github.com/glassflow/rius-sdk-typescript/issues/22)) ([205c03d](https://github.com/glassflow/rius-sdk-typescript/commit/205c03d836a69e7bed3d7029db9feb4773b16e8a))
+* stamp service.instance.id on spans and share it with the heartbeat ([#24](https://github.com/glassflow/rius-sdk-typescript/issues/24)) ([a523813](https://github.com/glassflow/rius-sdk-typescript/commit/a523813ddb2a977efa0f27009c3c08dc9af0ce15))
+
 ## [0.2.4](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.3...v0.2.4) (2026-08-17)
 
 
