@@ -105,6 +105,11 @@ jobs:
           # `pull_request` workflows at all, so the PR would arrive with no CI
           # on the very check it exists to satisfy. Falls back so the step
           # still works — a reviewer then has to kick CI by hand.
+          #
+          # Fine-grained, scoped to this repo, and it needs exactly two
+          # permissions: Pull requests (write) to open and update the PR, and
+          # Contents (write) for the branch push below. Not Issues — the
+          # review-issue step deliberately stays on GITHUB_TOKEN.
           GH_TOKEN: ${{ secrets.SEMCONV_PR_TOKEN || secrets.GITHUB_TOKEN }}
           BRANCH: bot/semconv-fixture
           DIFF: ${{ steps.drift.outputs.diff }}
@@ -114,7 +119,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
           git commit -am "chore: refresh the semconv fixture from the Python SDK"
-          git push -f origin "$BRANCH"
+          # Push with the SAME token that opens the PR, not the one
+          # actions/checkout wired into the remote. A force-push by
+          # GITHUB_TOKEN fires `synchronize` as the bot, and events triggered
+          # by GITHUB_TOKEN start no workflow run — so every weekly refresh
+          # after the first would quietly arrive unchecked.
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
           title="chore: refresh the semconv fixture from the Python SDK"
           body=$(printf 'The weekly parity check found the fixture behind `rius-sdk-python`:\n\n```diff\n%s\n```\n\nThis is the MECHANICAL class of drift: `src/semconv.ts` already agrees with Python and only the committed mirror lagged, so the regenerated fixture keeps `tests/semconv.test.ts` green. Had Python added a constant this SDK genuinely lacks, or changed a value, the suite would be red and this would have been filed as an issue instead — that is a wire change and needs a human.\n\nRe-run the workflow to refresh this PR; the branch is force-pushed.\n' "$DIFF")
           # REST rather than `gh pr create`: the porcelain still requests the
