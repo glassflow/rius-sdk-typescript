@@ -1,3 +1,23 @@
+# Keeps tests/fixtures/semconv.json — the mirror of rius-sdk-python's
+# semconv.py — honest, and decides what a human has to look at.
+#
+# TWO KINDS OF DRIFT, and they deserve different treatment. Regenerating the
+# fixture is self-checking, because tests/semconv.test.ts walks the FIXTURE's
+# keys and compares each against src/semconv.ts:
+#
+#   - The suite stays GREEN -> Python and this SDK already agree and only the
+#     committed mirror lagged. Nothing to decide. That opens a PR.
+#   - The suite goes RED -> Python has a constant this SDK lacks, or a value
+#     differs. A changed attribute key is a WIRE change, and the resolution is
+#     a judgement call: port it, declare it in PYTHON_ONLY, or fix Python
+#     instead. A bot cannot pick. That opens an issue.
+#
+# Previously every drift opened an issue. #25 is what that cost: Python had
+# gained SERVICE_INSTANCE_ID, src/semconv.ts already exported it with the same
+# value, and the one-line fixture refresh sat as an open issue for days.
+#
+# On pull_request nothing is filed either way — drift just fails the job, so a
+# PR touching semconv cannot land with a stale mirror.
 name: semconv-parity
 
 on:
@@ -13,8 +33,9 @@ jobs:
   parity:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # the bot branch carrying a regenerated fixture
       issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -29,20 +50,121 @@ jobs:
           else
             echo "has_token=true" >> "$GITHUB_OUTPUT"
           fi
+
       - name: Regenerate the fixture from the Python SDK
         if: steps.check.outputs.has_token == 'true'
         env:
           SEMCONV_SOURCE_TOKEN: ${{ secrets.SEMCONV_SOURCE_TOKEN }}
         run: node scripts/gen-semconv-fixture.mjs
-      - name: Fail if it drifted
+
+      # Records the drift instead of failing on it, so the classify step below
+      # can decide what it means. The job still fails at the end on
+      # pull_request.
+      - name: Detect drift
         if: steps.check.outputs.has_token == 'true'
-        id: diff
-        run: git diff --exit-code tests/fixtures/semconv.json
-      - name: Open an issue when the schedule finds drift
-        if: failure() && steps.check.outputs.has_token == 'true' && github.event_name == 'schedule'
+        id: drift
+        run: |
+          if git diff --quiet tests/fixtures/semconv.json; then
+            echo "drifted=false" >> "$GITHUB_OUTPUT"
+            echo "no drift" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "drifted=true" >> "$GITHUB_OUTPUT"
+            {
+              echo 'diff<<SEMCONV_EOF'
+              git diff -- tests/fixtures/semconv.json
+              echo 'SEMCONV_EOF'
+            } >> "$GITHUB_OUTPUT"
+            { echo '```diff'; git diff -- tests/fixtures/semconv.json; echo '```'; } \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install dependencies
+        if: steps.drift.outputs.drifted == 'true'
+        run: npm ci
+
+      # The classification. A green suite means the regenerated mirror is
+      # consistent with src/semconv.ts and needs no human judgement.
+      - name: Classify the drift
+        if: steps.drift.outputs.drifted == 'true'
+        id: classify
+        run: |
+          if npx vitest run tests/semconv.test.ts; then
+            echo "mechanical=true" >> "$GITHUB_OUTPUT"
+            echo "drift is mechanical: the regenerated fixture keeps the suite green" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "mechanical=false" >> "$GITHUB_OUTPUT"
+            echo "drift needs review: the regenerated fixture fails the parity test" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open or update the fixture-refresh PR
+        if: >-
+          steps.classify.outputs.mechanical == 'true' &&
+          github.event_name != 'pull_request'
+        env:
+          # A PAT, not github.token: PRs opened by GITHUB_TOKEN do not trigger
+          # `pull_request` workflows at all, so the PR would arrive with no CI
+          # on the very check it exists to satisfy. Falls back so the step
+          # still works — a reviewer then has to kick CI by hand.
+          GH_TOKEN: ${{ secrets.SEMCONV_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: bot/semconv-fixture
+          DIFF: ${{ steps.drift.outputs.diff }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git commit -am "chore: refresh the semconv fixture from the Python SDK"
+          git push -f origin "$BRANCH"
+          title="chore: refresh the semconv fixture from the Python SDK"
+          body=$(printf 'The weekly parity check found the fixture behind `rius-sdk-python`:\n\n```diff\n%s\n```\n\nThis is the MECHANICAL class of drift: `src/semconv.ts` already agrees with Python and only the committed mirror lagged, so the regenerated fixture keeps `tests/semconv.test.ts` green. Had Python added a constant this SDK genuinely lacks, or changed a value, the suite would be red and this would have been filed as an issue instead — that is a wire change and needs a human.\n\nRe-run the workflow to refresh this PR; the branch is force-pushed.\n' "$DIFF")
+          # REST rather than `gh pr create`: the porcelain still requests the
+          # deprecated projectCards GraphQL field and hard-fails on some gh
+          # versions.
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/pulls" \
+            -X GET -f state=open -f head="${GITHUB_REPOSITORY%%/*}:${BRANCH}" \
+            -q '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            num=$(gh api "repos/${GITHUB_REPOSITORY}/pulls" -X POST \
+              -f title="$title" -f body="$body" -f head="$BRANCH" -f base=main -q '.number')
+            echo "opened PR #${num}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${existing}" -X PATCH \
+              -f title="$title" -f body="$body" >/dev/null
+            echo "updated PR #${existing}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open or update the review issue
+        if: >-
+          steps.classify.outputs.mechanical == 'false' &&
+          github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIFF: ${{ steps.drift.outputs.diff }}
         run: |
-          gh issue create \
-            --title "semconv drifted from rius-sdk-python" \
-            --body "The weekly parity check found differences. A changed attribute key is a wire change: review before updating the fixture."
+          set -euo pipefail
+          title="semconv drifted from rius-sdk-python"
+          body=$(printf 'The parity check found differences the regenerated fixture cannot resolve on its own: `tests/semconv.test.ts` fails against it.\n\n```diff\n%s\n```\n\nA changed attribute key is a WIRE change. Resolve it deliberately — port the constant to `src/semconv.ts`, declare it in the `PYTHON_ONLY` set in `tests/semconv.test.ts` as intentionally unported, or fix `rius-sdk-python` if that is the side that is wrong.\n\n[Run](%s/%s/actions/runs/%s)\n' \
+            "$DIFF" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          # Comment on the standing issue rather than filing a new one every
+          # Monday: unresolved drift is persistent by nature, and the previous
+          # unconditional `gh issue create` would stack a duplicate per run.
+          existing=$(gh issue list --state open --search "$title in:title" \
+            --json number,title -q "[.[] | select(.title == \"${title}\") | .number][0] // empty")
+          if [ -z "$existing" ]; then
+            gh issue create --title "$title" --body "$body"
+          else
+            gh issue comment "$existing" --body "$body"
+            echo "commented on #${existing}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Last, so the filing steps above still run. A PR touching semconv must
+      # not land with a stale mirror, and a scheduled run that found reviewable
+      # drift should read red on the Actions tab.
+      - name: Fail on unresolved drift
+        if: >-
+          steps.drift.outputs.drifted == 'true' &&
+          (github.event_name == 'pull_request' || steps.classify.outputs.mechanical == 'false')
+        run: |
+          echo "::error::tests/fixtures/semconv.json is behind rius-sdk-python."
+          echo "Regenerate it with: node scripts/gen-semconv-fixture.mjs"
+          exit 1
