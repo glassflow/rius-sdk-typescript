@@ -183,18 +183,27 @@ export function cachedCjsExports(
  * Patch the build of a dual-package provider SDK that this process is actually
  * using. `openai` and `@anthropic-ai/sdk` ship separate CJS and ESM builds
  * with separate class objects, and the OpenInference require hook only ever
- * sees the CJS one, so a pure-ESM app would silently get no spans. Their
- * `patch()` is also guarded by a module-global flag
- * (github.com/Arize-ai/openinference/issues/3557), so only ONE build can be
- * patched per process and the choice matters:
+ * sees the CJS one, so a pure-ESM app would silently get no spans:
  *
  * - CJS build already in `require.cache` → the app requires it, patch that
  *   copy. This also covers a require that happened BEFORE init(), which the
  *   require hook alone never repairs.
  * - Otherwise → import the ESM build and patch it. In an ESM app every static
- *   import already ran before init(), so this is the copy in use. The one
- *   pattern this trades away is a CJS app whose only require of the provider
- *   comes after init(): it gets the ESM build patched instead (documented).
+ *   import already ran before init(), so this is the copy in use.
+ *
+ * Picking one build used to be forced on us: `patch()` was guarded by a
+ * module-global flag (github.com/Arize-ai/openinference/issues/3557) that let
+ * only ONE build be patched per process, so a CJS app whose only require came
+ * after init() got the ESM build patched and nothing else. That flag is now
+ * scoped to the patched class (instrumentation-anthropic >= 0.2.1,
+ * -openai >= 4.2.1, the floor package.json pins), so the require hook can
+ * still patch a later CJS require on top of whatever we patched here — the
+ * case above is covered without this function choosing differently.
+ *
+ * What remains uncovered is narrower: a HYBRID app that has already loaded
+ * both builds before init(). The cached CJS copy wins here and the ESM one
+ * goes unpatched. Patching both is now permitted and would close it, at the
+ * cost of importing a build the app may never use.
  *
  * The patchable is a plain-object wrapper, never the ESM namespace itself:
  * `patch()` writes an `openInferencePatched` marker onto what it receives, and

@@ -59,9 +59,9 @@
     "@opentelemetry/semantic-conventions": "^1.43.0"
   },
   "peerDependencies": {
-    "@arizeai/openinference-instrumentation-anthropic": "^0.1.20",
+    "@arizeai/openinference-instrumentation-anthropic": "^0.2.1",
     "@arizeai/openinference-instrumentation-langchain": "^4.0.17",
-    "@arizeai/openinference-instrumentation-openai": "^4.1.8",
+    "@arizeai/openinference-instrumentation-openai": "^4.2.1",
     "@arizeai/openinference-vercel": "^3.1.4",
     "@langchain/core": "^1.0.0 || ^0.3.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -89,9 +89,9 @@
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
-    "@arizeai/openinference-instrumentation-anthropic": "0.1.20",
+    "@arizeai/openinference-instrumentation-anthropic": "0.2.1",
     "@arizeai/openinference-instrumentation-langchain": "4.0.17",
-    "@arizeai/openinference-instrumentation-openai": "^4.1.8",
+    "@arizeai/openinference-instrumentation-openai": "^4.2.1",
     "@arizeai/openinference-vercel": "^3.1.4",
     "@biomejs/biome": "^1.9.0",
     "@langchain/core": "^1.2.5",

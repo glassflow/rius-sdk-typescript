@@ -94,7 +94,7 @@ describe("the openai entry in a pure-ESM consumer", () => {
 });
 
 describe("the anthropic entry in a pure-ESM consumer", () => {
-  it("patches the ESM build, and the flag leaves a later CJS require unpatched", async () => {
+  it("patches the ESM build, and a later CJS require is patched too", async () => {
     const { provider } = recordingProvider();
     const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"]);
     expect(enabled).toContain("anthropic");
@@ -106,13 +106,17 @@ describe("the anthropic entry in a pure-ESM consumer", () => {
     };
     expect(isWrapped(EsmAnthropic.Messages.prototype.create)).toBe(true);
 
-    // Documents the residual gap, not an aspiration: OpenInference's global
-    // patched flag (Arize-ai/openinference#3557) means the CJS build of the
-    // same package can no longer be patched in this process. A CJS require
-    // that only happens after init() therefore stays uninstrumented. If this
-    // assertion starts failing after an OpenInference upgrade, the upstream
-    // fix landed: patch BOTH builds unconditionally and drop the
-    // cache-checking heuristic.
+    // This used to assert `false`, documenting the gap left by OpenInference's
+    // module-global patched flag (Arize-ai/openinference#3557): whichever build
+    // was patched first blocked the other, so a CJS require arriving after
+    // init() stayed uninstrumented. The guard is now scoped to the patched
+    // class (instrumentation-anthropic >= 0.2.1, -openai >= 4.2.1), so the
+    // require hook is free to patch the CJS build even though we already
+    // patched the ESM one. Two DIFFERENT class objects, both wrapped.
+    //
+    // Keep asserting it: this is what proves the floor in package.json is
+    // doing its job. Against an older instrumentation it fails, which is the
+    // signal we want if the range is ever loosened.
     const cjs = createRequire(import.meta.url)("@anthropic-ai/sdk") as {
       default?: { Messages: { prototype: { create: unknown } } };
       Anthropic?: { Messages: { prototype: { create: unknown } } };
@@ -120,6 +124,6 @@ describe("the anthropic entry in a pure-ESM consumer", () => {
     const CjsAnthropic = cjs.default ?? cjs.Anthropic;
     expect(CjsAnthropic).toBeDefined();
     expect(EsmAnthropic).not.toBe(CjsAnthropic);
-    expect(isWrapped(CjsAnthropic?.Messages.prototype.create)).toBe(false);
+    expect(isWrapped(CjsAnthropic?.Messages.prototype.create)).toBe(true);
   });
 });
