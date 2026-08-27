@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/glassflow/rius-sdk-typescript/compare/v0.3.0...v0.3.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* instrument both builds of a dual-package provider SDK ([#26](https://github.com/glassflow/rius-sdk-typescript/issues/26)) ([c9edda4](https://github.com/glassflow/rius-sdk-typescript/commit/c9edda4f168783bd787ee61be5ffd3039c56e58e))
+
 ## [0.3.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.2.4...v0.3.0) (2026-08-20)
 
 
