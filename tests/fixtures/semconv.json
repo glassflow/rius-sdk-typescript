@@ -1,5 +1,6 @@
 {
   "TRACER_NAME": "glassflow",
+  "SERVICE_INSTANCE_ID": "service.instance.id",
   "OPENINFERENCE_SPAN_KIND": "openinference.span.kind",
   "INPUT_VALUE": "input.value",
   "OUTPUT_VALUE": "output.value",
