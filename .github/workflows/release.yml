@@ -116,3 +116,47 @@ jobs:
           fi
           jq -n --arg t "$TAG" '{text:(":package: *@glassflow-ai/rius \($t)* published to npm")}' \
             | curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK"
+
+  # Record this version in Linear Releases (the "TypeScript SDK" pipeline).
+  # The sync scans commits since the pipeline's previously recorded release
+  # and sends the squash-merge PR numbers to Linear, which resolves them to
+  # the issues those PRs are linked to — attribution rides the existing
+  # branch-name links, so commit subjects need no ticket refs. Runs only
+  # after the npm publish succeeded: a release in Linear means "installable
+  # from the registry", the same contract as the Slack announcement. Needs
+  # LINEAR_ACCESS_KEY — the pipeline access key generated in Linear under
+  # Settings → Releases (a personal API key does not work). Skips gracefully
+  # while the secret is unset.
+  linear-release:
+    needs: [release-please, publish]
+    if: ${{ needs.release-please.outputs.released == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check for a pipeline access key
+        id: key
+        env:
+          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
+          TAG: ${{ needs.release-please.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LINEAR_ACCESS_KEY:-}" ]; then
+            echo "::warning::LINEAR_ACCESS_KEY not configured; Linear release not recorded for ${TAG}"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT" # npm URLs carry no v prefix
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: ${{ steps.key.outputs.present == 'true' }}
+        with:
+          fetch-depth: 0 # the sync scans history back to the last recorded release
+      - uses: linear/linear-release-action@53ad0f863963e7f8e270fba18426bbb55ef55384 # v0.17.2
+        if: ${{ steps.key.outputs.present == 'true' }}
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          name: ${{ needs.release-please.outputs.tag }}
+          version: ${{ needs.release-please.outputs.tag }}
+          links: |
+            npm=https://www.npmjs.com/package/@glassflow-ai/rius/v/${{ steps.key.outputs.version }}
