@@ -65,6 +65,7 @@ describe("semconv", () => {
       semconv.GEN_AI_PROVIDER_NAME,
       semconv.GEN_AI_TOOL_NAME,
       semconv.SESSION_ID,
+      semconv.WORKSPACE_ROUTE,
     ]);
     expect(semconv.PENDING_IDENTITY_ATTRIBUTES.size).toBe(knownIdentityConstants.size);
     for (const attribute of semconv.PENDING_IDENTITY_ATTRIBUTES) {

@@ -11,3 +11,5 @@ export { SpanKind } from "./semconv.js";
 export { withSession } from "./session.js";
 export { Observation, startAsCurrentSpan, startSpan } from "./spans.js";
 export type { SpanBody, SpanOptions } from "./spans.js";
+export { registerWorkspace, withWorkspace } from "./workspace.js";
+export type { WorkspaceExporterFactory } from "./workspace.js";
