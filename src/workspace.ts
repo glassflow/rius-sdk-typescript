@@ -77,10 +77,7 @@ export class WorkspaceSpanProcessor implements SpanProcessor {
     ];
     if (parentAlias !== undefined && parentAlias !== alias) {
       console.warn(
-        `[rius] span "${(span as unknown as ReadableSpan).name}" starts under workspace ` +
-          `"${alias}" but its parent is stamped "${String(parentAlias)}"; a trace cannot ` +
-          "straddle two workspaces (the backend derives the workspace from the API key). " +
-          "Switch workspaces at request boundaries, before the root span starts.",
+        `[rius] span "${(span as unknown as ReadableSpan).name}" starts under workspace "${alias}" but its parent is stamped "${String(parentAlias)}"; a trace cannot straddle two workspaces (the backend derives the workspace from the API key). Switch workspaces at request boundaries, before the root span starts.`,
       );
     }
     span.setAttribute(WORKSPACE_ROUTE, alias);
@@ -165,9 +162,7 @@ export class RoutingSpanExporter implements SpanExporter {
       if (!this.warnedAliases.has(alias)) {
         this.warnedAliases.add(alias);
         console.warn(
-          `[rius] no workspace registered for alias "${alias}"; its spans go to the ` +
-            `default destination. Register it with registerWorkspace("${alias}", apiKey) ` +
-            "or in init({ workspaces }).",
+          `[rius] no workspace registered for alias "${alias}"; its spans go to the default destination. Register it with registerWorkspace("${alias}", apiKey) or in init({ workspaces }).`,
         );
       }
       return this.defaultExporter;
