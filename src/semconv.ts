@@ -16,6 +16,12 @@ export const OUTPUT_VALUE = "output.value";
 // emitted alongside it, one name for one fact.
 export const SESSION_ID = "session.id";
 
+// Process-local routing marker for multi-workspace export (see workspace.ts).
+// Stamped at span start so pending snapshots route too, and ALWAYS stripped
+// by the routing exporter before spans leave the process: the destination's
+// API key is what tells the backend which workspace a span belongs to.
+export const WORKSPACE_ROUTE = "rius.workspace";
+
 // OTel GenAI
 export const GEN_AI_OPERATION_NAME = "gen_ai.operation.name";
 export const GEN_AI_PROVIDER_NAME = "gen_ai.provider.name";
@@ -123,6 +129,9 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   // Identity, not content: a pending span must be groupable into its
   // session while still running, that is the live view's whole point.
   SESSION_ID,
+  // Routing, not content: a crashed run's snapshot must land in the same
+  // workspace its final span would have. Stripped at export either way.
+  WORKSPACE_ROUTE,
 ]);
 
 // gen_ai.request.* (model, temperature, ...) is identity, not content.

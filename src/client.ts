@@ -23,6 +23,12 @@ import { MaskingSpanExporter } from "./masking.js";
 import { PendingSpanProcessor } from "./pending.js";
 import { SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
+import {
+  RoutingSpanExporter,
+  type WorkspaceExporterFactory,
+  WorkspaceSpanProcessor,
+  setGlobalRouting,
+} from "./workspace.js";
 
 /** Options accepted by {@link init}, extending the shared configuration. */
 export interface InitOptions extends RiusOptions {
@@ -30,6 +36,20 @@ export interface InitOptions extends RiusOptions {
   spanExporter?: SpanExporter;
   /** Override the heartbeat HTTP transport. The test seam; prefer this to mocking fetch. */
   heartbeatTransport?: HeartbeatTransport;
+  /**
+   * Enable multi-workspace routing: a map of alias to API key. Spans started
+   * inside `withWorkspace(alias, fn)` are exported with that workspace's
+   * key; spans outside any scope use the default `apiKey`. Pass `{}` to opt
+   * in with no static routes and register destinations later via
+   * `registerWorkspace()`. One trace must stay inside one workspace.
+   */
+  workspaces?: Record<string, string>;
+  /**
+   * Override how per-workspace exporters are built from an API key. The
+   * test seam, like `spanExporter`; defaults to the standard OTLP exporter
+   * against the configured endpoint.
+   */
+  workspaceExporterFactory?: WorkspaceExporterFactory;
 }
 
 /**
@@ -134,6 +154,7 @@ export class RiusClient {
     } finally {
       if (globalClient === this) {
         globalClient = undefined;
+        setGlobalRouting(undefined);
         trace.disable();
       }
     }
@@ -174,13 +195,27 @@ export function init(options: InitOptions = {}): RiusClient {
     : {};
 
   let health: ExportOutcomeExporter | undefined;
+  let routing: RoutingSpanExporter | undefined;
   if (!config.disabled) {
-    const base =
+    let base =
       options.spanExporter ??
       new OTLPTraceExporter({
         url: `${config.endpoint}/v1/traces`,
         headers: config.apiKey ? authHeaders : undefined,
       });
+    if (options.workspaces !== undefined) {
+      // Innermost in the chain, so masking and export-health wrap the whole
+      // fan-out and apply to every destination alike.
+      const factory =
+        options.workspaceExporterFactory ??
+        ((apiKey: string) =>
+          new OTLPTraceExporter({
+            url: `${config.endpoint}/v1/traces`,
+            headers: { Authorization: `Bearer ${apiKey}` },
+          }));
+      routing = new RoutingSpanExporter(base, factory, options.workspaces);
+      base = routing;
+    }
     health = new ExportOutcomeExporter(base);
     // Masking is outermost so spans are sanitised before the health wrapper
     // hands them to OTLP.
@@ -194,8 +229,13 @@ export function init(options: InitOptions = {}): RiusClient {
     const batch = new BatchSpanProcessor(exporter);
     // Added BEFORE the pending processor: both act at onStart, and the
     // pending snapshot is built from the attributes already on the span, so
-    // the session id must be stamped first to ride it.
+    // the session id (and the workspace route, which decides which
+    // destination the snapshot itself goes to) must be stamped first to
+    // ride it.
     processors.add(new SessionSpanProcessor(config.sessionId));
+    if (routing !== undefined) {
+      processors.add(new WorkspaceSpanProcessor());
+    }
     if (config.partialSpans) {
       // Pending must see onStart/onEnd before the batch processor queues the
       // span for export, so it goes in ahead of it.
@@ -270,6 +310,7 @@ export function init(options: InitOptions = {}): RiusClient {
   }
 
   globalClient = createClient({ provider, processors, health, ready, heartbeat });
+  setGlobalRouting(routing);
   return globalClient;
 }
 

@@ -13,11 +13,13 @@ describe("public API", () => {
         "getTracer",
         "init",
         "observe",
+        "registerWorkspace",
         "startAsCurrentGeneration",
         "startAsCurrentSpan",
         "startGeneration",
         "startSpan",
         "withSession",
+        "withWorkspace",
       ].sort(),
     );
   });
