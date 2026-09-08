@@ -56,6 +56,24 @@ describe("MaskingSpanExporter", () => {
     expect(inner.seen[0].attributes["gen_ai.request.model"]).toBe("gpt-4o");
   });
 
+  it("strips tool definitions and descriptions, keeps the tool name", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [
+        span({
+          "gen_ai.tool.definitions": '[{"name":"q","description":"secret"}]',
+          "gen_ai.tool.description": "runs SQL against the billing db",
+          "gen_ai.tool.name": "query_billing",
+        }),
+      ],
+      () => {},
+    );
+    expect(inner.seen[0].attributes["gen_ai.tool.definitions"]).toBeUndefined();
+    expect(inner.seen[0].attributes["gen_ai.tool.description"]).toBeUndefined();
+    // identity, not content: the tool NAME survives, so traces stay navigable
+    expect(inner.seen[0].attributes["gen_ai.tool.name"]).toBe("query_billing");
+  });
+
   it("applies a mask to content values only", () => {
     const inner = new Capture();
     new MaskingSpanExporter(inner, {
