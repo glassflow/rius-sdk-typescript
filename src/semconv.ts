@@ -78,6 +78,12 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   OUTPUT_VALUE,
   GEN_AI_INPUT_MESSAGES,
   GEN_AI_OUTPUT_MESSAGES,
+  // Sensitive per the GenAI conventions (semconv-genai#431): tool definitions
+  // routinely embed proprietary prompt engineering, and sometimes credentials
+  // or internal URLs in parameter defaults. gen_ai.tool.name stays: it is
+  // identity, not content.
+  "gen_ai.tool.description",
+  "gen_ai.tool.definitions",
   "gen_ai.prompt",
   "gen_ai.completion",
   "llm.input_messages",
