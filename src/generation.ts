@@ -48,6 +48,17 @@ export interface GenerationOptions {
 export class Generation extends Observation {
   private firstTokenRecorded = false;
 
+  /**
+   * The provider passed at creation; drives the Anthropic input-token summing
+   * in {@link setUsage}. A bare `new Generation(span)` has none and never sums.
+   */
+  constructor(
+    span: ConstructorParameters<typeof Observation>[0],
+    private readonly provider?: string,
+  ) {
+    super(span);
+  }
+
   setInput(value: unknown): this {
     this.span.setAttribute(GEN_AI_INPUT_MESSAGES, toAttributeValue(value));
     return this;
@@ -64,11 +75,14 @@ export class Generation extends Observation {
   }
 
   /**
-   * Token usage (`gen_ai.usage.*`). Pass provider-reported values as-is.
-   * Per the GenAI conventions, `inputTokens` is the total including cached
-   * tokens (the cache counts are subsets of it); providers that report an
-   * exclusive `inputTokens` (e.g. Anthropic) are detected and normalized by
-   * the backend, so no client-side arithmetic is needed.
+   * Token usage (`gen_ai.usage.*`). Pass provider-reported values as-is;
+   * never pre-add anything. Per the GenAI conventions, `inputTokens` is the
+   * total including cached tokens (the cache counts are subsets of it).
+   * Anthropic's API reports `input_tokens` excluding the cache counts, and
+   * the conventions require the instrumentation to do the summing, so when
+   * the generation's provider is `"anthropic"` the emitted total is
+   * `inputTokens` plus both cache counts. Every other provider is recorded
+   * verbatim.
    */
   setUsage(usage: {
     inputTokens?: number;
@@ -89,7 +103,11 @@ export class Generation extends Observation {
     reasoningOutputTokens?: number;
   }): this {
     if (usage.inputTokens !== undefined) {
-      this.span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, usage.inputTokens);
+      const sums = this.provider?.toLowerCase() === "anthropic";
+      const total = sums
+        ? usage.inputTokens + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0)
+        : usage.inputTokens;
+      this.span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, total);
     }
     if (usage.outputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_OUTPUT_TOKENS, usage.outputTokens);
@@ -158,7 +176,7 @@ function configure(generation: Generation, options: GenerationOptions): Generati
 /** Create a generation span and return a handle. You MUST call end(). */
 export function startGeneration(name: string, options: GenerationOptions = {}): Generation {
   const span = getTracer().startSpan(name, { attributes: attributesFor(options) });
-  return configure(new Generation(span), options);
+  return configure(new Generation(span, options.provider), options);
 }
 
 /** The body of a scoped generation. */
@@ -187,7 +205,7 @@ export function startAsCurrentGeneration<T>(
       : [optionsOrFn, maybeFn as GenerationBody<T>];
 
   return getTracer().startActiveSpan(name, { attributes: attributesFor(options) }, async (span) => {
-    const generation = configure(new Generation(span), options);
+    const generation = configure(new Generation(span, options.provider), options);
     try {
       return await fn(generation);
     } catch (error) {

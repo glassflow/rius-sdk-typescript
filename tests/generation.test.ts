@@ -212,6 +212,60 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.request.reasoning.level"]).toBeUndefined();
   });
 
+  it("sums Anthropic cache tokens into the emitted input total", async () => {
+    const gen = startGeneration("chat", { model: "m", provider: "anthropic" });
+    gen.setUsage({
+      inputTokens: 10,
+      outputTokens: 202,
+      cacheReadInputTokens: 11579,
+      cacheWriteInputTokens: 12694,
+    });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(10 + 11579 + 12694);
+    // the subset attributes stay as reported
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(11579);
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(12694);
+  });
+
+  it("sums for Anthropic case-insensitively", async () => {
+    const gen = startGeneration("chat", { provider: "Anthropic" });
+    gen.setUsage({ inputTokens: 100, cacheReadInputTokens: 50 });
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.usage.input_tokens"]).toBe(150);
+  });
+
+  it("leaves the Anthropic input total unchanged without cache tokens", async () => {
+    const gen = startGeneration("chat", { provider: "anthropic" });
+    gen.setUsage({ inputTokens: 100, outputTokens: 5 });
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.usage.input_tokens"]).toBe(100);
+  });
+
+  it("never sums for other providers or when no provider is set", async () => {
+    const withOpenai = startGeneration("chat", { provider: "openai" });
+    withOpenai.setUsage({ inputTokens: 1000, cacheReadInputTokens: 400 });
+    withOpenai.end();
+    const bare = startGeneration("chat");
+    bare.setUsage({ inputTokens: 1000, cacheReadInputTokens: 400 });
+    bare.end();
+    await client.flush();
+    for (const span of exporter.getFinishedSpans()) {
+      expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(1000);
+    }
+  });
+
+  it("emits no input total for Anthropic cache tokens without inputTokens", async () => {
+    const gen = startGeneration("chat", { provider: "anthropic" });
+    gen.setUsage({ cacheReadInputTokens: 400, cacheWriteInputTokens: 100 });
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.usage.input_tokens"]).toBeUndefined();
+  });
+
   it("setUsage records cache read and creation tokens", async () => {
     const gen = startGeneration("chat", { model: "m" });
     gen.setUsage({
