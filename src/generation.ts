@@ -6,6 +6,7 @@ import {
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
   GEN_AI_REQUEST_PREFIX,
+  GEN_AI_REQUEST_REASONING_LEVEL,
   GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -33,6 +34,14 @@ export interface GenerationOptions {
    * so use the provider's own parameter names.
    */
   modelParameters?: Record<string, unknown>;
+  /**
+   * Requested reasoning/thinking effort level
+   * (`gen_ai.request.reasoning.level`), e.g. OpenAI's `reasoning.effort`
+   * values. Provider-defined string, recorded verbatim. A first-class option
+   * because the `modelParameters` pass-through would spell the key
+   * `gen_ai.request.reasoning_level`, which is not the convention's name.
+   */
+  reasoningLevel?: string;
 }
 
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
@@ -138,6 +147,9 @@ function configure(generation: Generation, options: GenerationOptions): Generati
   // identity attributes, and the key set is caller-supplied and open-ended.
   for (const [key, value] of Object.entries(options.modelParameters ?? {})) {
     generation.setAttribute(`${GEN_AI_REQUEST_PREFIX}${key}`, value);
+  }
+  if (options.reasoningLevel !== undefined) {
+    generation.setAttribute(GEN_AI_REQUEST_REASONING_LEVEL, options.reasoningLevel);
   }
   if (options.input !== undefined) generation.setInput(options.input);
   return generation;

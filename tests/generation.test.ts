@@ -196,6 +196,22 @@ describe("generations", () => {
     expect(exporter.getFinishedSpans()[0].attributes["openinference.span.kind"]).toBe("LLM");
   });
 
+  it("records the requested reasoning level", async () => {
+    const gen = startGeneration("chat", { model: "o4-mini", reasoningLevel: "high" });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.request.reasoning.level"]).toBe("high");
+  });
+
+  it("leaves the reasoning-level attribute absent when not passed", async () => {
+    const gen = startGeneration("chat", { model: "o4-mini" });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.request.reasoning.level"]).toBeUndefined();
+  });
+
   it("setUsage records cache read and creation tokens", async () => {
     const gen = startGeneration("chat", { model: "m" });
     gen.setUsage({
