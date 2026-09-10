@@ -231,6 +231,33 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(0);
   });
 
+  it("setUsage records reasoning output tokens", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({ outputTokens: 900, reasoningOutputTokens: 700 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(700);
+  });
+
+  it("setUsage leaves the reasoning-token attribute absent when not passed", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({ inputTokens: 10, outputTokens: 5 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
+  });
+
+  it("setUsage writes zero reasoning tokens as the number 0, not skipped", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({ reasoningOutputTokens: 0 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(0);
+  });
+
   it("setUsage writes zero-token usage as the number 0, not skipped", async () => {
     const gen = startGeneration("chat", { model: "m" });
     gen.setUsage({ inputTokens: 0, outputTokens: 0 });
