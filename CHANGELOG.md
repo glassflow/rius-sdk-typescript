@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.4.0...v0.5.0) (2026-09-10)
+
+
+### Features
+
+* capture reasoning output tokens in setUsage ([#36](https://github.com/glassflow/rius-sdk-typescript/issues/36)) ([870f61b](https://github.com/glassflow/rius-sdk-typescript/commit/870f61b299635f0337c27245ede13e1a27f8ee57))
+* capture requested reasoning effort level ([#38](https://github.com/glassflow/rius-sdk-typescript/issues/38)) ([4d9ee35](https://github.com/glassflow/rius-sdk-typescript/commit/4d9ee35119cc1d37d973ce1a23d2e458be95f617))
+
+
+### Bug Fixes
+
+* sum Anthropic cache tokens into the emitted input-token total ([#39](https://github.com/glassflow/rius-sdk-typescript/issues/39)) ([842a0a9](https://github.com/glassflow/rius-sdk-typescript/commit/842a0a92546d4ec8ef7dc43738fd7e79c606a7f7))
+
 ## [0.4.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.3.1...v0.4.0) (2026-09-10)
 
 
