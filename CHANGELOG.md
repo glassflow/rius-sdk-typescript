@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.3.1...v0.4.0) (2026-09-10)
+
+
+### Features
+
+* add cache-token fields to setUsage ([#30](https://github.com/glassflow/rius-sdk-typescript/issues/30)) ([116c7b0](https://github.com/glassflow/rius-sdk-typescript/commit/116c7b0986f8a4fc541381ab401138f552fa0044))
+* context-scoped multi-workspace routing (withWorkspace + routing exporter) ([#33](https://github.com/glassflow/rius-sdk-typescript/issues/33)) ([546a4ff](https://github.com/glassflow/rius-sdk-typescript/commit/546a4ff9ff580a49a6a204ac5007155abcd3e309))
+
+
+### Bug Fixes
+
+* emit gen_ai.usage.cache_write.input_tokens per the semconv rename ([#34](https://github.com/glassflow/rius-sdk-typescript/issues/34)) ([812529b](https://github.com/glassflow/rius-sdk-typescript/commit/812529b2bc072b45b6bba814e703c5f20d25712f))
+* strip tool definitions and descriptions when content capture is off ([#35](https://github.com/glassflow/rius-sdk-typescript/issues/35)) ([f5cca4c](https://github.com/glassflow/rius-sdk-typescript/commit/f5cca4c1a55e2ad506823f102459f05cd5a226df))
+
 ## [0.3.1](https://github.com/glassflow/rius-sdk-typescript/compare/v0.3.0...v0.3.1) (2026-08-27)
 
 
