@@ -8,8 +8,8 @@ import {
   GEN_AI_REQUEST_PREFIX,
   GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
-  GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
   SpanKind,
@@ -65,8 +65,11 @@ export class Generation extends Observation {
     outputTokens?: number;
     /** Input tokens served from a provider-managed prompt cache. */
     cacheReadInputTokens?: number;
-    /** Input tokens written to a provider-managed prompt cache. */
-    cacheCreationInputTokens?: number;
+    /**
+     * Input tokens written to a provider-managed prompt cache
+     * (called "cache creation" by Anthropic).
+     */
+    cacheWriteInputTokens?: number;
   }): this {
     if (usage.inputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, usage.inputTokens);
@@ -77,11 +80,8 @@ export class Generation extends Observation {
     if (usage.cacheReadInputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, usage.cacheReadInputTokens);
     }
-    if (usage.cacheCreationInputTokens !== undefined) {
-      this.span.setAttribute(
-        GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-        usage.cacheCreationInputTokens,
-      );
+    if (usage.cacheWriteInputTokens !== undefined) {
+      this.span.setAttribute(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, usage.cacheWriteInputTokens);
     }
     return this;
   }

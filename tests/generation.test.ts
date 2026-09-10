@@ -202,13 +202,13 @@ describe("generations", () => {
       inputTokens: 10,
       outputTokens: 202,
       cacheReadInputTokens: 11579,
-      cacheCreationInputTokens: 12694,
+      cacheWriteInputTokens: 12694,
     });
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(11579);
-    expect(span.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(12694);
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(12694);
   });
 
   it("setUsage leaves cache-token attributes absent when not passed", async () => {
@@ -218,17 +218,17 @@ describe("generations", () => {
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
-    expect(span.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBeUndefined();
   });
 
   it("setUsage writes zero cache tokens as the number 0, not skipped", async () => {
     const gen = startGeneration("chat", { model: "m" });
-    gen.setUsage({ cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+    gen.setUsage({ cacheReadInputTokens: 0, cacheWriteInputTokens: 0 });
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
-    expect(span.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(0);
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(0);
   });
 
   it("setUsage writes zero-token usage as the number 0, not skipped", async () => {
