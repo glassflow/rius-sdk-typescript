@@ -26,6 +26,7 @@ export const WORKSPACE_ROUTE = "rius.workspace";
 export const GEN_AI_OPERATION_NAME = "gen_ai.operation.name";
 export const GEN_AI_PROVIDER_NAME = "gen_ai.provider.name";
 export const GEN_AI_REQUEST_MODEL = "gen_ai.request.model";
+export const GEN_AI_REQUEST_REASONING_LEVEL = "gen_ai.request.reasoning.level";
 export const GEN_AI_RESPONSE_MODEL = "gen_ai.response.model";
 export const GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens";
 export const GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens";
