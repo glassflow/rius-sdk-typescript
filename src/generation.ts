@@ -12,6 +12,7 @@ import {
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
+  GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   SpanKind,
   kindAttributes,
 } from "./semconv.js";
@@ -70,6 +71,13 @@ export class Generation extends Observation {
      * (called "cache creation" by Anthropic).
      */
     cacheWriteInputTokens?: number;
+    /**
+     * Output tokens spent on reasoning / extended thinking. A subset of
+     * `outputTokens`, never in addition to it: providers already include
+     * reasoning tokens in the output total, so pass both as reported and
+     * do no arithmetic.
+     */
+    reasoningOutputTokens?: number;
   }): this {
     if (usage.inputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, usage.inputTokens);
@@ -82,6 +90,9 @@ export class Generation extends Observation {
     }
     if (usage.cacheWriteInputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, usage.cacheWriteInputTokens);
+    }
+    if (usage.reasoningOutputTokens !== undefined) {
+      this.span.setAttribute(GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, usage.reasoningOutputTokens);
     }
     return this;
   }
