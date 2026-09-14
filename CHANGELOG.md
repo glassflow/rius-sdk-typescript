@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/glassflow/rius-sdk-typescript/compare/v0.6.0...v0.6.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **masking:** treat metadata.* mirrors of content keys as content ([#52](https://github.com/glassflow/rius-sdk-typescript/issues/52)) ([0bffd0b](https://github.com/glassflow/rius-sdk-typescript/commit/0bffd0b6955517fe97da69c9dfc0ea21e29f4288))
+
 ## [0.6.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.5.0...v0.6.0) (2026-09-14)
 
 
