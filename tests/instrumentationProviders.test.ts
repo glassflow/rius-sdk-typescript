@@ -93,6 +93,13 @@ describe("the anthropic entry", () => {
         model: "claude-test",
         max_tokens: 16,
         messages: [{ role: "user", content: "what is 2+2" }],
+        tools: [
+          {
+            name: "get_weather",
+            description: "Get weather",
+            input_schema: { type: "object", properties: { city: { type: "string" } } },
+          },
+        ],
       });
       expect(reply.content[0]?.text).toBe("4");
     } finally {
@@ -108,6 +115,10 @@ describe("the anthropic entry", () => {
     expect(attributes["llm.input_messages.0.message.content"]).toBe("what is 2+2");
     expect(attributes["llm.output_messages.0.message.contents.0.message_content.text"]).toBe("4");
     expect(attributes["llm.token_count.prompt"]).toBe(5);
+    // Tool-definition contract: the backend's context attribution reads the
+    // request's tool definitions from the indexed llm.tools family.
+    const toolSchema = JSON.parse(String(attributes["llm.tools.0.tool.json_schema"]));
+    expect(toolSchema.name).toBe("get_weather");
   });
 });
 
