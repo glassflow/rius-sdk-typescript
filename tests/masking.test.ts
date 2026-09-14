@@ -351,3 +351,88 @@ describe("llm.invocation_parameters redaction", () => {
     );
   });
 });
+
+describe("GenAI semconv tool-call / system keys and OpenInference TOOL keys", () => {
+  const leaked = [
+    "gen_ai.system_instructions",
+    "gen_ai.tool.call.arguments",
+    "gen_ai.tool.call.result",
+    "tool.description",
+    "tool.parameters",
+    "ai.response.reasoning",
+    "ai.response.toolCalls",
+    "ai.response.files",
+    "ai.value",
+    "ai.values",
+    "ai.documents",
+    "ai.schema",
+    "ai.schema.description",
+  ];
+
+  it("classifies every key the ai v7 / @ai-sdk/otel path emits with content as content", () => {
+    for (const key of leaked) expect(isContentKey(key), key).toBe(true);
+    for (const key of [
+      "gen_ai.tool.name",
+      "gen_ai.tool.call.id",
+      "ai.toolCall.name",
+      "ai.model.id",
+    ]) {
+      expect(isContentKey(key), key).toBe(false);
+    }
+  });
+
+  it("strips them under captureContent: false and keeps identity siblings", () => {
+    const inner = new Capture();
+    const exporter = new MaskingSpanExporter(inner, { captureContent: false });
+    const attributes: Record<string, unknown> = Object.fromEntries(
+      leaked.map((k) => [k, "SECRET"]),
+    );
+    attributes["gen_ai.tool.name"] = "get_weather";
+    attributes["gen_ai.tool.call.id"] = "call_1";
+    exporter.export([span(attributes)], () => {});
+    const out = inner.seen[0].attributes as Record<string, unknown>;
+    for (const key of leaked) expect(out[key], key).toBeUndefined();
+    expect(out["gen_ai.tool.name"]).toBe("get_weather");
+    expect(out["gen_ai.tool.call.id"]).toBe("call_1");
+  });
+});
+
+describe("span status description", () => {
+  function errorSpan(message: string): ReadableSpan {
+    return {
+      attributes: {},
+      status: { code: 2 /* SpanStatusCode.ERROR */, message },
+    } as unknown as ReadableSpan;
+  }
+
+  it("runs the mask over the status message and passes the key", () => {
+    const inner = new Capture();
+    const seenKeys: string[] = [];
+    const exporter = new MaskingSpanExporter(inner, {
+      captureContent: true,
+      mask: (_v, ctx) => {
+        seenKeys.push(ctx?.key ?? "");
+        return "***";
+      },
+    });
+    exporter.export([errorSpan("400: messages=[{content:'SSN 123-45-6789'}]")], () => {});
+    expect(inner.seen[0].status.message).toBe("***");
+    expect(inner.seen[0].status.code).toBe(2);
+    expect(seenKeys).toContain("status.description");
+  });
+
+  it("blanks the status message under captureContent: false and keeps the code", () => {
+    const inner = new Capture();
+    const exporter = new MaskingSpanExporter(inner, { captureContent: false });
+    exporter.export([errorSpan("secret")], () => {});
+    expect(inner.seen[0].status.message).toBeUndefined();
+    expect(inner.seen[0].status.code).toBe(2);
+  });
+
+  it("leaves the status message alone when nothing sanitizes", () => {
+    const inner = new Capture();
+    const exporter = new MaskingSpanExporter(inner, { captureContent: true });
+    exporter.export([errorSpan("secret")], () => {});
+    expect(inner.seen[0].status.message).toBe("secret");
+  });
+});

@@ -99,6 +99,17 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   // identity, not content.
   "gen_ai.tool.description",
   GEN_AI_TOOL_DEFINITIONS,
+  // GenAI semconv keys emitted by OTel-native instrumentations (@ai-sdk/otel,
+  // which init() registers for ai v7, among them; pinned 2026-09-14): the
+  // system prompt and each tool call's input and output are content in the
+  // same sense messages are. gen_ai.tool.call.id stays: identity.
+  "gen_ai.system_instructions",
+  "gen_ai.tool.call.arguments",
+  "gen_ai.tool.call.result",
+  // OpenInference TOOL-kind spans carry the definition under these two bare
+  // keys, sensitive for the reason gen_ai.tool.description is.
+  "tool.description",
+  "tool.parameters",
   "gen_ai.prompt",
   "gen_ai.completion",
   "llm.input_messages",
@@ -126,6 +137,18 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "ai.response.object",
   "ai.toolCall.args",
   "ai.toolCall.result",
+  // Same family, keys enumerated from the ai v7 telemetry surface
+  // (2026-09-14): model reasoning, tool calls in the response, response
+  // files, embedding inputs, rerank documents, and the generateObject schema
+  // (a tool definition by another name).
+  "ai.response.reasoning",
+  "ai.response.toolCalls",
+  "ai.response.files",
+  "ai.value",
+  "ai.values",
+  "ai.documents",
+  "ai.schema",
+  "ai.schema.description",
 ]);
 
 // The request-parameters bag OpenInference instrumentations emit. Not wholly

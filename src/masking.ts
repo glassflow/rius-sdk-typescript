@@ -60,6 +60,14 @@ const EXCEPTION_EVENT_NAME = "exception";
 const EXCEPTION_CONTENT_KEYS: readonly string[] = ["exception.message", "exception.stacktrace"];
 
 /**
+ * The status description is the same string once more: `recordException`
+ * copies the error's message onto the status, and providers echo the rejected
+ * request. Not an attribute, so it gets its own pass; this is the `key` a
+ * mask sees for it (same name the Python SDK uses).
+ */
+const STATUS_DESCRIPTION_KEY = "status.description";
+
+/**
  * Strips or masks content attributes before spans leave the process. Covers our
  * own spans and any bundled third-party instrumentation, which is why the key
  * sets live in semconv rather than here.
@@ -98,17 +106,33 @@ export class MaskingSpanExporter implements SpanExporter {
       this.sanitizeAttributes(link.attributes as Record<string, unknown> | undefined);
     }
 
-    if (!this.opts.captureContent && span.status?.code === SpanStatusCode.ERROR) {
-      // `recordException` copies the thrown error's message onto the status,
-      // which is the same leak the exception event's `exception.message` is
-      // stripped for above. `status` is mutable and exposed by reference on
-      // the SDK span, same as `attributes`, so mutating it in place here
-      // reaches the span that is about to be handed to the inner exporter.
-      // The ERROR code itself is left alone so the failure stays visible.
-      span.status.message = undefined;
-    }
-
+    this.sanitizeStatus(span);
     return span;
+  }
+
+  /**
+   * Drops or masks the status description, in place. `status` is mutable and
+   * exposed by reference on the SDK span, same as `attributes`, so mutating it
+   * here reaches the span about to be handed to the inner exporter. The ERROR
+   * code itself is left alone so the failure stays visible and classifiable,
+   * the same policy as `exception.type`.
+   */
+  private sanitizeStatus(span: ReadableSpan): void {
+    const status = span.status;
+    if (status?.code !== SpanStatusCode.ERROR || !status.message) return;
+    if (!this.opts.captureContent) {
+      status.message = undefined;
+      return;
+    }
+    if (this.opts.mask === undefined) return;
+    try {
+      const masked = toAttributeValue(
+        this.opts.mask(status.message, { key: STATUS_DESCRIPTION_KEY }),
+      );
+      status.message = typeof masked === "string" ? masked : String(masked);
+    } catch {
+      status.message = "[mask error]";
+    }
   }
 
   /** Strips or masks the content keys of one attribute bag, in place. */
