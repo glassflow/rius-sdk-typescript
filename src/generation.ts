@@ -22,8 +22,7 @@ import {
   kindAttributes,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
-import { Observation } from "./spans.js";
-import { withUser } from "./user.js";
+import { Observation, runActive } from "./spans.js";
 
 /**
  * Options for {@link startGeneration} and {@link startAsCurrentGeneration}:
@@ -249,19 +248,11 @@ export function startAsCurrentGeneration<T>(
       ? [{} as GenerationOptions, optionsOrFn]
       : [optionsOrFn, maybeFn as GenerationBody<T>];
 
-  const run = () =>
-    getTracer().startActiveSpan(name, { attributes: attributesFor(options) }, async (span) => {
-      const generation = configure(new Generation(span, options.provider), options);
-      try {
-        return await fn(generation);
-      } catch (error) {
-        generation.recordException(error);
-        throw error;
-      } finally {
-        generation.end();
-      }
-    });
-  // userId is sugar for withUser around the block: children opened inside
-  // inherit it through UserSpanProcessor, this span at creation.
-  return options.userId !== undefined ? withUser(options.userId, run) : run();
+  return runActive(
+    name,
+    attributesFor(options),
+    options.userId,
+    (span) => configure(new Generation(span, options.provider), options),
+    fn,
+  );
 }

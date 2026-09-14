@@ -39,7 +39,8 @@ await client.ready;
 
 // 1. Function wrapper — trace a whole call. Use a named function expression
 //    (or pass { name }): an arrow function has no inferrable name and its
-//    span would fall back to "anonymous".
+//    span would fall back to "anonymous". The wrapper always returns a
+//    Promise, even for a synchronous function.
 const handle = observe(async function handle(query: string) {
   return await callModel(query);
 });
@@ -232,12 +233,13 @@ variables, then the defaults below.
 | `disabled`         | `RIUS_DISABLED`          | `false`                                       |
 | `sampleRate`       | `RIUS_SAMPLE_RATE`       | `1.0`                                         |
 | `captureContent`   | `RIUS_CAPTURE_CONTENT`   | `true`                                        |
-| `mask`             | (options only)           | none                                          |
+| `mask`             | (options only)           | none (`(value, { key }) => unknown`; the return value is stored, JSON-encoded if not a primitive; return `""` to blank) |
 | `heartbeat`        | `RIUS_HEARTBEAT`         | `true`                                        |
 | `heartbeatInterval` | `RIUS_HEARTBEAT_INTERVAL` | `15` (seconds; clamped 5-300)               |
 | `agentName`        | `RIUS_AGENT_NAME`        | `serviceName`                                 |
 | `partialSpans`     | `RIUS_PARTIAL_SPANS`     | `false`                                       |
 | `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
+| `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 
 Traces are posted to `<endpoint>/v1/traces`.
 
