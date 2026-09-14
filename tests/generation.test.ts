@@ -39,6 +39,48 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(17);
   });
 
+  it("records tool definitions verbatim via the tools option", async () => {
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "get_weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      },
+    ];
+    const gen = startGeneration("chat", { model: "gpt-4o", tools });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(JSON.parse(String(span.attributes["gen_ai.tool.definitions"]))).toEqual(tools);
+  });
+
+  it("records tool definitions in any provider shape via setToolDefinitions", async () => {
+    // Verbatim on purpose: OpenAI nests under `function`, Anthropic uses
+    // top-level name/input_schema; the backend reads names and sizes from either.
+    const tools = [
+      {
+        name: "search_kb",
+        description: "Search the knowledge base",
+        input_schema: { type: "object", properties: { q: { type: "string" } } },
+      },
+    ];
+    const gen = startGeneration("chat", { model: "claude-sonnet-5", provider: "anthropic" });
+    gen.setToolDefinitions(tools);
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(JSON.parse(String(span.attributes["gen_ai.tool.definitions"]))).toEqual(tools);
+  });
+
+  it("leaves gen_ai.tool.definitions absent when no tools are given", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.definitions"]).toBeUndefined();
+  });
+
   it("uses gen_ai message keys, not the generic input.value", async () => {
     const gen = startGeneration("chat", { model: "m", input: ["x"] });
     gen.end();

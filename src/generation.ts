@@ -9,6 +9,7 @@ import {
   GEN_AI_REQUEST_REASONING_LEVEL,
   GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
+  GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
@@ -42,6 +43,11 @@ export interface GenerationOptions {
    * `gen_ai.request.reasoning_level`, which is not the convention's name.
    */
   reasoningLevel?: string;
+  /**
+   * The request's tool/function definitions, recorded immediately via
+   * {@link Generation.setToolDefinitions} — verbatim, any provider shape.
+   */
+  tools?: unknown[];
 }
 
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
@@ -66,6 +72,19 @@ export class Generation extends Observation {
 
   setOutput(value: unknown): this {
     this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, toAttributeValue(value));
+    return this;
+  }
+
+  /**
+   * The request's tool/function definitions (`gen_ai.tool.definitions`).
+   * Serialized verbatim, in whatever shape the provider request used (OpenAI
+   * nests each tool under `function`, Anthropic uses top-level
+   * `name`/`input_schema`) — no normalization, so what is recorded is exactly
+   * what the model was shown. Definitions are content, not identity: they are
+   * masked/stripped under `captureContent: false` like messages are.
+   */
+  setToolDefinitions(tools: unknown[]): this {
+    this.span.setAttribute(GEN_AI_TOOL_DEFINITIONS, toAttributeValue(tools));
     return this;
   }
 
@@ -169,6 +188,7 @@ function configure(generation: Generation, options: GenerationOptions): Generati
   if (options.reasoningLevel !== undefined) {
     generation.setAttribute(GEN_AI_REQUEST_REASONING_LEVEL, options.reasoningLevel);
   }
+  if (options.tools !== undefined) generation.setToolDefinitions(options.tools);
   if (options.input !== undefined) generation.setInput(options.input);
   return generation;
 }

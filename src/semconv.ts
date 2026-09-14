@@ -39,6 +39,12 @@ export const GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages";
 export const GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages";
 export const GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons";
 export const GEN_AI_TOOL_NAME = "gen_ai.tool.name";
+/**
+ * The request's tool/function definitions, serialized verbatim (provider
+ * shapes differ; the backend reads names and sizes from either). Content,
+ * not identity — listed in CONTENT_ATTRIBUTES below.
+ */
+export const GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions";
 export const GEN_AI_REQUEST_PREFIX = "gen_ai.request.";
 export const MCP_RESULT_TYPE = "mcp.result_type";
 
@@ -87,7 +93,7 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   // or internal URLs in parameter defaults. gen_ai.tool.name stays: it is
   // identity, not content.
   "gen_ai.tool.description",
-  "gen_ai.tool.definitions",
+  GEN_AI_TOOL_DEFINITIONS,
   "gen_ai.prompt",
   "gen_ai.completion",
   "llm.input_messages",

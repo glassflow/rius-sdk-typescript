@@ -77,6 +77,16 @@ describe("the openai entry in a pure-ESM consumer", () => {
       const reply = await client.chat.completions.create({
         model: "gpt-test",
         messages: [{ role: "user", content: "what is 2+2" }],
+        tools: [
+          {
+            type: "function" as const,
+            function: {
+              name: "get_weather",
+              description: "Get weather",
+              parameters: { type: "object", properties: { city: { type: "string" } } },
+            },
+          },
+        ],
       });
       expect(reply.choices[0]?.message?.content).toBe("4");
     } finally {
@@ -90,6 +100,10 @@ describe("the openai entry in a pure-ESM consumer", () => {
     expect(attributes["llm.model_name"]).toBe("gpt-test");
     expect(attributes["llm.input_messages.0.message.content"]).toBe("what is 2+2");
     expect(attributes["llm.token_count.prompt"]).toBe(5);
+    // Tool-definition contract: the backend's context attribution reads the
+    // request's tool definitions from the indexed llm.tools family.
+    const toolSchema = JSON.parse(String(attributes["llm.tools.0.tool.json_schema"]));
+    expect(toolSchema.function?.name).toBe("get_weather");
   });
 });
 
