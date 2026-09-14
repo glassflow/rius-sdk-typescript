@@ -1,6 +1,6 @@
 {
   "name": "@glassflow-ai/rius",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "OpenTelemetry-native tracing for AI agents and LLM applications",
   "keywords": [
     "opentelemetry",
