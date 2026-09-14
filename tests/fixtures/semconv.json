@@ -5,6 +5,7 @@
   "INPUT_VALUE": "input.value",
   "OUTPUT_VALUE": "output.value",
   "SESSION_ID": "session.id",
+  "USER_ID": "user.id",
   "WORKSPACE_ROUTE": "rius.workspace",
   "GEN_AI_OPERATION_NAME": "gen_ai.operation.name",
   "GEN_AI_PROVIDER_NAME": "gen_ai.provider.name",

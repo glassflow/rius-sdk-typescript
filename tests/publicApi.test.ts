@@ -19,6 +19,7 @@ describe("public API", () => {
         "startGeneration",
         "startSpan",
         "withSession",
+        "withUser",
         "withWorkspace",
       ].sort(),
     );

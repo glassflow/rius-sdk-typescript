@@ -9,6 +9,7 @@ export { observe } from "./observe.js";
 export type { ObserveOptions } from "./observe.js";
 export { SpanKind } from "./semconv.js";
 export { withSession } from "./session.js";
+export { withUser } from "./user.js";
 export { Observation, startAsCurrentSpan, startSpan } from "./spans.js";
 export type { SpanBody, SpanOptions } from "./spans.js";
 export { registerWorkspace, withWorkspace } from "./workspace.js";
