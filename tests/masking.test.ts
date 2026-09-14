@@ -436,3 +436,30 @@ describe("span status description", () => {
     expect(inner.seen[0].status.message).toBe("secret");
   });
 });
+
+describe("metadata.* mirrors from the Vercel transform", () => {
+  it("treats metadata.<key> as content exactly when <key> is", () => {
+    expect(isContentKey("metadata.gen_ai.system_instructions")).toBe(true);
+    expect(isContentKey("metadata.gen_ai.input.messages")).toBe(true);
+    expect(isContentKey("metadata.llm.input_messages.0.message.content")).toBe(true);
+    expect(isContentKey("metadata.gen_ai.tool.name")).toBe(false);
+    expect(isContentKey("metadata.ai.model.id")).toBe(false);
+  });
+
+  it("strips the mirrored copy under captureContent: false", () => {
+    const inner = new Capture();
+    const exporter = new MaskingSpanExporter(inner, { captureContent: false });
+    exporter.export(
+      [
+        span({
+          "metadata.gen_ai.system_instructions": "SECRET",
+          "metadata.gen_ai.tool.name": "get_weather",
+        }),
+      ],
+      () => {},
+    );
+    const out = inner.seen[0].attributes as Record<string, unknown>;
+    expect(out["metadata.gen_ai.system_instructions"]).toBeUndefined();
+    expect(out["metadata.gen_ai.tool.name"]).toBe("get_weather");
+  });
+});

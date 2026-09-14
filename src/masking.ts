@@ -11,10 +11,19 @@ import {
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 
+/** The namespace the OpenInference Vercel transform mirrors unknown attributes into. */
+const METADATA_PREFIX = "metadata.";
+
 export function isContentKey(key: string): boolean {
   if (CONTENT_ATTRIBUTES.has(key)) return true;
   if (CONTENT_ATTRIBUTE_PREFIXES.some((p) => key.startsWith(p))) return true;
-  return CONTENT_ATTRIBUTE_SUFFIXES.some((s) => key.endsWith(s));
+  if (CONTENT_ATTRIBUTE_SUFFIXES.some((s) => key.endsWith(s))) return true;
+  // The Vercel transform copies attributes it does not translate under
+  // `metadata.<original key>`, so a content key comes through twice; the
+  // mirrored copy is content exactly when the original is. Found by the
+  // sentinel test: metadata.gen_ai.system_instructions carried the system
+  // prompt past captureContent: false.
+  return key.startsWith(METADATA_PREFIX) && isContentKey(key.slice(METADATA_PREFIX.length));
 }
 
 /**

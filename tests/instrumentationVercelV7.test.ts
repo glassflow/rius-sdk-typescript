@@ -117,3 +117,136 @@ describeV7("the vercel-ai entry on ai v7", () => {
     await second.shutdown();
   });
 });
+
+/**
+ * A stub that answers the first request with a tool call and every later one
+ * with text, so `generateText` executes the tool: that is the path that emits
+ * gen_ai.tool.call.arguments / gen_ai.tool.call.result, the keys the 2026-09-14
+ * review found leaking past captureContent: false.
+ */
+async function toolCallingStub(
+  toolArguments: string,
+  finalText: string,
+): Promise<{ url: string; close: () => void }> {
+  let calls = 0;
+  const server = http.createServer((request, response) => {
+    request.on("data", () => {});
+    request.on("end", () => {
+      calls += 1;
+      const first = calls === 1;
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({
+          ...OPENAI_REPLY,
+          choices: [
+            first
+              ? {
+                  index: 0,
+                  finish_reason: "tool_calls",
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: "call_1",
+                        type: "function",
+                        function: { name: "get_weather", arguments: toolArguments },
+                      },
+                    ],
+                  },
+                }
+              : {
+                  index: 0,
+                  finish_reason: "stop",
+                  message: { role: "assistant", content: finalText },
+                },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("test setup: no port");
+  return { url: `http://127.0.0.1:${address.port}/v1`, close: () => server.close() };
+}
+
+/** Every string an exported span carries: attributes, event attributes, name, status. */
+function exportedText(spans: ReturnType<InMemorySpanExporter["getFinishedSpans"]>): string {
+  return JSON.stringify(
+    spans.map((s) => ({
+      name: s.name,
+      status: s.status,
+      attributes: s.attributes,
+      events: s.events.map((e) => ({ name: e.name, attributes: e.attributes })),
+    })),
+  );
+}
+
+describeV7("the privacy boundary on the ai v7 path", () => {
+  const SENTINEL = "SENTINEL-7f3a9c";
+
+  afterEach(() => {
+    (globalThis as { AI_SDK_TELEMETRY_INTEGRATIONS?: unknown[] }).AI_SDK_TELEMETRY_INTEGRATIONS =
+      [];
+  });
+
+  /** Runs one tool-calling generateText with the sentinel in the system prompt and the tool I/O. */
+  async function runWithSentinel(options: Parameters<typeof init>[0]) {
+    const { generateText, tool, jsonSchema, stepCountIs } = await import("ai");
+    const { createOpenAI } = await import("@ai-sdk/openai");
+    const inner = new InMemorySpanExporter();
+    const client = init({ spanExporter: inner, heartbeatTransport: async () => {}, ...options });
+    expect(await client.ready).toContain("vercel-ai");
+    const stub = await toolCallingStub(
+      JSON.stringify({ city: `${SENTINEL} city` }),
+      `${SENTINEL} answer`,
+    );
+    try {
+      const openai = createOpenAI({ apiKey: "not-a-real-key", baseURL: stub.url });
+      await generateText({
+        model: openai.chat("gpt-test"),
+        system: `${SENTINEL} system prompt`,
+        prompt: `${SENTINEL} user prompt`,
+        stopWhen: stepCountIs(2),
+        tools: {
+          get_weather: tool({
+            description: `${SENTINEL} tool description`,
+            inputSchema: jsonSchema({ type: "object", properties: { city: { type: "string" } } }),
+            execute: async () => ({ temperature: 21, note: `${SENTINEL} tool result` }),
+          }),
+        },
+      });
+      await client.flush();
+    } finally {
+      stub.close();
+    }
+    const spans = inner.getFinishedSpans();
+    await client.shutdown();
+    return spans;
+  }
+
+  it("the sentinel reaches the exporter with content capture on (the test is live)", async () => {
+    const spans = await runWithSentinel({});
+    const text = exportedText(spans);
+    expect(text).toContain(`${SENTINEL} system prompt`);
+    expect(text).toContain(`${SENTINEL} city`);
+    expect(text).toContain(`${SENTINEL} tool result`);
+  });
+
+  it("never leaves the process with captureContent: false", async () => {
+    const spans = await runWithSentinel({ captureContent: false });
+    expect(spans.length).toBeGreaterThan(0);
+    const text = exportedText(spans);
+    expect(text).not.toContain(SENTINEL);
+    // Identity still flows: the tool name and taxonomy survive the strip.
+    const toolSpan = spans.find((s) => s.attributes["gen_ai.tool.name"] === "get_weather");
+    expect(toolSpan).toBeDefined();
+  });
+
+  it("is replaced everywhere by a mask", async () => {
+    const spans = await runWithSentinel({ mask: () => "[REDACTED]" });
+    expect(spans.length).toBeGreaterThan(0);
+    expect(exportedText(spans)).not.toContain(SENTINEL);
+  });
+});
