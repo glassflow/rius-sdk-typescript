@@ -148,6 +148,9 @@ export class HeartbeatSender {
 
   /** Starts pinging: an immediate first ping, then every `intervalMs`. */
   start(): void {
+    // Idempotent, like stop(): a second start() used to overwrite the timer
+    // handle and leak the first interval past stop().
+    if (this.timer !== undefined) return;
     void this.ping(this.pingTimeoutMs, false);
     const timer = setInterval(() => void this.ping(this.pingTimeoutMs, false), this.intervalMs);
     // A live timer would otherwise hold the process open; a heartbeat is not

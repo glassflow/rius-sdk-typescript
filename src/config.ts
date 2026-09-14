@@ -98,8 +98,17 @@ function seconds(raw: string | undefined, fallback: number): number {
   return parsed;
 }
 
-/** Clamps a value to [min, max], warning (but never throwing) when it's out of range. */
-function clamp(name: string, value: number, min: number, max: number): number {
+/**
+ * Clamps a value to [min, max], warning (but never throwing) when it's out of
+ * range. NaN and the infinities compare false against both bounds, so they
+ * fell through the clamp untouched: `setInterval(fn, NaN)` fires every ~1 ms
+ * and `setTimeout(fn, NaN)` fires immediately. Non-finite means "unset".
+ */
+function clamp(name: string, value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    console.warn(`[rius] ${name}=${value} is not a finite number; using ${fallback}.`);
+    return fallback;
+  }
   if (value >= min && value <= max) return value;
   const clamped = Math.min(Math.max(value, min), max);
   console.warn(`[rius] ${name}=${value} is outside [${min}, ${max}]; clamped to ${clamped}.`);
@@ -119,12 +128,14 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     options.heartbeatInterval ?? seconds(env.RIUS_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_INTERVAL),
     HEARTBEAT_INTERVAL_MIN,
     HEARTBEAT_INTERVAL_MAX,
+    DEFAULT_HEARTBEAT_INTERVAL,
   );
   const partialSpansDelaySeconds = clamp(
     "partialSpansDelay",
     options.partialSpansDelay ?? seconds(env.RIUS_PARTIAL_SPANS_DELAY, DEFAULT_PARTIAL_SPANS_DELAY),
     PARTIAL_SPANS_DELAY_MIN,
     PARTIAL_SPANS_DELAY_MAX,
+    DEFAULT_PARTIAL_SPANS_DELAY,
   );
 
   return {

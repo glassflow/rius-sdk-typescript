@@ -25,6 +25,13 @@ export interface SpanOptions {
   attributes?: Record<string, string>;
 }
 
+// `Symbol.dispose` is undefined on Node 18.0 to 18.17 (added in 18.18 / 20.4)
+// and `engines` allows >=18. Without it the method below would be keyed
+// "undefined" and `using` would throw "not disposable". The TS helper falls
+// back to this same well-known symbol, so installing it here keeps both sides
+// agreeing; on newer Node it is already defined and this is a no-op.
+(Symbol as { dispose?: symbol }).dispose ??= Symbol.for("Symbol.dispose");
+
 /** A handle over a span. Chainable setters; `end()` is idempotent. */
 export class Observation {
   protected ended = false;

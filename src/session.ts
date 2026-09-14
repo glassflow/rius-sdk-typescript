@@ -20,7 +20,7 @@
  * way the active span does.
  */
 import { randomUUID } from "node:crypto";
-import { type Context, context as apiContext, createContextKey } from "@opentelemetry/api";
+import { type Context, context as apiContext, createContextKey, trace } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { SESSION_ID } from "./semconv.js";
 
@@ -71,7 +71,16 @@ export class SessionSpanProcessor implements SpanProcessor {
 
   onStart(span: Span, parentContext: Context): void {
     const value = parentContext.getValue(SESSION_KEY);
-    const sessionId = typeof value === "string" ? value : this.defaultSessionId;
+    // Scope, then the parent span's own stamp (a callback that lost the
+    // async context and re-parented by hand), then the init-level default.
+    const parent = trace.getSpan(parentContext) as unknown as ReadableSpan | undefined;
+    const inherited = parent?.attributes?.[SESSION_ID];
+    const sessionId =
+      typeof value === "string"
+        ? value
+        : typeof inherited === "string"
+          ? inherited
+          : this.defaultSessionId;
     if (sessionId !== undefined) span.setAttribute(SESSION_ID, sessionId);
   }
 

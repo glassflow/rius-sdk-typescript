@@ -68,17 +68,29 @@ export function withWorkspace<T>(alias: string, fn: (alias: string) => T): T {
  * must route to the same workspace its final span will.
  */
 export class WorkspaceSpanProcessor implements SpanProcessor {
+  /** Straddles already warned about, as "parentAlias->alias"; one warning each, not one per span. */
+  private readonly warnedStraddles = new Set<string>();
+
   onStart(span: Span, parentContext: Context): void {
-    const alias = parentContext.getValue(WORKSPACE_KEY);
-    if (typeof alias !== "string") return;
     const parent = trace.getSpan(parentContext);
     const parentAlias = (parent as unknown as ReadableSpan | undefined)?.attributes?.[
       WORKSPACE_ROUTE
     ];
+    const scoped = parentContext.getValue(WORKSPACE_KEY);
+    // The scope wins; failing that, the parent span's stamp. A callback that
+    // lost the async context (EventEmitter, stream) and re-parented by hand
+    // used to fall to the default destination and split the trace silently,
+    // the one outcome this processor exists to prevent.
+    const alias = typeof scoped === "string" ? scoped : parentAlias;
+    if (typeof alias !== "string") return;
     if (parentAlias !== undefined && parentAlias !== alias) {
-      console.warn(
-        `[rius] span "${(span as unknown as ReadableSpan).name}" starts under workspace "${alias}" but its parent is stamped "${String(parentAlias)}"; a trace cannot straddle two workspaces (the backend derives the workspace from the API key). Switch workspaces at request boundaries, before the root span starts.`,
-      );
+      const straddle = `${String(parentAlias)}->${alias}`;
+      if (!this.warnedStraddles.has(straddle)) {
+        this.warnedStraddles.add(straddle);
+        console.warn(
+          `[rius] span "${(span as unknown as ReadableSpan).name}" starts under workspace "${alias}" but its parent is stamped "${String(parentAlias)}"; a trace cannot straddle two workspaces (the backend derives the workspace from the API key). Switch workspaces at request boundaries, before the root span starts. Further spans of this straddle are not reported.`,
+        );
+      }
     }
     span.setAttribute(WORKSPACE_ROUTE, alias);
   }
