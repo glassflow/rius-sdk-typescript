@@ -48,7 +48,26 @@ export class Observation {
     return this;
   }
 
+  /**
+   * Set an arbitrary attribute. Primitives and homogeneous primitive arrays
+   * are passed through as the OTel values they are; objects are JSON-encoded
+   * and bounded; `undefined` and `null` set nothing, since "no value" is not
+   * an empty string.
+   */
   setAttribute(key: string, value: unknown): this {
+    if (value === undefined || value === null) return this;
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      this.span.setAttribute(key, value as string[]);
+      return this;
+    }
+    if (Array.isArray(value) && value.every((v) => typeof v === "number")) {
+      this.span.setAttribute(key, value as number[]);
+      return this;
+    }
+    if (Array.isArray(value) && value.every((v) => typeof v === "boolean")) {
+      this.span.setAttribute(key, value as boolean[]);
+      return this;
+    }
     this.span.setAttribute(key, toAttributeValue(value));
     return this;
   }
@@ -86,10 +105,6 @@ function configure(observation: Observation, options: SpanOptions): Observation 
 }
 
 /**
- * Create a span and return a handle. You MUST call end() (or use `using`).
- * The span is parented to whatever is current but does NOT become current.
- */
-/**
  * Identity attributes at CREATION so pending snapshots (onStart) carry them.
  * The user id is set here as well as via the `withUser` scope so it reaches
  * the span even on a provider without `UserSpanProcessor` installed.
@@ -100,6 +115,10 @@ function creationAttributes(options: SpanOptions): Record<string, string> {
   return attributes;
 }
 
+/**
+ * Create a span and return a handle. You MUST call end() (or use `using`).
+ * The span is parented to whatever is current but does NOT become current.
+ */
 export function startSpan(name: string, options: SpanOptions = {}): Observation {
   const span = getTracer().startSpan(name, { attributes: creationAttributes(options) });
   return configure(new Observation(span), options);
@@ -131,19 +150,42 @@ export function startAsCurrentSpan<T>(
       ? [{} as SpanOptions, optionsOrFn]
       : [optionsOrFn, maybeFn as SpanBody<T>];
 
+  return runActive(
+    name,
+    creationAttributes(options),
+    options.userId,
+    (span) => configure(new Observation(span), options),
+    fn,
+  );
+}
+
+/**
+ * The one scoped-span runner, shared with the generation helpers: start the
+ * span active with `attributes`, hand `makeHandle(span)` to `fn`, record a
+ * throw as an exception and rethrow, always end. `userId` is sugar for
+ * `withUser` around the whole thing, so children opened inside inherit it
+ * through UserSpanProcessor while this span gets it at creation.
+ *
+ * @internal Not re-exported from the package entry point.
+ */
+export function runActive<H extends Observation, T>(
+  name: string,
+  attributes: Record<string, string>,
+  userId: string | undefined,
+  makeHandle: (span: Span) => H,
+  fn: (handle: H) => Promise<T> | T,
+): Promise<T> {
   const run = () =>
-    getTracer().startActiveSpan(name, { attributes: creationAttributes(options) }, async (span) => {
-      const observation = configure(new Observation(span), options);
+    getTracer().startActiveSpan(name, { attributes }, async (span) => {
+      const handle = makeHandle(span);
       try {
-        return await fn(observation);
+        return await fn(handle);
       } catch (error) {
-        observation.recordException(error);
+        handle.recordException(error);
         throw error;
       } finally {
-        observation.end();
+        handle.end();
       }
     });
-  // userId is sugar for withUser around the block: children opened inside
-  // inherit it through UserSpanProcessor, this span at creation.
-  return options.userId !== undefined ? withUser(options.userId, run) : run();
+  return userId !== undefined ? withUser(userId, run) : run();
 }

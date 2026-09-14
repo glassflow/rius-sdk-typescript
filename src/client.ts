@@ -196,9 +196,10 @@ let globalClient: RiusClient | undefined;
  * {@link RiusClient.ready} if instrumentation must be attached before your
  * first span.
  *
- * The SDK installs no process exit hook: short-lived processes must call
+ * The SDK installs no exit hook for SPANS: short-lived processes must call
  * {@link RiusClient.flush} before exiting or spans still in the batch queue
- * are lost.
+ * are lost. (The heartbeat does register a `beforeExit` listener, only to
+ * send its final `stopped` ping; it flushes nothing.)
  */
 export function init(options: InitOptions = {}): RiusClient {
   if (globalClient !== undefined) {
@@ -315,7 +316,12 @@ export function init(options: InitOptions = {}): RiusClient {
   // tracker rides the delegating processor so payloads can carry the
   // currently-open root trace ids; disabled kills it too.
   let heartbeat: { sender: HeartbeatSender; beforeExitHandler: () => void } | undefined;
-  if (config.heartbeat && !config.disabled) {
+  // Without an API key the managed endpoint rejects every ping with 401, so
+  // the default transport would only produce a warn-once and 15-second
+  // failures. An injected transport (tests, own collectors) knows better.
+  const heartbeatCanAuthenticate =
+    config.apiKey !== undefined || options.heartbeatTransport !== undefined;
+  if (config.heartbeat && !config.disabled && heartbeatCanAuthenticate) {
     const tracker = new OpenRootSpanTracker();
     processors.add(tracker);
     const sender = new HeartbeatSender({

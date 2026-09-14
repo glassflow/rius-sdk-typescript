@@ -130,3 +130,22 @@ describe("startAsCurrentSpan", () => {
     expect(span?.ended).toBe(true);
   });
 });
+
+describe("Observation.setAttribute value handling", () => {
+  it("passes primitive arrays through as OTel arrays and skips undefined/null", async () => {
+    const obs = startSpan("attrs");
+    obs.setAttribute("tags", ["a", "b"]);
+    obs.setAttribute("nums", [1, 2]);
+    obs.setAttribute("nothing", undefined);
+    obs.setAttribute("nil", null);
+    obs.setAttribute("obj", { k: "v" });
+    obs.end();
+    await client.flush();
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(attrs.tags).toEqual(["a", "b"]);
+    expect(attrs.nums).toEqual([1, 2]);
+    expect("nothing" in attrs).toBe(false);
+    expect("nil" in attrs).toBe(false);
+    expect(attrs.obj).toBe('{"k":"v"}');
+  });
+});

@@ -10,8 +10,10 @@ export interface ObserveOptions {
 }
 
 /**
- * Wrap a function so each call becomes a span. Returns a function with the
- * same signature, so call sites and types are unchanged.
+ * Wrap a function so each call becomes a span. The returned function takes
+ * the same parameters and always returns a Promise of the original's result
+ * (a synchronous function becomes asynchronous), so call sites need an
+ * `await` but no other change.
  *
  * A wrapper rather than a decorator on purpose: TypeScript decorators apply
  * only to class members, and most agent code is plain functions.
