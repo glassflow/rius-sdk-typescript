@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Tracer, trace } from "@opentelemetry/api";
+import { type Tracer, context, propagation, trace } from "@opentelemetry/api";
 // The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
 // opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
 // protobuf and refuses a JSON export with 415 Unsupported Media Type, so the
@@ -91,6 +91,8 @@ interface ClientParts {
   processors: DelegatingSpanProcessor;
   health?: ExportOutcomeExporter;
   ready: Promise<string[]>;
+  /** Disable functions for the instrumentations `ready` enabled; run on shutdown. */
+  teardown: Array<() => void>;
   heartbeat?: { sender: HeartbeatSender; beforeExitHandler: () => void };
 }
 
@@ -112,6 +114,7 @@ let createClient!: (parts: ClientParts) => RiusClient;
 export class RiusClient {
   private readonly provider: NodeTracerProvider;
   private readonly health?: ExportOutcomeExporter;
+  private readonly teardown: Array<() => void>;
 
   /** Resolves with the names of the auto-instrumentations that attached. */
   readonly ready: Promise<string[]>;
@@ -120,6 +123,7 @@ export class RiusClient {
     this.provider = parts.provider;
     this.health = parts.health;
     this.ready = parts.ready;
+    this.teardown = parts.teardown;
     sinks.set(this, parts.processors);
     if (parts.heartbeat) heartbeats.set(this, parts.heartbeat);
   }
@@ -150,13 +154,30 @@ export class RiusClient {
       process.removeListener("beforeExit", heartbeat.beforeExitHandler);
       await heartbeat.sender.stop();
     }
+    // Instrumentations first, so a later init() re-patches against its own
+    // provider instead of finding the double-patch guard already set. Waits
+    // for `ready`, since the enabling may still be in flight; its rejections
+    // were already turned into an empty list.
+    await this.ready;
+    for (const disable of this.teardown.splice(0)) {
+      try {
+        disable();
+      } catch {
+        // A patch that cannot be undone must not block the shutdown.
+      }
+    }
     try {
       await this.provider.shutdown();
     } finally {
       if (globalClient === this) {
         globalClient = undefined;
         setGlobalRouting(undefined);
+        // All three globals provider.register() claimed, not just the tracer:
+        // leaving context and propagation registered makes the next init()'s
+        // register() log duplicate-registration diag errors.
         trace.disable();
+        context.disable();
+        propagation.disable();
       }
     }
   }
@@ -274,9 +295,10 @@ export function init(options: InitOptions = {}): RiusClient {
   // this SDK out of the picture must be left with an unpatched process, so
   // `ready` resolves empty rather than advertising integrations that are not
   // recording anything.
+  const teardown: Array<() => void> = [];
   const ready = config.disabled
     ? Promise.resolve<string[]>([])
-    : enableInstrumentations(processors, provider).catch(() => [] as string[]);
+    : enableInstrumentations(processors, provider, undefined, teardown);
 
   // Registered even when disabled: a provider whose only processor has no
   // delegates costs nothing, and it keeps getTracer() returning a real tracer,
@@ -311,7 +333,7 @@ export function init(options: InitOptions = {}): RiusClient {
     heartbeat = { sender, beforeExitHandler };
   }
 
-  globalClient = createClient({ provider, processors, health, ready, heartbeat });
+  globalClient = createClient({ provider, processors, health, ready, teardown, heartbeat });
   setGlobalRouting(routing);
   return globalClient;
 }
