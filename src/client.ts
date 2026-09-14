@@ -23,6 +23,7 @@ import { MaskingSpanExporter } from "./masking.js";
 import { PendingSpanProcessor } from "./pending.js";
 import { SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
+import { UserSpanProcessor } from "./user.js";
 import {
   RoutingSpanExporter,
   type WorkspaceExporterFactory,
@@ -233,6 +234,7 @@ export function init(options: InitOptions = {}): RiusClient {
     // destination the snapshot itself goes to) must be stamped first to
     // ride it.
     processors.add(new SessionSpanProcessor(config.sessionId));
+    processors.add(new UserSpanProcessor());
     if (routing !== undefined) {
       processors.add(new WorkspaceSpanProcessor());
     }

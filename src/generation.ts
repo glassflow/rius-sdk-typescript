@@ -16,10 +16,12 @@ import {
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   SpanKind,
+  USER_ID,
   kindAttributes,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 import { Observation } from "./spans.js";
+import { withUser } from "./user.js";
 
 /**
  * Options for {@link startGeneration} and {@link startAsCurrentGeneration}:
@@ -48,6 +50,11 @@ export interface GenerationOptions {
    * {@link Generation.setToolDefinitions} — verbatim, any provider shape.
    */
   tools?: unknown[];
+  /**
+   * End-user identity (`user.id`). Sugar for `withUser`: set on this span at
+   * creation and, for the scoped variant, on every span opened inside it.
+   */
+  userId?: string;
 }
 
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
@@ -176,6 +183,8 @@ function attributesFor(options: GenerationOptions): Record<string, string> {
   const attributes: Record<string, string> = { ...kindAttributes(SpanKind.LLM) };
   if (options.model !== undefined) attributes[GEN_AI_REQUEST_MODEL] = options.model;
   if (options.provider !== undefined) attributes[GEN_AI_PROVIDER_NAME] = options.provider;
+  // Identity at creation so it lands even without UserSpanProcessor installed.
+  if (options.userId !== undefined) attributes[USER_ID] = options.userId;
   return attributes;
 }
 
@@ -224,15 +233,19 @@ export function startAsCurrentGeneration<T>(
       ? [{} as GenerationOptions, optionsOrFn]
       : [optionsOrFn, maybeFn as GenerationBody<T>];
 
-  return getTracer().startActiveSpan(name, { attributes: attributesFor(options) }, async (span) => {
-    const generation = configure(new Generation(span, options.provider), options);
-    try {
-      return await fn(generation);
-    } catch (error) {
-      generation.recordException(error);
-      throw error;
-    } finally {
-      generation.end();
-    }
-  });
+  const run = () =>
+    getTracer().startActiveSpan(name, { attributes: attributesFor(options) }, async (span) => {
+      const generation = configure(new Generation(span, options.provider), options);
+      try {
+        return await fn(generation);
+      } catch (error) {
+        generation.recordException(error);
+        throw error;
+      } finally {
+        generation.end();
+      }
+    });
+  // userId is sugar for withUser around the block: children opened inside
+  // inherit it through UserSpanProcessor, this span at creation.
+  return options.userId !== undefined ? withUser(options.userId, run) : run();
 }

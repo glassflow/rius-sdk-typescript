@@ -15,6 +15,11 @@ export const OUTPUT_VALUE = "output.value";
 // the one the sink reads first; gen_ai.conversation.id is deliberately not
 // emitted alongside it, one name for one fact.
 export const SESSION_ID = "session.id";
+// The end-user identity (see user.ts). OpenInference's spelling, also what
+// Langfuse reads and what the OTel registry lists; the sink additionally
+// accepts OTel's enduser.id / enduser.pseudo.id from third-party
+// instrumentors, but this SDK emits one name for one fact.
+export const USER_ID = "user.id";
 
 // Process-local routing marker for multi-workspace export (see workspace.ts).
 // Stamped at span start so pending snapshots route too, and ALWAYS stripped
@@ -168,6 +173,9 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   // Identity, not content: a pending span must be groupable into its
   // session while still running, that is the live view's whole point.
   SESSION_ID,
+  // Same reason: a crashed run's partial spans must still be attributable
+  // to the user they served.
+  USER_ID,
   // Routing, not content: a crashed run's snapshot must land in the same
   // workspace its final span would have. Stripped at export either way.
   WORKSPACE_ROUTE,

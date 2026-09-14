@@ -1,12 +1,20 @@
 import { type Span, SpanStatusCode } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
-import { INPUT_VALUE, OUTPUT_VALUE, SpanKind, kindAttributes } from "./semconv.js";
+import { INPUT_VALUE, OUTPUT_VALUE, SpanKind, USER_ID, kindAttributes } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
+import { withUser } from "./user.js";
 
 /** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
 export interface SpanOptions {
   kind?: SpanKind;
   input?: unknown;
+  /**
+   * End-user identity (`user.id`). Sugar for `withUser`: set on this span at
+   * creation and, for the scoped variant, on every span opened inside it.
+   * To attribute a whole request, including auto-instrumented spans, prefer
+   * `withUser` around the handler.
+   */
+  userId?: string;
 }
 
 /** A handle over a span. Chainable setters; `end()` is idempotent. */
@@ -66,10 +74,19 @@ function configure(observation: Observation, options: SpanOptions): Observation 
  * Create a span and return a handle. You MUST call end() (or use `using`).
  * The span is parented to whatever is current but does NOT become current.
  */
+/**
+ * Identity attributes at CREATION so pending snapshots (onStart) carry them.
+ * The user id is set here as well as via the `withUser` scope so it reaches
+ * the span even on a provider without `UserSpanProcessor` installed.
+ */
+function creationAttributes(options: SpanOptions): Record<string, string> {
+  const attributes = kindAttributes(options.kind ?? SpanKind.CHAIN);
+  if (options.userId !== undefined) attributes[USER_ID] = options.userId;
+  return attributes;
+}
+
 export function startSpan(name: string, options: SpanOptions = {}): Observation {
-  const span = getTracer().startSpan(name, {
-    attributes: kindAttributes(options.kind ?? SpanKind.CHAIN),
-  });
+  const span = getTracer().startSpan(name, { attributes: creationAttributes(options) });
   return configure(new Observation(span), options);
 }
 
@@ -99,10 +116,8 @@ export function startAsCurrentSpan<T>(
       ? [{} as SpanOptions, optionsOrFn]
       : [optionsOrFn, maybeFn as SpanBody<T>];
 
-  return getTracer().startActiveSpan(
-    name,
-    { attributes: kindAttributes(options.kind ?? SpanKind.CHAIN) },
-    async (span) => {
+  const run = () =>
+    getTracer().startActiveSpan(name, { attributes: creationAttributes(options) }, async (span) => {
       const observation = configure(new Observation(span), options);
       try {
         return await fn(observation);
@@ -112,6 +127,8 @@ export function startAsCurrentSpan<T>(
       } finally {
         observation.end();
       }
-    },
-  );
+    });
+  // userId is sugar for withUser around the block: children opened inside
+  // inherit it through UserSpanProcessor, this span at creation.
+  return options.userId !== undefined ? withUser(options.userId, run) : run();
 }
