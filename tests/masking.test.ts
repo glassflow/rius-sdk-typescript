@@ -234,3 +234,120 @@ describe("MaskingSpanExporter events and links", () => {
     expect(inner.seen[0].attributes["gen_ai.request.model"]).toBe("gpt-4o");
   });
 });
+
+describe("wrapper tool-definition and Vercel ai.* coverage", () => {
+  // Pinned empirically against the bundled instrumentations (2026-09-14):
+  // every OpenInference path emits llm.tools.{i}.tool.json_schema, and the
+  // vercel-ai path leaves raw ai.* keys carrying full messages, response
+  // content and tool definitions.
+  it("strips llm.tools.* and the ai.* content family, keeps identity", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [
+        span({
+          "llm.tools.0.tool.json_schema": '{"name":"secret_tool"}',
+          "llm.tools": '[{"name":"secret_tool"}]',
+          "ai.prompt": '{"prompt":"secret"}',
+          "ai.prompt.messages": '[{"role":"user","content":"secret"}]',
+          "ai.prompt.tools": '["secret schema"]',
+          "ai.response.text": "secret answer",
+          "ai.response.object": '{"secret":1}',
+          "ai.toolCall.args": '{"city":"secret"}',
+          "ai.toolCall.result": '{"weather":"secret"}',
+          "ai.toolCall.name": "get_weather",
+          "ai.response.model": "gpt-test",
+        }),
+      ],
+      () => {},
+    );
+    const attributes = inner.seen[0].attributes as Record<string, unknown>;
+    for (const key of [
+      "llm.tools.0.tool.json_schema",
+      "llm.tools",
+      "ai.prompt",
+      "ai.prompt.messages",
+      "ai.prompt.tools",
+      "ai.response.text",
+      "ai.response.object",
+      "ai.toolCall.args",
+      "ai.toolCall.result",
+    ]) {
+      expect(attributes[key], key).toBeUndefined();
+    }
+    expect(attributes["ai.toolCall.name"]).toBe("get_weather");
+    expect(attributes["ai.response.model"]).toBe("gpt-test");
+  });
+});
+
+describe("llm.invocation_parameters redaction", () => {
+  // litellm and langchain embed the request tools/functions arrays INSIDE
+  // llm.invocation_parameters; the direct openai/anthropic instrumentors do
+  // not. The key mixes identity (sampling params) with content, so exactly
+  // the tools/functions members go, and the rest survives.
+  it("removes tools and functions members, keeps sampling params", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [
+        span({
+          "llm.invocation_parameters":
+            '{"model":"gpt-test","temperature":0.2,"tools":[{"name":"secret_tool"}],"functions":[{"name":"legacy"}]}',
+        }),
+      ],
+      () => {},
+    );
+    const kept = JSON.parse(
+      String((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]),
+    );
+    expect(kept).toEqual({ model: "gpt-test", temperature: 0.2 });
+  });
+
+  it("leaves a tools-free payload byte-identical", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [span({ "llm.invocation_parameters": '{"temperature": 0.1}' })],
+      () => {},
+    );
+    expect((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]).toBe(
+      '{"temperature": 0.1}',
+    );
+  });
+
+  it("drops an unparseable payload whole (fail closed)", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [span({ "llm.invocation_parameters": "not json {" })],
+      () => {},
+    );
+    expect(
+      (inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"],
+    ).toBeUndefined();
+  });
+
+  it("redacts under a mask too: a mask declares content sensitive", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: true, mask: () => "[masked]" }).export(
+      [
+        span({
+          "llm.invocation_parameters": '{"temperature":0.2,"tools":[{"name":"secret_tool"}]}',
+        }),
+      ],
+      () => {},
+    );
+    const kept = JSON.parse(
+      String((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]),
+    );
+    expect(kept).toEqual({ temperature: 0.2 });
+  });
+
+  it("does not touch the key when no sanitization is configured", () => {
+    const inner = new Capture();
+    const raw = '{"temperature":0.2,"tools":[{"name":"tool"}]}';
+    new MaskingSpanExporter(inner, { captureContent: true }).export(
+      [span({ "llm.invocation_parameters": raw })],
+      () => {},
+    );
+    expect((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]).toBe(
+      raw,
+    );
+  });
+});

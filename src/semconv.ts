@@ -108,7 +108,28 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "mlflow.spanOutputs",
   "traceloop.entity.input",
   "traceloop.entity.output",
+  // Every bundled OpenInference instrumentation emits tool definitions as
+  // llm.tools.{i}.tool.json_schema (pinned empirically 2026-09-14); covered
+  // by prefix below, bare key listed per the bare-key rule.
+  "llm.tools",
+  // The Vercel AI SDK's own telemetry keys survive the OpenInference
+  // transform untouched, and they carry the full prompt (messages AND tool
+  // definitions), response content, and tool-call I/O. Names, ids and models
+  // (ai.toolCall.name, ai.response.model, ...) are identity and stay.
+  "ai.prompt",
+  "ai.response.text",
+  "ai.response.object",
+  "ai.toolCall.args",
+  "ai.toolCall.result",
 ]);
+
+// The request-parameters bag OpenInference instrumentations emit. Not wholly
+// content — sampling parameters are identity — but the litellm (Python) and
+// langchain instrumentations embed the request's tools/functions arrays
+// inside it, so masking redacts those members and keeps the rest (masking.ts).
+export const LLM_INVOCATION_PARAMETERS = "llm.invocation_parameters";
+/** JSON members of LLM_INVOCATION_PARAMETERS that carry tool definitions. */
+export const INVOCATION_PARAMETERS_CONTENT_MEMBERS: readonly string[] = ["tools", "functions"];
 
 export const CONTENT_ATTRIBUTE_PREFIXES: readonly string[] = [
   "llm.input_messages.",
@@ -117,6 +138,8 @@ export const CONTENT_ATTRIBUTE_PREFIXES: readonly string[] = [
   "gen_ai.completion.",
   "llm.prompts.",
   "llm.prompt_template.",
+  "llm.tools.",
+  "ai.prompt.",
 ];
 
 export const CONTENT_ATTRIBUTE_SUFFIXES: readonly string[] = [
