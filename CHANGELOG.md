@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.5.0...v0.6.0) (2026-09-14)
+
+
+### Features
+
+* **parity:** normalise messages, bound payloads at 32 KB, and carry SDK identity on the wire ([#50](https://github.com/glassflow/rius-sdk-typescript/issues/50)) ([d49a9f4](https://github.com/glassflow/rius-sdk-typescript/commit/d49a9f415c3a7254a0822be4fabae2d7a239aaa3))
+* record tool definitions in the generation API and pin instrumentor tool capture ([#40](https://github.com/glassflow/rius-sdk-typescript/issues/40)) ([74742b3](https://github.com/glassflow/rius-sdk-typescript/commit/74742b3d254dd3e3bb2c4a0f33889d348d4d03b7))
+* trace Vercel AI SDK v7 apps zero-config via registerTelemetry + @ai-sdk/otel ([#43](https://github.com/glassflow/rius-sdk-typescript/issues/43)) ([017d962](https://github.com/glassflow/rius-sdk-typescript/commit/017d962a8047a6689125dbc542bdc664b96c7335))
+* withUser stamps user.id on every span in scope ([#44](https://github.com/glassflow/rius-sdk-typescript/issues/44)) ([1c89654](https://github.com/glassflow/rius-sdk-typescript/commit/1c89654075feeea212a07170c87d228d27fedab4))
+
+
+### Bug Fixes
+
+* **client:** shutdown() undoes the instrumentation it enabled ([#46](https://github.com/glassflow/rius-sdk-typescript/issues/46)) ([f03dc53](https://github.com/glassflow/rius-sdk-typescript/commit/f03dc53c9404411e1b13cd9ab5f96ae13a2bf8af))
+* **masking:** cover the GenAI tool-call keys and run the mask over the status message ([#45](https://github.com/glassflow/rius-sdk-typescript/issues/45)) ([37fdcf0](https://github.com/glassflow/rius-sdk-typescript/commit/37fdcf0c06f2f9c38dcdde36034a4619c39aae2b))
+* robustness edge cases from the 2026-09-14 review ([#48](https://github.com/glassflow/rius-sdk-typescript/issues/48)) ([2722d5a](https://github.com/glassflow/rius-sdk-typescript/commit/2722d5ae9fc1f445a421a2c8c64dd0a1a348389e))
+* strip tool definitions and Vercel ai.* content on every sanitized path ([#42](https://github.com/glassflow/rius-sdk-typescript/issues/42)) ([51685b4](https://github.com/glassflow/rius-sdk-typescript/commit/51685b409dacbb0dea82e9614009968cbde25bfe))
+
 ## [0.5.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.4.0...v0.5.0) (2026-09-10)
 
 
