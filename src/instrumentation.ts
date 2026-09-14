@@ -35,8 +35,14 @@ export interface RegistryEntry {
    * third-party registration API themselves (the Vercel AI SDK v7's
    * `registerTelemetry`); conventional instrumentations ignore it and are
    * bound by `enableInstrumentations` instead.
+   *
+   * `teardown` collects whatever undoes the entry's side effects, so
+   * `shutdown()` can leave the process as it found it and a later `init()`
+   * patches afresh. Self-applying entries push their uninstall functions
+   * here; conventional instrumentations are disabled by
+   * `enableInstrumentations` and need not.
    */
-  load(tracerProvider?: TracerProvider): Promise<unknown | undefined>;
+  load(tracerProvider?: TracerProvider, teardown?: Array<() => void>): Promise<unknown | undefined>;
 }
 
 /**
@@ -304,7 +310,10 @@ export function mcpClientPatchable(exports: Record<string, unknown>): object | u
 // through a shut-down provider.
 let vercelTelemetryIntegration: unknown;
 
-async function registerVercelTelemetry(tracerProvider: TracerProvider): Promise<boolean> {
+async function registerVercelTelemetry(
+  tracerProvider: TracerProvider,
+  teardown?: Array<() => void>,
+): Promise<boolean> {
   const ai = await optional("ai");
   const register = ai?.registerTelemetry as ((integration: unknown) => void) | undefined;
   if (register === undefined) return false; // ai absent, or v5/v6: nothing to register
@@ -326,10 +335,21 @@ async function registerVercelTelemetry(tracerProvider: TracerProvider): Promise<
       (integration) => integration !== vercelTelemetryIntegration,
     );
   }
-  vercelTelemetryIntegration = new OpenTelemetryIntegration({
+  const integration = new OpenTelemetryIntegration({
     tracer: tracerProvider.getTracer(TRACER_NAME),
   });
-  register(vercelTelemetryIntegration);
+  vercelTelemetryIntegration = integration;
+  register(integration);
+  // The AI SDK has no unregister; removing ours from its global list is the
+  // only way a shut-down provider stops receiving spans.
+  teardown?.push(() => {
+    if (bag.AI_SDK_TELEMETRY_INTEGRATIONS) {
+      bag.AI_SDK_TELEMETRY_INTEGRATIONS = bag.AI_SDK_TELEMETRY_INTEGRATIONS.filter(
+        (candidate) => candidate !== integration,
+      );
+    }
+    if (vercelTelemetryIntegration === integration) vercelTelemetryIntegration = undefined;
+  });
   return true;
 }
 
@@ -342,13 +362,15 @@ export const REGISTRY: RegistryEntry[] = [
     // transform has to run before the exporting processor sees the span or the
     // attributes it added would never be sanitised.
     insert: "first",
-    async load(tracerProvider?: TracerProvider) {
+    async load(tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       // ai v7: span creation itself must be registered (see
       // registerVercelTelemetry above). Done before the transform lookup, so a
       // v7 app without @arizeai/openinference-vercel is still traced — its
       // spans are GenAI-native and need no translation.
       const registered =
-        tracerProvider === undefined ? false : await registerVercelTelemetry(tracerProvider);
+        tracerProvider === undefined
+          ? false
+          : await registerVercelTelemetry(tracerProvider, teardown);
 
       // Deliberately NOT the package's own OpenInferenceBatchSpanProcessor /
       // OpenInferenceSimpleSpanProcessor: both require an exporter and export
@@ -436,12 +458,18 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "mcp",
     kind: "self-applying",
-    async load() {
+    async load(_tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       const mod = await optional("@modelcontextprotocol/sdk/client/index.js");
       const ClientClass = mod?.Client as McpClientLike | undefined;
       if (ClientClass === undefined) return undefined;
       const { instrumentMcpClient } = await import("./instrumentationMcp.js");
-      instrumentMcpClient(ClientClass);
+      // Both patches hand back an uninstall; shutdown() runs them so the
+      // prototype is the SDK's own again and the next init() re-patches.
+      // Patch first, push second: `teardown?.push(patch())` would skip the
+      // patch itself whenever no collector is passed, optional chaining
+      // short-circuits the arguments too.
+      const uninstallEsm = instrumentMcpClient(ClientClass);
+      teardown?.push(uninstallEsm);
       // The dynamic import above resolves the ESM build, but the MCP SDK
       // dual-builds: a CJS consumer's require() returns a DIFFERENT Client
       // class, whose tool calls would go unobserved while ready still
@@ -453,7 +481,10 @@ export const REGISTRY: RegistryEntry[] = [
       const cjs = cachedCjsExports("@modelcontextprotocol/sdk", mcpClientPatchable) as
         | { Client: McpClientLike }
         | undefined;
-      if (cjs !== undefined) instrumentMcpClient(cjs.Client);
+      if (cjs !== undefined) {
+        const uninstallCjs = instrumentMcpClient(cjs.Client);
+        teardown?.push(uninstallCjs);
+      }
       // The patch already ran; the truthy return only tells the caller the
       // package was present, there is nothing further to attach.
       return true;
@@ -471,23 +502,30 @@ export async function enableInstrumentations(
   sink: ProcessorSink,
   tracerProvider: TracerProvider,
   names?: string[],
+  teardown?: Array<() => void>,
 ): Promise<string[]> {
   const wanted = names ? REGISTRY.filter((e) => names.includes(e.name)) : REGISTRY;
   const enabled: string[] = [];
 
   for (const entry of wanted) {
     try {
-      const loaded = await entry.load(tracerProvider);
+      const loaded = await entry.load(tracerProvider, teardown);
       if (loaded === undefined) continue;
 
       if (entry.kind === "processor") {
         if (entry.insert === "first") sink.addFirst(loaded as SpanProcessor);
         else sink.add(loaded as SpanProcessor);
       } else if (entry.kind === "instrumentation") {
-        registerInstrumentations({
+        // The disable function is what makes a later init() work: the
+        // OpenInference instrumentations guard against double patching, so
+        // unless shutdown() disables this one, its patches stay bound to the
+        // tracer it was enabled with and the next client records nothing
+        // from the provider SDKs while `ready` still names them.
+        const disable = registerInstrumentations({
           instrumentations: [loaded as Instrumentation],
           tracerProvider,
         });
+        teardown?.push(disable);
       }
       // "self-applying" entries already took effect inside load(); there is
       // nothing further to attach.
