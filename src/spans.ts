@@ -15,6 +15,14 @@ export interface SpanOptions {
    * `withUser` around the handler.
    */
   userId?: string;
+  /**
+   * Identity attributes to set at span CREATION rather than after it. Pending
+   * snapshots are built at start, so anything a caller would otherwise
+   * `setAttribute` first thing (a tool name, say) belongs here to reach them.
+   * Content never does: it is not known at start and would bypass masking's
+   * assumptions about where content lives.
+   */
+  attributes?: Record<string, string>;
 }
 
 /** A handle over a span. Chainable setters; `end()` is idempotent. */
@@ -80,7 +88,7 @@ function configure(observation: Observation, options: SpanOptions): Observation 
  * the span even on a provider without `UserSpanProcessor` installed.
  */
 function creationAttributes(options: SpanOptions): Record<string, string> {
-  const attributes = kindAttributes(options.kind ?? SpanKind.CHAIN);
+  const attributes = { ...kindAttributes(options.kind ?? SpanKind.CHAIN), ...options.attributes };
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;
   return attributes;
 }

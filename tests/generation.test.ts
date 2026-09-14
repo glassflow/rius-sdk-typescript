@@ -31,10 +31,13 @@ describe("generations", () => {
     expect(span.attributes["openinference.span.kind"]).toBe("LLM");
     expect(span.attributes["gen_ai.operation.name"]).toBe("chat");
     expect(span.attributes["gen_ai.request.model"]).toBe("gpt-4o");
-    expect(span.attributes["gen_ai.input.messages"]).toBe('[{"role":"user","content":"hi"}]');
-    expect(span.attributes["gen_ai.output.messages"]).toBe(
-      '[{"role":"assistant","content":"hello"}]',
-    );
+    // Normalised to the GenAI {role, parts} shape, as the Python SDK writes it.
+    expect(JSON.parse(span.attributes["gen_ai.input.messages"] as string)).toEqual([
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+    ]);
+    expect(JSON.parse(span.attributes["gen_ai.output.messages"] as string)).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "hello" }] },
+    ]);
     expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(42);
     expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(17);
   });

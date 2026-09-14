@@ -1,6 +1,34 @@
 import { SpanStatusCode } from "@opentelemetry/api";
-import { GEN_AI_TOOL_NAME, MCP_RESULT_TYPE, SpanKind } from "./semconv.js";
+import { GEN_AI_TOOL_NAME, MCP_RESULT_TYPE, OUTPUT_VALUE, SpanKind } from "./semconv.js";
+import { toAttributeValue, truncate } from "./serde.js";
 import { type Observation, startAsCurrentSpan } from "./spans.js";
+
+/**
+ * Best-effort rendering of a CallToolResult as `output.value`, matching the
+ * Python SDK's `_serialize_result`: structured content when present (either
+ * spelling, mcp 2.x snake_case or 1.x camelCase), else a lone text block raw
+ * (it usually IS the answer, bounded like every attribute), else the list of
+ * text blocks, else the whole result.
+ */
+function serializeResult(result: unknown): string | number | boolean {
+  if (typeof result !== "object" || result === null) return toAttributeValue(result);
+  const record = result as Record<string, unknown>;
+  const structured = record.structured_content ?? record.structuredContent;
+  if (structured !== undefined && structured !== null) return toAttributeValue(structured);
+  const content = record.content;
+  if (Array.isArray(content)) {
+    const texts = content
+      .map((block) =>
+        typeof block === "object" && block !== null
+          ? (block as { text?: unknown }).text
+          : undefined,
+      )
+      .filter((text): text is string => typeof text === "string");
+    if (texts.length === 1) return truncate(texts[0]);
+    if (texts.length > 1) return toAttributeValue(texts);
+  }
+  return toAttributeValue(result);
+}
 
 /** The interim result type of a tools/call round that is asking for input. */
 const INPUT_REQUIRED = "input_required";
@@ -39,7 +67,7 @@ function recordResult(observation: Observation, result: unknown): void {
     observation.setAttribute(MCP_RESULT_TYPE, INPUT_REQUIRED);
     return;
   }
-  observation.setOutput(result);
+  observation.setAttribute(OUTPUT_VALUE, serializeResult(result));
   // The protocol reports tool failures as a normal result carrying an error
   // flag, so a resolved call can still be a failure. The output above is kept:
   // the error content is exactly what a debugging user needs to see. Status
@@ -104,9 +132,14 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
     // dashboards and saved searches split by SDK.
     return startAsCurrentSpan(
       `execute_tool ${params.name}`,
-      { kind: SpanKind.TOOL, input: params.arguments },
+      // Tool name at CREATION: pending snapshots are built at start, so an
+      // attribute set inside the callback never reaches them.
+      {
+        kind: SpanKind.TOOL,
+        input: params.arguments,
+        attributes: { [GEN_AI_TOOL_NAME]: params.name },
+      },
       async (observation) => {
-        observation.setAttribute(GEN_AI_TOOL_NAME, params.name);
         const result = await original.call(this, params, ...rest);
         recordResult(observation, result);
         return result;

@@ -1,6 +1,6 @@
-import { createRequire } from "node:module";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { SDK_VERSION } from "./version.js";
 
 /**
  * Agent-lifetime heartbeat sender (payload v1).
@@ -33,20 +33,6 @@ const DEFAULT_PING_TIMEOUT_MS = 3000;
 // tighter budget than regular pings: a missed stopped ping just reports as
 // gone instead of stopped, which is acceptable.
 const DEFAULT_FINAL_PING_TIMEOUT_MS = 1000;
-
-/**
- * Resolved once at module load, the same way the OTLP exporter's user-agent
- * reads its own version: `package.json` is one directory up from both
- * `src/heartbeat.ts` (during tests) and the bundled `dist/*.js` (at runtime).
- */
-const SDK_VERSION: string = (() => {
-  try {
-    const pkg = createRequire(import.meta.url)("../package.json") as { version?: string };
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
 
 /**
  * Tracks trace ids of currently-open root spans.
