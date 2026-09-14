@@ -24,6 +24,7 @@ import { PendingSpanProcessor } from "./pending.js";
 import { SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
 import { UserSpanProcessor } from "./user.js";
+import { SDK_VERSION } from "./version.js";
 import {
   RoutingSpanExporter,
   type WorkspaceExporterFactory,
@@ -273,9 +274,13 @@ export function init(options: InitOptions = {}): RiusClient {
   // init() themselves for exact per-worker span identity.
   const instanceId = randomUUID();
   const provider = new NodeTracerProvider({
+    // telemetry.sdk.* is reserved for the OTel SDK itself; we identify as a
+    // distribution via telemetry.distro.*, the same two keys Python stamps.
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: config.serviceName,
       [SERVICE_INSTANCE_ID]: instanceId,
+      "telemetry.distro.name": "glassflow-rius",
+      "telemetry.distro.version": SDK_VERSION,
     }),
     // Always ParentBased, with no AlwaysOn shortcut at rate 1. They are not
     // equivalent: ParentBased honours a remote UNSAMPLED parent and drops,
@@ -340,5 +345,5 @@ export function init(options: InitOptions = {}): RiusClient {
 
 /** The SDK tracer. Scope name is wire-visible; do not parameterize it. */
 export function getTracer(): Tracer {
-  return trace.getTracer(TRACER_NAME);
+  return trace.getTracer(TRACER_NAME, SDK_VERSION);
 }

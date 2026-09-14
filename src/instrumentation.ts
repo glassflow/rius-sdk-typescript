@@ -5,6 +5,7 @@ import { type Instrumentation, registerInstrumentations } from "@opentelemetry/i
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { McpClientLike } from "./instrumentationMcp.js";
 import { TRACER_NAME } from "./semconv.js";
+import { SDK_VERSION } from "./version.js";
 
 /**
  * `"self-applying"` is for an entry whose `load()` has already taken full
@@ -336,7 +337,7 @@ async function registerVercelTelemetry(
     );
   }
   const integration = new OpenTelemetryIntegration({
-    tracer: tracerProvider.getTracer(TRACER_NAME),
+    tracer: tracerProvider.getTracer(TRACER_NAME, SDK_VERSION),
   });
   vercelTelemetryIntegration = integration;
   register(integration);

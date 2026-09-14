@@ -1,7 +1,9 @@
 import { getTracer } from "./client.js";
+import { serializeMessages } from "./messages.js";
 import {
   GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_INPUT_MESSAGES,
+  GEN_AI_OPERATION_NAME,
   GEN_AI_OUTPUT_MESSAGES,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
@@ -55,6 +57,12 @@ export interface GenerationOptions {
    * creation and, for the scoped variant, on every span opened inside it.
    */
   userId?: string;
+  /**
+   * Operation name (`gen_ai.operation.name`); default `"chat"`. Set it for
+   * `text_completion`, `embeddings` or `generate_content` calls, as the
+   * Python SDK's `operation=` allows.
+   */
+  operation?: string;
 }
 
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
@@ -72,13 +80,20 @@ export class Generation extends Observation {
     super(span);
   }
 
+  /**
+   * Record the request messages (`gen_ai.input.messages`), normalised to the
+   * GenAI `{role, parts}` shape like the Python SDK does: bare strings, OpenAI
+   * dicts (including `tool_calls` and tool responses) and multimodal content
+   * lists are all accepted. Bare strings default to the `user` role.
+   */
   setInput(value: unknown): this {
-    this.span.setAttribute(GEN_AI_INPUT_MESSAGES, toAttributeValue(value));
+    this.span.setAttribute(GEN_AI_INPUT_MESSAGES, serializeMessages(value, "user"));
     return this;
   }
 
+  /** Record the response messages (`gen_ai.output.messages`); bare strings default to `assistant`. */
   setOutput(value: unknown): this {
-    this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, toAttributeValue(value));
+    this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, serializeMessages(value, "assistant"));
     return this;
   }
 
@@ -181,6 +196,7 @@ export class Generation extends Observation {
 
 function attributesFor(options: GenerationOptions): Record<string, string> {
   const attributes: Record<string, string> = { ...kindAttributes(SpanKind.LLM) };
+  if (options.operation !== undefined) attributes[GEN_AI_OPERATION_NAME] = options.operation;
   if (options.model !== undefined) attributes[GEN_AI_REQUEST_MODEL] = options.model;
   if (options.provider !== undefined) attributes[GEN_AI_PROVIDER_NAME] = options.provider;
   // Identity at creation so it lands even without UserSpanProcessor installed.

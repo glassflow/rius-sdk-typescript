@@ -28,7 +28,7 @@ describe("observe", () => {
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
     expect(span.name).toBe("anonymous");
-    expect(span.attributes["input.value"]).toBe('["q"]');
+    expect(span.attributes["input.value"]).toBe('{"args":["q"],"kwargs":{}}');
     expect(span.attributes["output.value"]).toBe("answer:q");
   });
 
@@ -72,7 +72,7 @@ describe("observe", () => {
     await fn("x", 1);
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.attributes["input.value"]).toBe('["x",1]');
+    expect(span.attributes["input.value"]).toBe('{"args":["x",1],"kwargs":{}}');
   });
 
   it("nests under an active span so it participates in context propagation", async () => {
