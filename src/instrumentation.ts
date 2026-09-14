@@ -4,6 +4,7 @@ import type { TracerProvider } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { McpClientLike } from "./instrumentationMcp.js";
+import { TRACER_NAME } from "./semconv.js";
 
 /**
  * `"self-applying"` is for an entry whose `load()` has already taken full
@@ -29,8 +30,13 @@ export interface RegistryEntry {
    * Resolves undefined when the optional package is not installed.
    * For a `self-applying` entry, resolving to anything other than undefined
    * both means "installed" and confirms the patch already ran.
+   *
+   * Receives the tracer provider for entries that must hand a tracer to a
+   * third-party registration API themselves (the Vercel AI SDK v7's
+   * `registerTelemetry`); conventional instrumentations ignore it and are
+   * bound by `enableInstrumentations` instead.
    */
-  load(): Promise<unknown | undefined>;
+  load(tracerProvider?: TracerProvider): Promise<unknown | undefined>;
 }
 
 /**
@@ -283,6 +289,50 @@ export function mcpClientPatchable(exports: Record<string, unknown>): object | u
  * PROCESSOR, while the OpenAI, Anthropic and LangChain support are conventional
  * instrumentations.
  */
+// The Vercel AI SDK v7 removed the per-call `experimental_telemetry.tracer`
+// hook: spans exist only if something calls its `registerTelemetry()` with an
+// integration, and the official OTel integration is @ai-sdk/otel's
+// OpenTelemetry class (GenAI-semconv-native spans — gen_ai.input/output
+// messages, gen_ai.tool.definitions, usage). Registering it here, bound to our
+// tracer, makes a v7 app traced with zero telemetry code — v5 apps keep using
+// per-call `experimental_telemetry` and are untouched (their `ai` exports no
+// `registerTelemetry`).
+//
+// The previous registration is remembered and REPLACED on re-init: the AI SDK
+// only ever appends to its global integration list, so re-registering without
+// removing ours would double every span, and keeping the old one would export
+// through a shut-down provider.
+let vercelTelemetryIntegration: unknown;
+
+async function registerVercelTelemetry(tracerProvider: TracerProvider): Promise<boolean> {
+  const ai = await optional("ai");
+  const register = ai?.registerTelemetry as ((integration: unknown) => void) | undefined;
+  if (register === undefined) return false; // ai absent, or v5/v6: nothing to register
+  const otel = await optional("@ai-sdk/otel");
+  const OpenTelemetryIntegration = otel?.OpenTelemetry as
+    | (new (options: { tracer: unknown }) => unknown)
+    | undefined;
+  if (OpenTelemetryIntegration === undefined) {
+    console.warn(
+      "[rius] Vercel AI SDK v7+ found, but its spans require the @ai-sdk/otel package, " +
+        "which is not installed — `ai` calls will not be traced. " +
+        "Install it (npm i @ai-sdk/otel) and rius registers it automatically.",
+    );
+    return false;
+  }
+  const bag = globalThis as { AI_SDK_TELEMETRY_INTEGRATIONS?: unknown[] };
+  if (vercelTelemetryIntegration !== undefined && bag.AI_SDK_TELEMETRY_INTEGRATIONS) {
+    bag.AI_SDK_TELEMETRY_INTEGRATIONS = bag.AI_SDK_TELEMETRY_INTEGRATIONS.filter(
+      (integration) => integration !== vercelTelemetryIntegration,
+    );
+  }
+  vercelTelemetryIntegration = new OpenTelemetryIntegration({
+    tracer: tracerProvider.getTracer(TRACER_NAME),
+  });
+  register(vercelTelemetryIntegration);
+  return true;
+}
+
 export const REGISTRY: RegistryEntry[] = [
   {
     name: "vercel-ai",
@@ -292,7 +342,14 @@ export const REGISTRY: RegistryEntry[] = [
     // transform has to run before the exporting processor sees the span or the
     // attributes it added would never be sanitised.
     insert: "first",
-    async load() {
+    async load(tracerProvider?: TracerProvider) {
+      // ai v7: span creation itself must be registered (see
+      // registerVercelTelemetry above). Done before the transform lookup, so a
+      // v7 app without @arizeai/openinference-vercel is still traced — its
+      // spans are GenAI-native and need no translation.
+      const registered =
+        tracerProvider === undefined ? false : await registerVercelTelemetry(tracerProvider);
+
       // Deliberately NOT the package's own OpenInferenceBatchSpanProcessor /
       // OpenInferenceSimpleSpanProcessor: both require an exporter and export
       // through it, so adding one alongside our exporting processor would send
@@ -302,11 +359,11 @@ export const REGISTRY: RegistryEntry[] = [
       const add = utils?.addOpenInferenceAttributesToSpan as
         | ((span: ReadableSpan) => void)
         | undefined;
-      if (add === undefined) return undefined;
+      if (add === undefined && !registered) return undefined;
       return {
         onStart() {},
         onEnd(span: ReadableSpan) {
-          add(span);
+          add?.(span);
         },
         async forceFlush() {},
         async shutdown() {},
@@ -420,7 +477,7 @@ export async function enableInstrumentations(
 
   for (const entry of wanted) {
     try {
-      const loaded = await entry.load();
+      const loaded = await entry.load(tracerProvider);
       if (loaded === undefined) continue;
 
       if (entry.kind === "processor") {
