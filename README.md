@@ -247,7 +247,9 @@ Traces are posted to `<endpoint>/v1/traces`.
 completions, tool arguments) is attached to spans. It defaults to
 `true`. Set it to `false`, or supply a `mask` function, if your spans
 must not carry raw content. Both apply to span attributes and to the
-attributes of span events and links. With `captureContent: false` the
+attributes of span events and links, including the `metadata.*` copies the
+Vercel AI SDK transform makes of attributes it does not translate: a
+`metadata.<key>` is content exactly when `<key>` is. With `captureContent: false` the
 message and stacktrace of a recorded exception are stripped as well,
 since provider errors routinely echo the request back; the exception
 event and its `exception.type` are kept, so failures stay visible.
