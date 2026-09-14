@@ -20,8 +20,10 @@
   "GEN_AI_OUTPUT_MESSAGES": "gen_ai.output.messages",
   "GEN_AI_RESPONSE_FINISH_REASONS": "gen_ai.response.finish_reasons",
   "GEN_AI_TOOL_NAME": "gen_ai.tool.name",
+  "GEN_AI_TOOL_DEFINITIONS": "gen_ai.tool.definitions",
   "MCP_RESULT_TYPE": "mcp.result_type",
   "GEN_AI_REQUEST_PREFIX": "gen_ai.request.",
   "GEN_AI_FIRST_TOKEN_EVENT": "gen_ai.first_token",
-  "GLASSFLOW_SPAN_PENDING": "glassflow.span.pending"
+  "GLASSFLOW_SPAN_PENDING": "glassflow.span.pending",
+  "LLM_INVOCATION_PARAMETERS": "llm.invocation_parameters"
 }
