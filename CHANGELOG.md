@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.7.0...v0.8.0) (2026-09-21)
+
+
+### Features
+
+* emit gen_ai.response.time_to_first_chunk alongside the first-token event ([#62](https://github.com/glassflow/rius-sdk-typescript/issues/62)) ([a589aed](https://github.com/glassflow/rius-sdk-typescript/commit/a589aed706a3b106637b276f7a954cc9135a6901))
+* set gen_ai.tool.name on local tool spans ([#60](https://github.com/glassflow/rius-sdk-typescript/issues/60)) ([5678445](https://github.com/glassflow/rius-sdk-typescript/commit/56784453d5c6baa4ec8ba2e4e182a66d9a11a3c2))
+* set the OTel SpanKind field from the span taxonomy ([#61](https://github.com/glassflow/rius-sdk-typescript/issues/61)) ([802a70d](https://github.com/glassflow/rius-sdk-typescript/commit/802a70dcb98f731545392fa712aeb96a6f5ef211))
+
+
+### Bug Fixes
+
+* set error.type on inference and generic spans ([#59](https://github.com/glassflow/rius-sdk-typescript/issues/59)) ([e602c2d](https://github.com/glassflow/rius-sdk-typescript/commit/e602c2d2691adc9445ae8f69cb86fc7f67f00dde))
+
 ## [0.7.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.6.1...v0.7.0) (2026-09-21)
 
 
