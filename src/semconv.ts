@@ -33,6 +33,16 @@ export const GEN_AI_PROVIDER_NAME = "gen_ai.provider.name";
 export const GEN_AI_REQUEST_MODEL = "gen_ai.request.model";
 export const GEN_AI_REQUEST_REASONING_LEVEL = "gen_ai.request.reasoning.level";
 export const GEN_AI_RESPONSE_MODEL = "gen_ai.response.model";
+/**
+ * Streaming, per the GenAI inference-span conventions: `gen_ai.request.stream`
+ * (boolean, Conditionally Required when streaming) and
+ * `gen_ai.response.time_to_first_chunk` (double, seconds, "measured from
+ * request issuance", Recommended for streaming requests). Both are set by
+ * `recordFirstToken`: a first chunk arriving is what proves the request
+ * streamed, and the SDK has no earlier hook for it.
+ */
+export const GEN_AI_REQUEST_STREAM = "gen_ai.request.stream";
+export const GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK = "gen_ai.response.time_to_first_chunk";
 export const GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens";
 export const GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens";
 export const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens";
@@ -76,7 +86,15 @@ export const ERROR_TYPE_TOOL_ERROR = "tool_error";
  */
 export const MCP_RESULT_TYPE = "mcp.result_type";
 
-/** First streamed token arrived: the TTFT anchor. */
+/**
+ * First streamed token/chunk arrived: the exact timestamp the backend reads
+ * to derive TTFT (event time minus span start). The GenAI conventions express
+ * the same signal as the derived span attribute
+ * `gen_ai.response.time_to_first_chunk` (above), which `recordFirstToken`
+ * emits alongside this event; the event stays because it is what the backend
+ * keys on, and an absolute timestamp is not recoverable from the duration once
+ * the span is stored. No convention defines an event for this.
+ */
 export const GEN_AI_FIRST_TOKEN_EVENT = "gen_ai.first_token";
 
 /**
