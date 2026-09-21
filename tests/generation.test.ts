@@ -174,6 +174,73 @@ describe("generations", () => {
     expect(secondEvents).toHaveLength(1);
   });
 
+  it("recordFirstToken sets time_to_first_chunk and request.stream next to the event", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    gen.recordFirstToken();
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    const ttfc = span.attributes["gen_ai.response.time_to_first_chunk"];
+    expect(typeof ttfc).toBe("number");
+    expect(ttfc as number).toBeGreaterThan(0);
+    expect(span.attributes["gen_ai.request.stream"]).toBe(true);
+    // The event is kept: it is the timestamp the backend keys on.
+    expect(span.events.filter((e) => e.name === "gen_ai.first_token")).toHaveLength(1);
+  });
+
+  it("time_to_first_chunk agrees with the event timestamp minus span start", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    gen.recordFirstToken();
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    const [event] = span.events.filter((e) => e.name === "gen_ai.first_token");
+    expect(event).toBeDefined();
+    const fromEventSeconds =
+      (hrTimeToMilliseconds(event.time) - hrTimeToMilliseconds(span.startTime)) / 1000;
+    const ttfc = span.attributes["gen_ai.response.time_to_first_chunk"] as number;
+    // Two clocks (performance.now vs the span's hrtime); allow scheduling jitter.
+    expect(Math.abs(ttfc - fromEventSeconds)).toBeLessThan(0.01);
+  });
+
+  it("a second recordFirstToken does not change time_to_first_chunk", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.recordFirstToken();
+    const first = (gen.span as unknown as { attributes: Record<string, unknown> }).attributes[
+      "gen_ai.response.time_to_first_chunk"
+    ];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    gen.recordFirstToken();
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.response.time_to_first_chunk"]).toBe(
+      first,
+    );
+  });
+
+  it("a generation without recordFirstToken has neither the event nor the stream attributes", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.events.filter((e) => e.name === "gen_ai.first_token")).toHaveLength(0);
+    expect(span.attributes["gen_ai.response.time_to_first_chunk"]).toBeUndefined();
+    expect(span.attributes["gen_ai.request.stream"]).toBeUndefined();
+  });
+
+  it("scoped form records time_to_first_chunk from span creation", async () => {
+    await startAsCurrentGeneration("chat", { model: "m" }, async (gen) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      gen.recordFirstToken();
+    });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.response.time_to_first_chunk"] as number).toBeGreaterThan(0.005);
+    expect(span.attributes["gen_ai.request.stream"]).toBe(true);
+  });
+
   it("scoped form nests, auto-ends and returns the result", async () => {
     const result = await startAsCurrentGeneration("chat", { model: "m" }, async (gen) => {
       gen.setUsage({ inputTokens: 1, outputTokens: 2 });

@@ -9,8 +9,10 @@ import {
   GEN_AI_REQUEST_MODEL,
   GEN_AI_REQUEST_PREFIX,
   GEN_AI_REQUEST_REASONING_LEVEL,
+  GEN_AI_REQUEST_STREAM,
   GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
+  GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
   GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
@@ -67,6 +69,12 @@ export interface GenerationOptions {
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
 export class Generation extends Observation {
   private firstTokenRecorded = false;
+  /**
+   * Monotonic clock at construction, which is span creation for both
+   * `startGeneration` and the scoped form. The API `Span` exposes no start
+   * time, so this is what `recordFirstToken` measures the first chunk against.
+   */
+  private readonly startedAt = performance.now();
 
   /**
    * The provider passed at creation; drives the Anthropic input-token summing
@@ -178,17 +186,24 @@ export class Generation extends Observation {
   }
 
   /**
-   * The TTFT anchor: event time minus span start. Idempotent: only the
-   * first call records the event, so a streaming loop can call this
-   * unconditionally on every chunk without inflating the span. A no-op
-   * after the span has ended.
+   * Mark the arrival of the first streamed token. Records the
+   * `gen_ai.first_token` event (the timestamp the backend derives TTFT from)
+   * and, per the GenAI conventions, the derived
+   * `gen_ai.response.time_to_first_chunk` (seconds since span creation) plus
+   * `gen_ai.request.stream = true`: a first chunk arriving is what tells the
+   * SDK the request streamed. Idempotent: only the first call records, so a
+   * streaming loop can call this unconditionally on every chunk without
+   * inflating the span. A no-op after the span has ended.
    */
   recordFirstToken(): this {
     if (this.firstTokenRecorded || !this.span.isRecording()) {
       return this;
     }
+    const elapsedSeconds = Math.max(performance.now() - this.startedAt, 0) / 1000;
     this.span.addEvent(GEN_AI_FIRST_TOKEN_EVENT);
     this.firstTokenRecorded = true;
+    this.span.setAttribute(GEN_AI_REQUEST_STREAM, true);
+    this.span.setAttribute(GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, elapsedSeconds);
     return this;
   }
 }
