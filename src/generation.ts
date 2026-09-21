@@ -22,6 +22,7 @@ import {
   SpanKind,
   USER_ID,
   kindAttributes,
+  otelSpanKind,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 import { Observation, runActive } from "./spans.js";
@@ -234,7 +235,10 @@ function configure(generation: Generation, options: GenerationOptions): Generati
 
 /** Create a generation span and return a handle. You MUST call end(). */
 export function startGeneration(name: string, options: GenerationOptions = {}): Generation {
-  const span = getTracer().startSpan(name, { attributes: attributesFor(options) });
+  const span = getTracer().startSpan(name, {
+    kind: otelSpanKind(SpanKind.LLM),
+    attributes: attributesFor(options),
+  });
   return configure(new Generation(span, options.provider), options);
 }
 
@@ -269,5 +273,6 @@ export function startAsCurrentGeneration<T>(
     options.userId,
     (span) => configure(new Generation(span, options.provider), options),
     fn,
+    otelSpanKind(SpanKind.LLM),
   );
 }

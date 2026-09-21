@@ -1,3 +1,5 @@
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
+
 /** Wire-visible instrumentation scope name. The backend keys on this value. */
 export const TRACER_NAME = "glassflow";
 
@@ -116,6 +118,37 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.EMBEDDING]: "embeddings",
   [SpanKind.AGENT]: "invoke_agent",
 };
+
+/**
+ * SpanKind (our taxonomy ATTRIBUTE) -> the OpenTelemetry SpanKind FIELD, set
+ * centrally at span creation. The GenAI conventions decide the field per
+ * operation: inference, embeddings and retrieval call out of the process
+ * (CLIENT); execute_tool is INTERNAL; invoke_agent is CLIENT only for a
+ * hosted agent. Hence:
+ * - LLM / EMBEDDING / RETRIEVER -> CLIENT: a remote model or index is called.
+ * - TOOL -> INTERNAL: a bare TOOL span is an in-process function, and the
+ *   execute-tool convention says INTERNAL. The MCP wrapper overrides this to
+ *   CLIENT through `SpanOptions.otelKind` because a tools/call crosses a
+ *   process boundary and the MCP client convention says CLIENT.
+ * - AGENT -> INTERNAL: `observe({ kind: AGENT })` wraps an in-process agent,
+ *   the convention's INTERNAL case; a hosted agent would pass `otelKind`.
+ * - CHAIN -> INTERNAL: a workflow step by definition.
+ * Nothing in the backend groups on this field (it reads the attributes), so
+ * the mapping is free to follow the conventions exactly.
+ */
+const OTEL_KIND_BY_KIND: Record<SpanKind, OtelSpanKind> = {
+  [SpanKind.LLM]: OtelSpanKind.CLIENT,
+  [SpanKind.EMBEDDING]: OtelSpanKind.CLIENT,
+  [SpanKind.RETRIEVER]: OtelSpanKind.CLIENT,
+  [SpanKind.TOOL]: OtelSpanKind.INTERNAL,
+  [SpanKind.AGENT]: OtelSpanKind.INTERNAL,
+  [SpanKind.CHAIN]: OtelSpanKind.INTERNAL,
+};
+
+/** The OpenTelemetry `SpanKind` field a span of taxonomy `kind` should carry. */
+export function otelSpanKind(kind: SpanKind): OtelSpanKind {
+  return OTEL_KIND_BY_KIND[kind];
+}
 
 /**
  * Identity attributes for a span of `kind`, for setting AT CREATION.
