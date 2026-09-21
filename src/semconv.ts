@@ -120,11 +120,17 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
 /**
  * Identity attributes for a span of `kind`, for setting AT CREATION.
  * Set at creation so future pending-span snapshots can classify the span.
+ *
+ * `name` is the span name. The GenAI execute-tool convention requires
+ * `gen_ai.tool.name`, and for a local tool the span name IS the tool name,
+ * so a TOOL span with a name gets it here rather than relying on every
+ * caller to remember.
  */
-export function kindAttributes(kind: SpanKind): Record<string, string> {
+export function kindAttributes(kind: SpanKind, name?: string): Record<string, string> {
   const attributes: Record<string, string> = { [OPENINFERENCE_SPAN_KIND]: kind };
   const operation = OPERATION_BY_KIND[kind];
   if (operation !== undefined) attributes[GEN_AI_OPERATION_NAME] = operation;
+  if (kind === SpanKind.TOOL && name !== undefined) attributes[GEN_AI_TOOL_NAME] = name;
   return attributes;
 }
 

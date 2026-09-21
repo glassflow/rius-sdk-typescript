@@ -132,5 +132,19 @@ describe("observe error.type", () => {
     await ok();
     await client.flush();
     expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBeUndefined();
+
+describe("observe with kind TOOL", () => {
+  it("carries gen_ai.tool.name equal to the span name, explicit or derived", async () => {
+    const named = observe(async () => 1, { name: "search-docs", kind: SpanKind.TOOL });
+    async function lookup(): Promise<number> {
+      return 2;
+    }
+    const derived = observe(lookup, { kind: SpanKind.TOOL });
+    await named();
+    await derived();
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("search-docs")?.["gen_ai.tool.name"]).toBe("search-docs");
+    expect(byName.get("lookup")?.["gen_ai.tool.name"]).toBe("lookup");
   });
 });
