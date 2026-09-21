@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toAttributeValue } from "../src/serde.js";
+import { errorType, toAttributeValue } from "../src/serde.js";
 
 describe("toAttributeValue", () => {
   it("passes primitives through untouched", () => {
@@ -75,5 +75,27 @@ describe("toAttributeValue", () => {
     expect(parsed.y.z).toEqual({ id: 42 });
     // No [Circular] marker
     expect(result).not.toContain("[Circular]");
+  });
+});
+
+describe("errorType", () => {
+  it("is the error's name, the spelling exception.type uses", () => {
+    expect(errorType(new Error("boom"))).toBe("Error");
+    expect(errorType(new TypeError("boom"))).toBe("TypeError");
+  });
+
+  it("uses a subclass's own name, never the message", () => {
+    class ProviderDown extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = "ProviderDown";
+      }
+    }
+    expect(errorType(new ProviderDown("rate limited: request body echoed"))).toBe("ProviderDown");
+  });
+
+  it("falls back to the runtime type for a non-Error throwable", () => {
+    expect(errorType("just a string")).toBe("string");
+    expect(errorType(42)).toBe("number");
   });
 });

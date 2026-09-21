@@ -84,16 +84,6 @@ function recordResult(observation: Observation, result: unknown): void {
 }
 
 /**
- * `error.type` for a thrown value: the error's name, the same spelling the
- * span's own exception event uses for `exception.type`, so the two never
- * disagree on one span. A non-Error throwable has no name; its type is the
- * only honest label.
- */
-function errorType(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
-}
-
-/**
  * The slice of an MCP `Client` constructor this module needs: a prototype
  * carrying `callTool`. Structural on purpose, so a real
  * `@modelcontextprotocol/sdk` `Client` and a test double both satisfy it
@@ -210,15 +200,9 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
         attributes: callAttributes(params.name, negotiatedProtocolVersion(this)),
       },
       async (observation) => {
-        let result: unknown;
-        try {
-          result = await original.call(this, params, ...rest);
-        } catch (error) {
-          // Status and the exception event are recorded by the span runner;
-          // only the MCP-specific error.type is set here before rethrowing.
-          observation.setAttribute(ERROR_TYPE, errorType(error));
-          throw error;
-        }
+        // A throw needs nothing here: the span runner records the exception,
+        // ERROR status and error.type for every scoped span, then rethrows.
+        const result = await original.call(this, params, ...rest);
         recordResult(observation, result);
         return result;
       },

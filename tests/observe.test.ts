@@ -93,3 +93,44 @@ describe("observe", () => {
     expect(wrapped.name).toBe("resolved-name");
   });
 });
+
+// GenAI semconv: error.type is Conditionally Required on every span that ends
+// in an error; the error's name only (low cardinality), never the message.
+describe("observe error.type", () => {
+  it("is set when the wrapped function rejects", async () => {
+    class ToolBroke extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = "ToolBroke";
+      }
+    }
+    const bad = observe(
+      async () => {
+        throw new ToolBroke("details that must not leak");
+      },
+      { name: "bad-typed" },
+    );
+    await expect(bad()).rejects.toThrow("details");
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("ToolBroke");
+  });
+
+  it("is set when a synchronous wrapped function throws", async () => {
+    const bad = observe(
+      () => {
+        throw new RangeError("sync nope");
+      },
+      { name: "bad-sync" },
+    );
+    await expect(bad()).rejects.toThrow("sync nope");
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("RangeError");
+  });
+
+  it("is absent on success", async () => {
+    const ok = observe(async () => 1, { name: "ok" });
+    await ok();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBeUndefined();
+  });
+});

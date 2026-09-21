@@ -450,3 +450,34 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(0);
   });
 });
+
+// GenAI semconv: error.type is Conditionally Required on inference spans that
+// end in an error; the error's name only (low cardinality), never the message.
+describe("generation error.type", () => {
+  it("is set when the scoped generation callback throws", async () => {
+    await expect(
+      startAsCurrentGeneration("chat", { model: "m" }, async () => {
+        throw new TypeError("provider exploded");
+      }),
+    ).rejects.toThrow("provider exploded");
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["error.type"]).toBe("TypeError");
+    expect(span.status.code).toBe(2);
+    expect(span.events.some((e) => e.name === "exception")).toBe(true);
+  });
+
+  it("is set by the manual handle's recordException", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.recordException(new Error("nope"));
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("Error");
+  });
+
+  it("is absent on success", async () => {
+    await startAsCurrentGeneration("chat", { model: "m" }, async () => "ok");
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBeUndefined();
+  });
+});
