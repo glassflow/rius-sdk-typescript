@@ -1,3 +1,4 @@
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { hrTimeToMilliseconds } from "@opentelemetry/core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -479,5 +480,15 @@ describe("generation error.type", () => {
     await startAsCurrentGeneration("chat", { model: "m" }, async () => "ok");
     await client.flush();
     expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBeUndefined();
+  });
+});
+
+describe("the OTel SpanKind field", () => {
+  it("marks generation spans CLIENT: inference calls a remote model", async () => {
+    startGeneration("manual").end();
+    await startAsCurrentGeneration("scoped", () => {});
+    await client.flush();
+    const kinds = Object.fromEntries(exporter.getFinishedSpans().map((s) => [s.name, s.kind]));
+    expect(kinds).toEqual({ manual: OtelSpanKind.CLIENT, scoped: OtelSpanKind.CLIENT });
   });
 });

@@ -1,6 +1,7 @@
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
 import * as semconv from "../src/semconv.js";
-import { SpanKind, kindAttributes } from "../src/semconv.js";
+import { SpanKind, kindAttributes, otelSpanKind } from "../src/semconv.js";
 import fixture from "./fixtures/semconv.json" with { type: "json" };
 
 describe("semconv", () => {
@@ -80,6 +81,23 @@ describe("semconv", () => {
     expect(semconv.PENDING_IDENTITY_PREFIXES).toEqual([semconv.GEN_AI_REQUEST_PREFIX]);
     for (const prefix of semconv.PENDING_IDENTITY_PREFIXES) {
       expect(prefix.endsWith(".")).toBe(true);
+    }
+  });
+});
+
+describe("otelSpanKind", () => {
+  it("follows the GenAI conventions: remote calls CLIENT, in-process work INTERNAL", () => {
+    expect(otelSpanKind(SpanKind.LLM)).toBe(OtelSpanKind.CLIENT);
+    expect(otelSpanKind(SpanKind.EMBEDDING)).toBe(OtelSpanKind.CLIENT);
+    expect(otelSpanKind(SpanKind.RETRIEVER)).toBe(OtelSpanKind.CLIENT);
+    expect(otelSpanKind(SpanKind.TOOL)).toBe(OtelSpanKind.INTERNAL);
+    expect(otelSpanKind(SpanKind.AGENT)).toBe(OtelSpanKind.INTERNAL);
+    expect(otelSpanKind(SpanKind.CHAIN)).toBe(OtelSpanKind.INTERNAL);
+  });
+
+  it("covers every taxonomy kind", () => {
+    for (const kind of Object.values(SpanKind)) {
+      expect(otelSpanKind(kind), `${kind} has no OTel kind`).toBeDefined();
     }
   });
 });

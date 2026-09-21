@@ -1,3 +1,4 @@
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
@@ -249,5 +250,45 @@ describe("gen_ai.tool.name on local tool spans", () => {
     expect(pending[0].attributes["gen_ai.tool.name"]).toBe("weather");
     expect(pending[0].attributes["gen_ai.operation.name"]).toBe("execute_tool");
     expect(pending[0].attributes["input.value"]).toBeUndefined();
+  });
+});
+
+describe("the OTel SpanKind field, derived from the taxonomy", () => {
+  const cases: [SpanKind, OtelSpanKind][] = [
+    [SpanKind.LLM, OtelSpanKind.CLIENT],
+    [SpanKind.EMBEDDING, OtelSpanKind.CLIENT],
+    [SpanKind.RETRIEVER, OtelSpanKind.CLIENT],
+    [SpanKind.TOOL, OtelSpanKind.INTERNAL],
+    [SpanKind.AGENT, OtelSpanKind.INTERNAL],
+    [SpanKind.CHAIN, OtelSpanKind.INTERNAL],
+  ];
+
+  it.each(cases)("maps %s on both the manual and the scoped path", async (kind, expected) => {
+    startSpan("manual", { kind }).end();
+    await startAsCurrentSpan("scoped", { kind }, () => {});
+    await client.flush();
+    const kinds = Object.fromEntries(exporter.getFinishedSpans().map((s) => [s.name, s.kind]));
+    expect(kinds).toEqual({ manual: expected, scoped: expected });
+  });
+
+  it("leaves the default CHAIN span INTERNAL", async () => {
+    startSpan("step").end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].kind).toBe(OtelSpanKind.INTERNAL);
+  });
+
+  it("lets an explicit otelKind win over the taxonomy mapping", async () => {
+    startSpan("remote-tool", { kind: SpanKind.TOOL, otelKind: OtelSpanKind.CLIENT }).end();
+    await startAsCurrentSpan(
+      "local-llm",
+      { kind: SpanKind.LLM, otelKind: OtelSpanKind.INTERNAL },
+      () => {},
+    );
+    await client.flush();
+    const kinds = Object.fromEntries(exporter.getFinishedSpans().map((s) => [s.name, s.kind]));
+    expect(kinds).toEqual({
+      "remote-tool": OtelSpanKind.CLIENT,
+      "local-llm": OtelSpanKind.INTERNAL,
+    });
   });
 });

@@ -7,6 +7,7 @@ import {
   SpanKind,
   USER_ID,
   kindAttributes,
+  otelSpanKind,
 } from "./semconv.js";
 import { errorType, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";
@@ -17,8 +18,8 @@ export interface SpanOptions {
   /**
    * The OpenTelemetry `SpanKind` FIELD (INTERNAL, CLIENT, …), orthogonal to
    * `kind` above, which is our taxonomy attribute. Conventions set it per
-   * operation — a remote tool call is CLIENT — so it is opt-in here and left
-   * at the tracer's default (INTERNAL) otherwise.
+   * operation, so by default it is derived from `kind` (see `otelSpanKind`);
+   * set this to override, as the MCP wrapper does for a remote tool call.
    */
   otelKind?: OtelSpanKind;
   input?: unknown;
@@ -145,7 +146,7 @@ function creationAttributes(name: string, options: SpanOptions): Record<string, 
  */
 export function startSpan(name: string, options: SpanOptions = {}): Observation {
   const span = getTracer().startSpan(name, {
-    kind: options.otelKind,
+    kind: options.otelKind ?? otelSpanKind(options.kind ?? SpanKind.CHAIN),
     attributes: creationAttributes(name, options),
   });
   return configure(new Observation(span), options);
@@ -183,7 +184,7 @@ export function startAsCurrentSpan<T>(
     options.userId,
     (span) => configure(new Observation(span), options),
     fn,
-    options.otelKind,
+    options.otelKind ?? otelSpanKind(options.kind ?? SpanKind.CHAIN),
   );
 }
 
