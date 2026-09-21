@@ -1,7 +1,14 @@
 import { type SpanKind as OtelSpanKind, type Span, SpanStatusCode } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
-import { INPUT_VALUE, OUTPUT_VALUE, SpanKind, USER_ID, kindAttributes } from "./semconv.js";
-import { toAttributeValue } from "./serde.js";
+import {
+  ERROR_TYPE,
+  INPUT_VALUE,
+  OUTPUT_VALUE,
+  SpanKind,
+  USER_ID,
+  kindAttributes,
+} from "./semconv.js";
+import { errorType, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";
 
 /** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
@@ -80,9 +87,15 @@ export class Observation {
   }
 
   /**
-   * Record an error on the span and set ERROR status. This is exactly what the
-   * `startAsCurrent*` helpers do on a thrown error, exposed so the manual
-   * `start*` path does not have to reach through `.span` to match it.
+   * Record an error on the span, set ERROR status and `error.type`. This is
+   * exactly what the `startAsCurrent*` helpers do on a thrown error, exposed
+   * so the manual `start*` path does not have to reach through `.span` to
+   * match it.
+   *
+   * `error.type` is Conditionally Required by the GenAI conventions on every
+   * span that ends in an error, and every helper's throw path funnels through
+   * here, so this is the one place that sets it. The error's name only, never
+   * the message: it must stay low-cardinality and free of echoed content.
    *
    * Accepts `unknown` because that is what a `catch` binding is; a non-Error
    * throwable is wrapped so `recordException` still gets a real Error.
@@ -91,6 +104,7 @@ export class Observation {
     const wrapped = error instanceof Error ? error : new Error(String(error));
     this.span.recordException(wrapped);
     this.span.setStatus({ code: SpanStatusCode.ERROR, message: wrapped.message });
+    this.span.setAttribute(ERROR_TYPE, errorType(error));
     return this;
   }
 

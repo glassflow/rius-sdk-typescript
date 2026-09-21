@@ -149,3 +149,59 @@ describe("Observation.setAttribute value handling", () => {
     expect(attrs.obj).toBe('{"k":"v"}');
   });
 });
+
+// GenAI semconv: error.type is Conditionally Required on every span that ends
+// in an error; the error's name only (low cardinality), never the message.
+describe("error.type", () => {
+  it("is set by Observation.recordException on the manual path", async () => {
+    const obs = startSpan("manual-error-type");
+    obs.recordException(new Error("nope"));
+    obs.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("Error");
+  });
+
+  it("uses the subclass name and never the message", async () => {
+    class ToolBroke extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = "ToolBroke";
+      }
+    }
+    const obs = startSpan("manual-subclass");
+    obs.recordException(new ToolBroke("details that must not leak"));
+    obs.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("ToolBroke");
+  });
+
+  it("labels a non-Error throwable by its runtime type", async () => {
+    const obs = startSpan("manual-nonerror-type");
+    obs.recordException("just a string");
+    obs.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("string");
+  });
+
+  it("is set on the scoped path when the callback throws", async () => {
+    await expect(
+      startAsCurrentSpan("scoped-error-type", {}, async () => {
+        throw new RangeError("nope");
+      }),
+    ).rejects.toThrow("nope");
+    await client.flush();
+    const span = exporter.getFinishedSpans().find((s) => s.name === "scoped-error-type");
+    expect(span?.attributes["error.type"]).toBe("RangeError");
+    expect(span?.status.code).toBe(2);
+    expect(span?.events.some((e) => e.name === "exception")).toBe(true);
+  });
+
+  it("is absent on success", async () => {
+    await startAsCurrentSpan("fine", {}, async () => 1);
+    startSpan("also-fine").end();
+    await client.flush();
+    for (const span of exporter.getFinishedSpans()) {
+      expect(span.attributes["error.type"]).toBeUndefined();
+    }
+  });
+});
