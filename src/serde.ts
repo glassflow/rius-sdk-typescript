@@ -34,6 +34,17 @@ function renderable(raw: unknown, value: unknown): unknown {
 }
 
 /**
+ * The value as a plain record, or undefined when it is not an object. The one
+ * narrowing for loosely typed payloads that are read field by field (MCP
+ * results, transports), so each reader is an optional chain, not a guard.
+ */
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
  * Coerce an arbitrary value into something an OTel attribute accepts, bounded
  * by {@link MAX_ATTR_CHARS}. Must never throw: this runs on the user's data on
  * the hot path.
