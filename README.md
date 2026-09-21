@@ -118,8 +118,30 @@ automatically and recording any thrown exception. The options argument is
 optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
 works when you have nothing to configure.
 
+`kind` sets the span's taxonomy (`openinference.span.kind`, our `SpanKind`
+enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, AGENT, LLM). A TOOL
+span also carries `gen_ai.tool.name`, set to the span name. Each kind also
+decides the OpenTelemetry `SpanKind` field the conventions expect: LLM,
+EMBEDDING and RETRIEVER spans are CLIENT, everything else INTERNAL. Pass
+`otelKind` to override it, for example CLIENT for a call to a hosted agent.
+Note the name collision: `SpanKind` exported by this package is the taxonomy
+enum; the value for `otelKind` is `SpanKind` from `@opentelemetry/api`, so
+import that one under an alias.
+
+```ts
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
+import { SpanKind, startAsCurrentSpan } from "@glassflow-ai/rius";
+
+await startAsCurrentSpan(
+  "delegate-to-planner",
+  { kind: SpanKind.AGENT, otelKind: OtelSpanKind.CLIENT, input: task },
+  async (span) => { ... },
+);
+```
+
 On the manual path, `recordException()` does what the scoped form does for
-you: it records the error and sets ERROR status.
+you: it records the error, sets ERROR status and sets `error.type` to the
+error's name.
 
 ```ts
 const span = startSpan("fetch-documents");
@@ -182,7 +204,7 @@ Install only the ones you use:
 - **`anthropic`** wraps the Anthropic SDK, via `@arizeai/openinference-instrumentation-anthropic`, turning Messages calls into LLM spans with model, messages and token counts.
 - **`langchain`** traces LangChain.js chains, models, tools and retrievers, via `@arizeai/openinference-instrumentation-langchain`. It patches the callback manager in `@langchain/core`, which every LangChain.js application already has, and the SDK resolves that module for you so nothing has to be passed in at `init()`.
 - **`vercel-ai`** attaches to spans the Vercel AI SDK's own OpenTelemetry integration produces, via `@arizeai/openinference-vercel`, adding OpenInference attributes to them. This package requires Node 22 or newer.
-- **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span, carrying the tool name, arguments, result, latency, and error status.
+- **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span named `execute_tool <tool>`, carrying the tool name, arguments, result, latency, and error status. The span follows the OpenTelemetry MCP conventions: OTel `SpanKind` CLIENT, `mcp.method.name` set to `tools/call`, `mcp.protocol.version` set to the negotiated version when the transport exposes it (Streamable HTTP does; stdio and SSE do not), and `error.type` set to `tool_error` when the server returns an `isError` result.
 
 There is no selection option: `init()` always attempts every bundled
 integration, so which ones actually attach is determined entirely by
