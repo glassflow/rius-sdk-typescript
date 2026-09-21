@@ -132,6 +132,8 @@ describe("observe error.type", () => {
     await ok();
     await client.flush();
     expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBeUndefined();
+  });
+});
 
 describe("observe with kind TOOL", () => {
   it("carries gen_ai.tool.name equal to the span name, explicit or derived", async () => {

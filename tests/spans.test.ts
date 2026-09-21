@@ -203,6 +203,8 @@ describe("error.type", () => {
     for (const span of exporter.getFinishedSpans()) {
       expect(span.attributes["error.type"]).toBeUndefined();
     }
+  });
+});
 
 describe("gen_ai.tool.name on local tool spans", () => {
   // The GenAI execute-tool convention requires gen_ai.tool.name; for a local
