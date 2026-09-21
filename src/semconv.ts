@@ -61,6 +61,12 @@ export const MCP_METHOD_NAME = "mcp.method.name";
 export const MCP_METHOD_TOOLS_CALL = "tools/call";
 /** The version the initialize handshake negotiated — not the one we asked for. */
 export const MCP_PROTOCOL_VERSION = "mcp.protocol.version";
+/**
+ * Interim-round marker for a tools/call that is asking for input. NOT an OTel
+ * semconv attribute, unlike the two above: the key borrows the mcp SDK's own
+ * `mcp.*` spelling for its result-type field, and no convention defines it.
+ * Kept as-is because the backend reads it.
+ */
 export const MCP_RESULT_TYPE = "mcp.result_type";
 
 /** First streamed token arrived: the TTFT anchor. */

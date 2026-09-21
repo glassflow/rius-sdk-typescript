@@ -8,7 +8,7 @@ import {
   OUTPUT_VALUE,
   SpanKind,
 } from "./semconv.js";
-import { toAttributeValue, truncate } from "./serde.js";
+import { asRecord, toAttributeValue, truncate } from "./serde.js";
 import { type Observation, startAsCurrentSpan } from "./spans.js";
 
 /**
@@ -19,18 +19,14 @@ import { type Observation, startAsCurrentSpan } from "./spans.js";
  * text blocks, else the whole result.
  */
 function serializeResult(result: unknown): string | number | boolean {
-  if (typeof result !== "object" || result === null) return toAttributeValue(result);
-  const record = result as Record<string, unknown>;
+  const record = asRecord(result);
+  if (record === undefined) return toAttributeValue(result);
   const structured = record.structured_content ?? record.structuredContent;
   if (structured !== undefined && structured !== null) return toAttributeValue(structured);
   const content = record.content;
   if (Array.isArray(content)) {
     const texts = content
-      .map((block) =>
-        typeof block === "object" && block !== null
-          ? (block as { text?: unknown }).text
-          : undefined,
-      )
+      .map((block) => asRecord(block)?.text)
       .filter((text): text is string => typeof text === "string");
     if (texts.length === 1) return truncate(texts[0]);
     if (texts.length > 1) return toAttributeValue(texts);
@@ -46,9 +42,8 @@ const INPUT_REQUIRED = "input_required";
  * 1.x spelled it `isError`. Never throws: the result shape is loosely typed.
  */
 function resultIsError(result: unknown): boolean {
-  if (typeof result !== "object" || result === null) return false;
-  const record = result as Record<string, unknown>;
-  return Boolean(record.is_error ?? record.isError);
+  const record = asRecord(result);
+  return Boolean(record?.is_error ?? record?.isError);
 }
 
 /**
@@ -66,11 +61,8 @@ function resultIsError(result: unknown): boolean {
  * currently known.
  */
 function recordResult(observation: Observation, result: unknown): void {
-  const resultType =
-    typeof result === "object" && result !== null
-      ? ((result as Record<string, unknown>).result_type ??
-        (result as Record<string, unknown>).resultType)
-      : undefined;
+  const record = asRecord(result);
+  const resultType = record?.result_type ?? record?.resultType;
   if (resultType === INPUT_REQUIRED) {
     observation.setAttribute(MCP_RESULT_TYPE, INPUT_REQUIRED);
     return;
@@ -105,16 +97,17 @@ type CallTool = McpClientLike["prototype"]["callTool"];
 /**
  * The protocol version the client's transport negotiated, if it exposes one.
  * Read structurally off the client instance: the SDK's `Client` publishes its
- * transport via a `transport` getter, and `StreamableHTTPClientTransport`
- * records the negotiated version on itself at connect. A stdio transport (or
- * a test double) has no such field, and the attribute is simply omitted —
- * never guessed from the version we requested.
+ * transport via a `transport` getter, and only `StreamableHTTPClientTransport`
+ * exposes the negotiated version as a public `protocolVersion` getter. The
+ * SSE transport keeps it private, and stdio/WebSocket never receive it at
+ * all (`Client.connect` forwards it only to transports with a
+ * `setProtocolVersion` and retains nothing itself), so on those the
+ * attribute is omitted — never guessed from the version we requested. This
+ * is narrower than the Python SDK, whose session exposes the version on
+ * every transport; a Recommended attribute, accepted for now.
  */
 function negotiatedProtocolVersion(client: unknown): string | undefined {
-  if (typeof client !== "object" || client === null) return undefined;
-  const transport = (client as { transport?: unknown }).transport;
-  if (typeof transport !== "object" || transport === null) return undefined;
-  const version = (transport as { protocolVersion?: unknown }).protocolVersion;
+  const version = asRecord(asRecord(client)?.transport)?.protocolVersion;
   return typeof version === "string" ? version : undefined;
 }
 
