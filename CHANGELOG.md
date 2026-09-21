@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.6.1...v0.7.0) (2026-09-21)
+
+
+### Features
+
+* bring MCP client spans onto the OTel MCP semantic conventions ([#54](https://github.com/glassflow/rius-sdk-typescript/issues/54)) ([2b1d01d](https://github.com/glassflow/rius-sdk-typescript/commit/2b1d01dd1b8caed164b17a2adcc4eccb6ae87dbd))
+
+
+### Bug Fixes
+
+* set error.type on MCP tool-call spans ([#58](https://github.com/glassflow/rius-sdk-typescript/issues/58)) ([a492221](https://github.com/glassflow/rius-sdk-typescript/commit/a492221eab0f7b7cde31b75e1aced369e972aad9))
+
 ## [0.6.1](https://github.com/glassflow/rius-sdk-typescript/compare/v0.6.0...v0.6.1) (2026-09-14)
 
 
