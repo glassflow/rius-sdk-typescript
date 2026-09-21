@@ -64,6 +64,8 @@ describe("semconv", () => {
       semconv.GEN_AI_OPERATION_NAME,
       semconv.GEN_AI_PROVIDER_NAME,
       semconv.GEN_AI_TOOL_NAME,
+      semconv.MCP_METHOD_NAME,
+      semconv.MCP_PROTOCOL_VERSION,
       semconv.SESSION_ID,
       semconv.USER_ID,
       semconv.WORKSPACE_ROUTE,

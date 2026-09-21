@@ -8,7 +8,14 @@ import {
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PendingSpanProcessor } from "../src/pending.js";
-import { GEN_AI_OPERATION_NAME, GLASSFLOW_SPAN_PENDING, INPUT_VALUE } from "../src/semconv.js";
+import {
+  GEN_AI_OPERATION_NAME,
+  GEN_AI_TOOL_NAME,
+  GLASSFLOW_SPAN_PENDING,
+  INPUT_VALUE,
+  MCP_METHOD_NAME,
+  MCP_PROTOCOL_VERSION,
+} from "../src/semconv.js";
 
 /** Minimal recording stub delegate, standing in for the provider's batch processor. */
 function stubDelegate(): SpanProcessor & { onEnd: ReturnType<typeof vi.fn> } {
@@ -92,6 +99,33 @@ describe("PendingSpanProcessor", () => {
     const snapshot = delegate.onEnd.mock.calls[0][0] as ReadableSpan;
     expect(snapshot.attributes).toEqual({
       [GEN_AI_OPERATION_NAME]: "chat",
+      [GLASSFLOW_SPAN_PENDING]: true,
+    });
+  });
+
+  // The MCP marker is identity, not content: a still-running MCP call must be
+  // distinguishable from a local tool in the live view, which is the one place
+  // setting it at creation pays off. Read the EXPORTED snapshot, not the raw
+  // span — the allowlist runs between the two.
+  it("snapshot keeps the MCP identity attributes", () => {
+    const delegate = stubDelegate();
+    const processor = new PendingSpanProcessor(delegate);
+    const span = fakeSpan({
+      attributes: {
+        [GEN_AI_TOOL_NAME]: "search",
+        [MCP_METHOD_NAME]: "tools/call",
+        [MCP_PROTOCOL_VERSION]: "2026-07-28",
+        [INPUT_VALUE]: '{"q":"secret"}',
+      },
+    });
+
+    processor.onStart(span, {} as Context);
+
+    const snapshot = delegate.onEnd.mock.calls[0][0] as ReadableSpan;
+    expect(snapshot.attributes).toEqual({
+      [GEN_AI_TOOL_NAME]: "search",
+      [MCP_METHOD_NAME]: "tools/call",
+      [MCP_PROTOCOL_VERSION]: "2026-07-28",
       [GLASSFLOW_SPAN_PENDING]: true,
     });
   });
