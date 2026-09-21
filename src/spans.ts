@@ -130,8 +130,11 @@ function configure(observation: Observation, options: SpanOptions): Observation 
  * The user id is set here as well as via the `withUser` scope so it reaches
  * the span even on a provider without `UserSpanProcessor` installed.
  */
-function creationAttributes(options: SpanOptions): Record<string, string> {
-  const attributes = { ...kindAttributes(options.kind ?? SpanKind.CHAIN), ...options.attributes };
+function creationAttributes(name: string, options: SpanOptions): Record<string, string> {
+  const attributes = {
+    ...kindAttributes(options.kind ?? SpanKind.CHAIN, name),
+    ...options.attributes,
+  };
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;
   return attributes;
 }
@@ -143,7 +146,7 @@ function creationAttributes(options: SpanOptions): Record<string, string> {
 export function startSpan(name: string, options: SpanOptions = {}): Observation {
   const span = getTracer().startSpan(name, {
     kind: options.otelKind,
-    attributes: creationAttributes(options),
+    attributes: creationAttributes(name, options),
   });
   return configure(new Observation(span), options);
 }
@@ -176,7 +179,7 @@ export function startAsCurrentSpan<T>(
 
   return runActive(
     name,
-    creationAttributes(options),
+    creationAttributes(name, options),
     options.userId,
     (span) => configure(new Observation(span), options),
     fn,

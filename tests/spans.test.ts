@@ -205,3 +205,49 @@ describe("error.type", () => {
     }
   });
 });
+
+describe("gen_ai.tool.name on local tool spans", () => {
+  // The GenAI execute-tool convention requires gen_ai.tool.name; for a local
+  // tool the span name is the tool name.
+  it("startSpan with kind TOOL carries gen_ai.tool.name equal to the span name", async () => {
+    startSpan("weather", { kind: SpanKind.TOOL }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("weather");
+    expect(span.attributes["gen_ai.tool.name"]).toBe("weather");
+  });
+
+  it("startAsCurrentSpan with kind TOOL carries gen_ai.tool.name equal to the span name", async () => {
+    await startAsCurrentSpan("weather", { kind: SpanKind.TOOL }, async () => 1);
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.tool.name"]).toBe("weather");
+  });
+
+  it("a CHAIN span does not carry gen_ai.tool.name", async () => {
+    await startAsCurrentSpan("step", async () => 1);
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.name"]).toBeUndefined();
+  });
+
+  it("the exported pending snapshot of a TOOL span carries gen_ai.tool.name", async () => {
+    // shutdown() stops the shared exporter, so the partial-spans client gets its own.
+    await client.shutdown();
+    const pendingExporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: pendingExporter,
+      partialSpans: true,
+      heartbeatTransport: async () => {},
+    });
+    const obs = startSpan("weather", { kind: SpanKind.TOOL, input: { city: "Berlin" } });
+    await client.flush(); // the snapshot is exported while the span is still open
+    const pending = pendingExporter
+      .getFinishedSpans()
+      .filter((s) => s.attributes["glassflow.span.pending"] === true);
+    obs.end();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].attributes["gen_ai.tool.name"]).toBe("weather");
+    expect(pending[0].attributes["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(pending[0].attributes["input.value"]).toBeUndefined();
+  });
+});
