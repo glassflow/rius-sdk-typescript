@@ -62,6 +62,13 @@ export const MCP_METHOD_TOOLS_CALL = "tools/call";
 /** The version the initialize handshake negotiated — not the one we asked for. */
 export const MCP_PROTOCOL_VERSION = "mcp.protocol.version";
 /**
+ * OTel general `error.type`: on an MCP tools/call it is `tool_error` when the
+ * result carries isError (the tool ran and reported failure), else the thrown
+ * error's name when the call itself threw.
+ */
+export const ERROR_TYPE = "error.type";
+export const ERROR_TYPE_TOOL_ERROR = "tool_error";
+/**
  * Interim-round marker for a tools/call that is asking for input. NOT an OTel
  * semconv attribute, unlike the two above: the key borrows the mcp SDK's own
  * `mcp.*` spelling for its result-type field, and no convention defines it.
