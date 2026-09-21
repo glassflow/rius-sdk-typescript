@@ -1,4 +1,4 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind as OtelSpanKind, SpanStatusCode } from "@opentelemetry/api";
 import {
   GEN_AI_TOOL_NAME,
   MCP_METHOD_NAME,
@@ -147,14 +147,21 @@ interface InstrumentedCallTool extends CallTool {
  *
  * The span carries the OTel MCP semantic conventions (`mcp.method.name`,
  * `mcp.protocol.version`) so it is identifiable AS an MCP call — a local TOOL
- * span is otherwise identical. Two deliberate divergences from that
- * convention, which wants `SpanKind.CLIENT` and the name `tools/call {tool}`:
- * the span stays in our TOOL family, because the kind taxonomy is the
- * product-level classification the UI groups on, and the name stays
- * `execute_tool {tool}`, because renaming is visible in every waterfall and
- * saved search. The `mcp.*` attributes carry the protocol-level truth
- * alongside. Server identity (`server.address`) is deliberately not read: the
- * only place the URL lives is a private field of the HTTP transport.
+ * span is otherwise identical. How it composes the two conventions it sits
+ * under:
+ *
+ * - The OTel `SpanKind` field is CLIENT, as both the MCP convention and the
+ *   GenAI execute-tool convention want for a remote tool. That field is
+ *   orthogonal to `openinference.span.kind=TOOL`, our taxonomy attribute,
+ *   which stays.
+ * - The name is the GenAI execute-tool one, `execute_tool {tool}`, not the
+ *   MCP `tools/call {tool}`. The MCP convention resolves that collision by
+ *   consolidation: when a tool-execution span already exists, MCP
+ *   instrumentation SHOULD NOT open a second span and SHOULD add its
+ *   attributes to the existing one — which is exactly this span.
+ *
+ * Server identity (`server.address`) is deliberately not read: the only place
+ * the URL lives is a private field of the HTTP transport.
  *
  * Idempotent: calling this twice on the same class does not stack wrappers.
  * The second call detects the existing wrapper (via the marker it left on
@@ -187,6 +194,10 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
       `execute_tool ${params.name}`,
       {
         kind: SpanKind.TOOL,
+        // The OTel SpanKind FIELD (orthogonal to our taxonomy attribute above):
+        // a remote tool call is CLIENT under both the MCP and the GenAI
+        // execute-tool conventions.
+        otelKind: OtelSpanKind.CLIENT,
         input: params.arguments,
         attributes: callAttributes(params.name, negotiatedProtocolVersion(this)),
       },

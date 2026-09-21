@@ -1,4 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
@@ -161,6 +162,17 @@ describe("instrumentMcpClient", () => {
     await new FakeClient().callTool({ name: "add" });
     await client.flush();
     expect(exporter.getFinishedSpans()[0].attributes["mcp.protocol.version"]).toBeUndefined();
+  });
+
+  // The OTel SpanKind FIELD, not our openinference.span.kind attribute: both
+  // the MCP and the GenAI execute-tool conventions want CLIENT for a remote
+  // tool, and the two kinds are orthogonal — TOOL stays as the taxonomy.
+  it("is an OTel CLIENT span while keeping the TOOL taxonomy", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.kind).toBe(OtelSpanKind.CLIENT);
+    expect(span.attributes["openinference.span.kind"]).toBe("TOOL");
   });
 
   it("does not mark a local TOOL span as MCP", async () => {
