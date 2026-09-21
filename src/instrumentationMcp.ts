@@ -1,5 +1,13 @@
 import { SpanStatusCode } from "@opentelemetry/api";
-import { GEN_AI_TOOL_NAME, MCP_RESULT_TYPE, OUTPUT_VALUE, SpanKind } from "./semconv.js";
+import {
+  GEN_AI_TOOL_NAME,
+  MCP_METHOD_NAME,
+  MCP_METHOD_TOOLS_CALL,
+  MCP_PROTOCOL_VERSION,
+  MCP_RESULT_TYPE,
+  OUTPUT_VALUE,
+  SpanKind,
+} from "./semconv.js";
 import { toAttributeValue, truncate } from "./serde.js";
 import { type Observation, startAsCurrentSpan } from "./spans.js";
 
@@ -94,6 +102,40 @@ export interface McpClientLike {
 
 type CallTool = McpClientLike["prototype"]["callTool"];
 
+/**
+ * The protocol version the client's transport negotiated, if it exposes one.
+ * Read structurally off the client instance: the SDK's `Client` publishes its
+ * transport via a `transport` getter, and `StreamableHTTPClientTransport`
+ * records the negotiated version on itself at connect. A stdio transport (or
+ * a test double) has no such field, and the attribute is simply omitted —
+ * never guessed from the version we requested.
+ */
+function negotiatedProtocolVersion(client: unknown): string | undefined {
+  if (typeof client !== "object" || client === null) return undefined;
+  const transport = (client as { transport?: unknown }).transport;
+  if (typeof transport !== "object" || transport === null) return undefined;
+  const version = (transport as { protocolVersion?: unknown }).protocolVersion;
+  return typeof version === "string" ? version : undefined;
+}
+
+/**
+ * Every identity attribute of a tools/call span, for setting at CREATION.
+ * Pending snapshots are built at start, so anything set inside the callback
+ * never reaches them — that includes the MCP marker, which an interim
+ * input-required round must carry as much as a final one.
+ */
+function callAttributes(
+  toolName: string,
+  protocolVersion: string | undefined,
+): Record<string, string> {
+  const attributes: Record<string, string> = {
+    [GEN_AI_TOOL_NAME]: toolName,
+    [MCP_METHOD_NAME]: MCP_METHOD_TOOLS_CALL,
+  };
+  if (protocolVersion !== undefined) attributes[MCP_PROTOCOL_VERSION] = protocolVersion;
+  return attributes;
+}
+
 /** Marks a wrapper with the true original, so a second wrap is detectable. */
 interface InstrumentedCallTool extends CallTool {
   riusOriginal?: CallTool;
@@ -102,6 +144,17 @@ interface InstrumentedCallTool extends CallTool {
 /**
  * Wrap an MCP client's callTool so every tool invocation becomes a TOOL span.
  * Mirrors instrumentation_mcp.py, which wraps ClientSession.call_tool.
+ *
+ * The span carries the OTel MCP semantic conventions (`mcp.method.name`,
+ * `mcp.protocol.version`) so it is identifiable AS an MCP call — a local TOOL
+ * span is otherwise identical. Two deliberate divergences from that
+ * convention, which wants `SpanKind.CLIENT` and the name `tools/call {tool}`:
+ * the span stays in our TOOL family, because the kind taxonomy is the
+ * product-level classification the UI groups on, and the name stays
+ * `execute_tool {tool}`, because renaming is visible in every waterfall and
+ * saved search. The `mcp.*` attributes carry the protocol-level truth
+ * alongside. Server identity (`server.address`) is deliberately not read: the
+ * only place the URL lives is a private field of the HTTP transport.
  *
  * Idempotent: calling this twice on the same class does not stack wrappers.
  * The second call detects the existing wrapper (via the marker it left on
@@ -132,12 +185,10 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
     // dashboards and saved searches split by SDK.
     return startAsCurrentSpan(
       `execute_tool ${params.name}`,
-      // Tool name at CREATION: pending snapshots are built at start, so an
-      // attribute set inside the callback never reaches them.
       {
         kind: SpanKind.TOOL,
         input: params.arguments,
-        attributes: { [GEN_AI_TOOL_NAME]: params.name },
+        attributes: callAttributes(params.name, negotiatedProtocolVersion(this)),
       },
       async (observation) => {
         const result = await original.call(this, params, ...rest);
