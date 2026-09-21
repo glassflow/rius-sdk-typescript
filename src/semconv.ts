@@ -51,6 +51,16 @@ export const GEN_AI_TOOL_NAME = "gen_ai.tool.name";
  */
 export const GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions";
 export const GEN_AI_REQUEST_PREFIX = "gen_ai.request.";
+/**
+ * OTel MCP semantic conventions (semantic-conventions-genai, Development
+ * stability). `mcp.method.name` is the REQUIRED attribute of an MCP client span
+ * and the marker everything downstream keys on: a local TOOL span has the same
+ * kind, name and I/O shape, so this is what tells the two apart.
+ */
+export const MCP_METHOD_NAME = "mcp.method.name";
+export const MCP_METHOD_TOOLS_CALL = "tools/call";
+/** The version the initialize handshake negotiated — not the one we asked for. */
+export const MCP_PROTOCOL_VERSION = "mcp.protocol.version";
 export const MCP_RESULT_TYPE = "mcp.result_type";
 
 /** First streamed token arrived: the TTFT anchor. */
@@ -193,6 +203,11 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_TOOL_NAME,
+  // Protocol identity, not content: a still-running MCP call must be
+  // distinguishable from a local tool in the live view — the one place
+  // setting the marker at creation pays off.
+  MCP_METHOD_NAME,
+  MCP_PROTOCOL_VERSION,
   // Identity, not content: a pending span must be groupable into its
   // session while still running, that is the live view's whole point.
   SESSION_ID,

@@ -1,4 +1,4 @@
-import { type Span, SpanStatusCode } from "@opentelemetry/api";
+import { type SpanKind as OtelSpanKind, type Span, SpanStatusCode } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import { INPUT_VALUE, OUTPUT_VALUE, SpanKind, USER_ID, kindAttributes } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
@@ -7,6 +7,13 @@ import { withUser } from "./user.js";
 /** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
 export interface SpanOptions {
   kind?: SpanKind;
+  /**
+   * The OpenTelemetry `SpanKind` FIELD (INTERNAL, CLIENT, …), orthogonal to
+   * `kind` above, which is our taxonomy attribute. Conventions set it per
+   * operation — a remote tool call is CLIENT — so it is opt-in here and left
+   * at the tracer's default (INTERNAL) otherwise.
+   */
+  otelKind?: OtelSpanKind;
   input?: unknown;
   /**
    * End-user identity (`user.id`). Sugar for `withUser`: set on this span at
@@ -120,7 +127,10 @@ function creationAttributes(options: SpanOptions): Record<string, string> {
  * The span is parented to whatever is current but does NOT become current.
  */
 export function startSpan(name: string, options: SpanOptions = {}): Observation {
-  const span = getTracer().startSpan(name, { attributes: creationAttributes(options) });
+  const span = getTracer().startSpan(name, {
+    kind: options.otelKind,
+    attributes: creationAttributes(options),
+  });
   return configure(new Observation(span), options);
 }
 
@@ -156,6 +166,7 @@ export function startAsCurrentSpan<T>(
     options.userId,
     (span) => configure(new Observation(span), options),
     fn,
+    options.otelKind,
   );
 }
 
@@ -174,9 +185,10 @@ export function runActive<H extends Observation, T>(
   userId: string | undefined,
   makeHandle: (span: Span) => H,
   fn: (handle: H) => Promise<T> | T,
+  otelKind?: OtelSpanKind,
 ): Promise<T> {
   const run = () =>
-    getTracer().startActiveSpan(name, { attributes }, async (span) => {
+    getTracer().startActiveSpan(name, { kind: otelKind, attributes }, async (span) => {
       const handle = makeHandle(span);
       try {
         return await fn(handle);

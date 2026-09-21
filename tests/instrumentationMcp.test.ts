@@ -1,8 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import { instrumentMcpClient } from "../src/instrumentationMcp.js";
+import { SpanKind } from "../src/semconv.js";
+import { startAsCurrentSpan } from "../src/spans.js";
 
 class FakeClient {
   async callTool(params: { name: string; arguments?: unknown }): Promise<unknown> {
@@ -20,6 +23,15 @@ class FakeClient {
       return { isError: true, content: [{ type: "text", text: "no such file" }] };
     }
     return { content: [{ type: "text", text: "ok" }] };
+  }
+}
+
+// A client connected over a transport that knows the negotiated protocol
+// version, the way the SDK's StreamableHTTPClientTransport exposes it.
+// Inherits the wrapped callTool through the prototype chain.
+class FakeHttpClient extends FakeClient {
+  get transport(): { protocolVersion?: string } {
+    return { protocolVersion: "2026-07-28" };
   }
 }
 
@@ -111,6 +123,64 @@ describe("instrumentMcpClient", () => {
     await new FakeClient().callTool({ name: "add" });
     await client.flush();
     expect(exporter.getFinishedSpans()[0].status.code).toBe(0);
+  });
+
+  // OTel MCP semantic conventions: the span must be identifiable AS an MCP
+  // call. A local TOOL span has the same kind, name and I/O shape, so only the
+  // mcp.* attributes separate the two downstream.
+  it("carries the mcp.method.name marker on a successful call", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["mcp.method.name"]).toBe("tools/call");
+    expect(span.attributes["gen_ai.operation.name"]).toBe("execute_tool");
+  });
+
+  it("carries the marker when the call throws", async () => {
+    await expect(new FakeClient().callTool({ name: "explode" })).rejects.toThrow("tool failed");
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.status.code).toBe(2);
+    expect(span.attributes["mcp.method.name"]).toBe("tools/call");
+  });
+
+  it("carries the marker on an interim input-required round, not only mcp.result_type", async () => {
+    await new FakeClient().callTool({ name: "asks" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["mcp.result_type"]).toBe("input_required");
+    expect(span.attributes["mcp.method.name"]).toBe("tools/call");
+  });
+
+  it("records the negotiated protocol version when the transport exposes it", async () => {
+    await new FakeHttpClient().callTool({ name: "add" });
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["mcp.protocol.version"]).toBe("2026-07-28");
+  });
+
+  it("omits the protocol version when the transport does not expose it", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["mcp.protocol.version"]).toBeUndefined();
+  });
+
+  // The OTel SpanKind FIELD, not our openinference.span.kind attribute: both
+  // the MCP and the GenAI execute-tool conventions want CLIENT for a remote
+  // tool, and the two kinds are orthogonal — TOOL stays as the taxonomy.
+  it("is an OTel CLIENT span while keeping the TOOL taxonomy", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.kind).toBe(OtelSpanKind.CLIENT);
+    expect(span.attributes["openinference.span.kind"]).toBe("TOOL");
+  });
+
+  it("does not mark a local TOOL span as MCP", async () => {
+    await startAsCurrentSpan("execute_tool local", { kind: SpanKind.TOOL }, async () => 1);
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["openinference.span.kind"]).toBe("TOOL");
+    expect(span.attributes["mcp.method.name"]).toBeUndefined();
   });
 
   it("restores the original method on uninstrument", async () => {
