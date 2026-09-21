@@ -119,6 +119,27 @@ describe("instrumentMcpClient", () => {
     expect(exporter.getFinishedSpans()[0].status.code).toBe(2);
   });
 
+  // MCP semconv: "When CallToolResult is returned with isError set to true,
+  // error.type SHOULD be set to tool_error"; on a throw it is the error's name,
+  // the way the span's own exception event spells exception.type.
+  it("sets error.type = tool_error on a server-flagged error result", async () => {
+    await new FakeClient().callTool({ name: "fails-snake" });
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("tool_error");
+  });
+
+  it("sets error.type to the thrown error's name", async () => {
+    await expect(new FakeClient().callTool({ name: "explode" })).rejects.toThrow("tool failed");
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBe("Error");
+  });
+
+  it("sets no error.type on a successful result", async () => {
+    await new FakeClient().callTool({ name: "add" });
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["error.type"]).toBeUndefined();
+  });
+
   it("leaves status unset on a successful result", async () => {
     await new FakeClient().callTool({ name: "add" });
     await client.flush();

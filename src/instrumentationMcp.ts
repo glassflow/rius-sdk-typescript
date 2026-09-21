@@ -1,5 +1,7 @@
 import { SpanKind as OtelSpanKind, SpanStatusCode } from "@opentelemetry/api";
 import {
+  ERROR_TYPE,
+  ERROR_TYPE_TOOL_ERROR,
   GEN_AI_TOOL_NAME,
   MCP_METHOD_NAME,
   MCP_METHOD_TOOLS_CALL,
@@ -77,7 +79,18 @@ function recordResult(observation: Observation, result: unknown): void {
       code: SpanStatusCode.ERROR,
       message: "tool returned an error result",
     });
+    observation.setAttribute(ERROR_TYPE, ERROR_TYPE_TOOL_ERROR);
   }
+}
+
+/**
+ * `error.type` for a thrown value: the error's name, the same spelling the
+ * span's own exception event uses for `exception.type`, so the two never
+ * disagree on one span. A non-Error throwable has no name; its type is the
+ * only honest label.
+ */
+function errorType(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 /**
@@ -143,10 +156,12 @@ interface InstrumentedCallTool extends CallTool {
  * span is otherwise identical. How it composes the two conventions it sits
  * under:
  *
- * - The OTel `SpanKind` field is CLIENT, as both the MCP convention and the
- *   GenAI execute-tool convention want for a remote tool. That field is
- *   orthogonal to `openinference.span.kind=TOOL`, our taxonomy attribute,
- *   which stays.
+ * - The OTel `SpanKind` field is CLIENT, the MCP client-span value. The two
+ *   conventions disagree here: the GenAI execute-tool span says INTERNAL, the
+ *   MCP client span says CLIENT. CLIENT wins because the call crosses a
+ *   process boundary and the MCP convention is the more specific one; a
+ *   local TOOL span stays INTERNAL. That field is orthogonal to
+ *   `openinference.span.kind=TOOL`, our taxonomy attribute, which stays.
  * - The name is the GenAI execute-tool one, `execute_tool {tool}`, not the
  *   MCP `tools/call {tool}`. The MCP convention resolves that collision by
  *   consolidation: when a tool-execution span already exists, MCP
@@ -195,7 +210,15 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
         attributes: callAttributes(params.name, negotiatedProtocolVersion(this)),
       },
       async (observation) => {
-        const result = await original.call(this, params, ...rest);
+        let result: unknown;
+        try {
+          result = await original.call(this, params, ...rest);
+        } catch (error) {
+          // Status and the exception event are recorded by the span runner;
+          // only the MCP-specific error.type is set here before rethrowing.
+          observation.setAttribute(ERROR_TYPE, errorType(error));
+          throw error;
+        }
         recordResult(observation, result);
         return result;
       },

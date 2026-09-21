@@ -25,6 +25,8 @@
   "MCP_METHOD_NAME": "mcp.method.name",
   "MCP_METHOD_TOOLS_CALL": "tools/call",
   "MCP_PROTOCOL_VERSION": "mcp.protocol.version",
+  "ERROR_TYPE": "error.type",
+  "ERROR_TYPE_TOOL_ERROR": "tool_error",
   "MCP_RESULT_TYPE": "mcp.result_type",
   "GEN_AI_REQUEST_PREFIX": "gen_ai.request.",
   "GEN_AI_FIRST_TOKEN_EVENT": "gen_ai.first_token",
