@@ -1,5 +1,6 @@
 import { getTracer } from "./client.js";
-import { serializeMessages } from "./messages.js";
+import { contextSizes } from "./contextSizes.js";
+import { type Message, normalizeMessages } from "./messages.js";
 import {
   GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_INPUT_MESSAGES,
@@ -19,6 +20,7 @@ import {
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+  RIUS_CONTEXT_SIZES,
   SpanKind,
   USER_ID,
   kindAttributes,
@@ -76,6 +78,13 @@ export class Generation extends Observation {
    * time, so this is what `recordFirstToken` measures the first chunk against.
    */
   private readonly startedAt = performance.now();
+  /**
+   * The latest normalized input / output and the tool definitions, kept so
+   * `rius.context.sizes` can be computed from all three once, in {@link end}.
+   */
+  private inputMessages?: Message[];
+  private outputMessages?: Message[];
+  private tools?: unknown[];
 
   /**
    * The provider passed at creation; drives the Anthropic input-token summing
@@ -86,6 +95,30 @@ export class Generation extends Observation {
     private readonly provider?: string,
   ) {
     super(span);
+    // Every generation span carries the attribute: this seed stands in for a
+    // span ended through the raw OTel handle instead of end().
+    this.span.setAttribute(RIUS_CONTEXT_SIZES, contextSizes(undefined, undefined, undefined));
+  }
+
+  /**
+   * Computed once, as the span ends, rather than on every content write: a
+   * generation with tools, input and output would otherwise pay for it three
+   * times, and only the last result matters. Derived from the normalized
+   * messages BEFORE truncation, which is what makes it trustworthy when the
+   * content attributes are not.
+   */
+  private setContextSizes(): void {
+    if (!this.inputMessages && !this.outputMessages && !this.tools) return; // the seed stands
+    this.span.setAttribute(
+      RIUS_CONTEXT_SIZES,
+      contextSizes(this.tools, this.inputMessages, this.outputMessages),
+    );
+  }
+
+  /** Ends the span after recording the context sizes; idempotent like the base. */
+  override end(): void {
+    if (!this.ended) this.setContextSizes();
+    super.end();
   }
 
   /**
@@ -95,13 +128,17 @@ export class Generation extends Observation {
    * lists are all accepted. Bare strings default to the `user` role.
    */
   setInput(value: unknown): this {
-    this.span.setAttribute(GEN_AI_INPUT_MESSAGES, serializeMessages(value, "user"));
+    // Normalize once: the content attribute is the (truncated) serialization
+    // of this list, and the sizes are measured on the same list, untruncated.
+    this.inputMessages = normalizeMessages(value, "user");
+    this.span.setAttribute(GEN_AI_INPUT_MESSAGES, toAttributeValue(this.inputMessages));
     return this;
   }
 
   /** Record the response messages (`gen_ai.output.messages`); bare strings default to `assistant`. */
   setOutput(value: unknown): this {
-    this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, serializeMessages(value, "assistant"));
+    this.outputMessages = normalizeMessages(value, "assistant");
+    this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, toAttributeValue(this.outputMessages));
     return this;
   }
 
@@ -114,6 +151,7 @@ export class Generation extends Observation {
    * masked/stripped under `captureContent: false` like messages are.
    */
   setToolDefinitions(tools: unknown[]): this {
+    this.tools = tools;
     this.span.setAttribute(GEN_AI_TOOL_DEFINITIONS, toAttributeValue(tools));
     return this;
   }

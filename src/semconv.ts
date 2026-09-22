@@ -87,6 +87,25 @@ export const ERROR_TYPE_TOOL_ERROR = "tool_error";
  * Kept as-is because the backend reads it.
  */
 export const MCP_RESULT_TYPE = "mcp.result_type";
+/**
+ * UTF-8 byte sizes of every part of the context this SDK serialized on a
+ * generation span, as one compact JSON object with readable keys:
+ * `tool_definitions` (name and bytes per tool), `input_messages` /
+ * `output_messages` (per message: literal role and a typed entry per part —
+ * text bytes, tool_call / tool_call_response with the tool name, media by
+ * type only), `cache_marker` (index of the last input message with a
+ * cache_control part) and `folded` (aggregate of the input messages older
+ * than the detail window). See contextSizes.ts. The backend uses it to
+ * attribute `gen_ai.usage.input_tokens` across parts. A Rius vendor
+ * attribute, NOT a convention (like `glassflow.span.pending` below: no
+ * convention covers it). Computed from the normalized messages BEFORE
+ * truncation, so it stays correct when the content attributes are cut at
+ * the attribute cap, stripped by `captureContent: false` or rewritten by a
+ * mask. Deliberately NOT in CONTENT_ATTRIBUTES (a size is not content and
+ * must survive masking) and NOT in PENDING_IDENTITY_ATTRIBUTES (content is
+ * unknown at span start, so a pending snapshot never carries it).
+ */
+export const RIUS_CONTEXT_SIZES = "rius.context.sizes";
 
 /**
  * First streamed token/chunk arrived: the exact timestamp the backend reads
