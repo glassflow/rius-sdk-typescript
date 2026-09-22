@@ -23,6 +23,17 @@ const result = (id: string | undefined, response: unknown): Part =>
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 const parse = (s: string) => JSON.parse(s) as Record<string, unknown>;
 
+// Expected-shape builders, so a test reads as the wire object it asserts.
+const textPart = (n: number) => ({ type: "text", bytes: n });
+const callPart = (tool: string | null, n: number) => ({ type: "tool_call", tool, bytes: n });
+const resultPart = (tool: string | null, n: number) => ({
+  type: "tool_call_response",
+  tool,
+  bytes: n,
+});
+const media = (type: string) => ({ type });
+const message = (role: string, ...parts: unknown[]) => ({ role, parts });
+
 describe("contextSizes constants", () => {
   it("pins the wire constants", () => {
     expect(SIZES_VERSION).toBe(1);
@@ -33,23 +44,32 @@ describe("contextSizes constants", () => {
 
 describe("contextSizes shape", () => {
   it("emits only the version when nothing was set", () => {
-    expect(contextSizes(undefined, undefined, undefined)).toBe('{"v":1}');
+    expect(contextSizes(undefined, undefined, undefined)).toBe('{"version":1}');
   });
 
-  it("writes compact JSON with keys in v, t, i, o, c order", () => {
+  it("writes compact JSON with the top-level keys in wire order", () => {
     const out = contextSizes(
       [{ name: "a" }],
       [msg("user", text("hi", { cache_control: { type: "ephemeral" } }))],
       [msg("assistant", text("yo"))],
     );
-    expect(out).toBe('{"v":1,"t":[["a",12]],"i":[["u",2]],"o":[["a",2]],"c":0}');
+    expect(out).toBe(
+      '{"version":1,"tool_definitions":[{"name":"a","bytes":12}],' +
+        '"input_messages":[{"role":"user","parts":[{"type":"text","bytes":2}]}],' +
+        '"output_messages":[{"role":"assistant","parts":[{"type":"text","bytes":2}]}],' +
+        '"cache_marker":0}',
+    );
   });
 
-  it("omits t / i / o when the corresponding argument is undefined", () => {
+  it("omits the tools / input / output keys when the argument is undefined", () => {
     expect(
       Object.keys(parse(contextSizes(undefined, [msg("user", text("x"))], undefined))),
-    ).toEqual(["v", "i"]);
-    expect(Object.keys(parse(contextSizes([], undefined, [])))).toEqual(["v", "t", "o"]);
+    ).toEqual(["version", "input_messages"]);
+    expect(Object.keys(parse(contextSizes([], undefined, [])))).toEqual([
+      "version",
+      "tool_definitions",
+      "output_messages",
+    ]);
   });
 });
 
@@ -59,24 +79,24 @@ describe("tool definitions", () => {
     const anthropic = { name: "status", input_schema: { type: "object" } };
     const builtin = { type: "web_search", max_uses: 3 };
     const out = parse(contextSizes([openai, anthropic, builtin], undefined, undefined));
-    expect(out.t).toEqual([
-      ["query", bytes(openai)],
-      ["status", bytes(anthropic)],
-      [null, bytes(builtin)],
+    expect(out.tool_definitions).toEqual([
+      { name: "query", bytes: bytes(openai) },
+      { name: "status", bytes: bytes(anthropic) },
+      { name: null, bytes: bytes(builtin) },
     ]);
   });
 
   it("yields a null name and zero bytes for a non-object tool that cannot be measured", () => {
     const out = parse(contextSizes([undefined, 7], undefined, undefined));
-    expect(out.t).toEqual([
-      [null, 0],
-      [null, 1],
+    expect(out.tool_definitions).toEqual([
+      { name: null, bytes: 0 },
+      { name: null, bytes: 1 },
     ]);
   });
 });
 
 describe("roles", () => {
-  it("codes the known roles and passes the rest through literally", () => {
+  it("keeps every role literal, stringifying a non-string one", () => {
     const out = parse(
       contextSizes(
         undefined,
@@ -93,15 +113,15 @@ describe("roles", () => {
         undefined,
       ),
     );
-    expect(out.i).toEqual([
-      ["s", 1],
-      ["s", 1],
-      ["u", 1],
-      ["a", 1],
-      ["t", 1],
-      ["t", 1],
-      ["moderator", 1],
-      ["42", 1],
+    expect((out.input_messages as { role: string }[]).map((m) => m.role)).toEqual([
+      "system",
+      "developer",
+      "user",
+      "assistant",
+      "tool",
+      "function",
+      "moderator",
+      "42",
     ]);
   });
 });
@@ -112,47 +132,43 @@ describe("text parts", () => {
     const emoji = "🚨"; // 1 char (2 UTF-16 units), 4 bytes
     const out = parse(contextSizes(undefined, [msg("user", text(cjk), text(emoji))], undefined));
     expect(cjk.length).toBe(7);
-    expect(out.i).toEqual([["u", 21, 4]]);
+    expect(out.input_messages).toEqual([message("user", textPart(21), textPart(4))]);
   });
 
   it("measures non-string text content as canonical JSON bytes", () => {
     const out = parse(
       contextSizes(undefined, [msg("user", text({ k: "v" }), text(12))], undefined),
     );
-    expect(out.i).toEqual([["u", 9, 2]]);
+    expect(out.input_messages).toEqual([message("user", textPart(9), textPart(2))]);
   });
 
   it("measures a missing content as JSON null, matching the Python side", () => {
     const out = parse(contextSizes(undefined, [msg("user", { type: "text" })], undefined));
-    expect(out.i).toEqual([["u", 4]]);
+    expect(out.input_messages).toEqual([message("user", textPart(4))]);
   });
 });
 
 describe("tool call parts", () => {
   const tools = [{ name: "search" }, { function: { name: "status" } }];
 
-  it("references a defined tool by index, an undefined one by name, a missing one as null", () => {
+  it("names the tool whether or not it is defined, null when the call has no name", () => {
     const p1 = call("c1", "status");
     const p2 = call("c2", "other");
     const p3 = call("c3", undefined);
-    const out = parse(contextSizes(tools, [msg("assistant", p1, p2, p3)], undefined));
-    expect(out.i).toEqual([
-      ["a", ["c", 1, bytes(p1)], ["c", "other", bytes(p2)], ["c", null, bytes(p3)]],
+    const p4 = call("c4", 7);
+    const out = parse(contextSizes(tools, [msg("assistant", p1, p2, p3, p4)], undefined));
+    expect(out.input_messages).toEqual([
+      message(
+        "assistant",
+        callPart("status", bytes(p1)),
+        callPart("other", bytes(p2)),
+        callPart(null, bytes(p3)),
+        callPart(null, bytes(p4)),
+      ),
     ]);
   });
 
-  it("uses the first matching tool when two definitions share a name", () => {
-    const out = parse(
-      contextSizes(
-        [{ name: "dup" }, { name: "dup" }],
-        [msg("assistant", call("c", "dup"))],
-        undefined,
-      ),
-    );
-    expect((out.i as unknown[][])[0][1]).toEqual(["c", 0, bytes(call("c", "dup"))]);
-  });
-
-  it("resolves a tool result's tool through the call id, across all messages", () => {
+  it("resolves a tool result's tool name through the call id, across all messages", () => {
     const r1 = result("c1", "ok");
     const r2 = result("c2", "ok");
     const r3 = result("zzz", "ok");
@@ -170,12 +186,11 @@ describe("tool call parts", () => {
         undefined,
       ),
     );
-    expect(out.i).toEqual([
-      ["a", ["c", 1, bytes(call("c1", "status"))], ["c", "other", bytes(call("c2", "other"))]],
-      ["t", ["r", 1, bytes(r1)]],
-      ["t", ["r", "other", bytes(r2)]],
-      ["t", ["r", null, bytes(r3)]],
-      ["t", ["r", null, bytes(r4)]],
+    expect((out.input_messages as unknown[]).slice(1)).toEqual([
+      message("tool", resultPart("status", bytes(r1))),
+      message("tool", resultPart("other", bytes(r2))),
+      message("tool", resultPart(null, bytes(r3))),
+      message("tool", resultPart(null, bytes(r4))),
     ]);
   });
 
@@ -185,18 +200,32 @@ describe("tool call parts", () => {
     const out = parse(
       contextSizes(tools, [msg("tool", r)], [msg("assistant", call("late", "search"))]),
     );
-    expect(out.i).toEqual([["t", ["r", 0, bytes(r)]]]);
+    expect(out.input_messages).toEqual([message("tool", resultPart("search", bytes(r)))]);
+  });
+
+  it("resolves a duplicated call id to the first call, as the Python SDK does", () => {
+    const r = result("dup", "ok");
+    const out = parse(
+      contextSizes(
+        undefined,
+        [msg("assistant", call("dup", "first"), call("dup", "second")), msg("tool", r)],
+        undefined,
+      ),
+    );
+    expect((out.input_messages as unknown[])[1]).toEqual(
+      message("tool", resultPart("first", bytes(r))),
+    );
   });
 
   it("measures an orphan tool result (role tool, no call id) as a text part", () => {
     // The normalizer turns such a message into a plain text part.
     const out = parse(contextSizes(undefined, [msg("tool", text("orphan"))], undefined));
-    expect(out.i).toEqual([["t", 6]]);
+    expect(out.input_messages).toEqual([message("tool", textPart(6))]);
   });
 });
 
 describe("other parts", () => {
-  it("records media and unknown parts as a typed marker without a size", () => {
+  it("records media and unknown parts by type only, without a size", () => {
     const out = parse(
       contextSizes(
         undefined,
@@ -213,22 +242,22 @@ describe("other parts", () => {
         undefined,
       ),
     );
-    expect(out.i).toEqual([
-      [
-        "u",
-        ["m", "image_url"],
-        ["m", "audio"],
-        ["m", "unknown"],
-        ["m", "unknown"],
-        ["m", "unknown"],
-      ],
+    expect(out.input_messages).toEqual([
+      message(
+        "user",
+        media("image_url"),
+        media("audio"),
+        media("unknown"),
+        media("unknown"),
+        media("unknown"),
+      ),
     ]);
   });
 
   it("treats a message whose parts are not a list as having no parts", () => {
     const out = parse(contextSizes(undefined, [{ role: "user", parts: "x" }, 5], undefined));
-    expect((out.i as unknown[]).length).toBe(2);
-    expect((out.i as unknown[])[0]).toEqual(["u"]);
+    expect((out.input_messages as unknown[]).length).toBe(2);
+    expect((out.input_messages as unknown[])[0]).toEqual(message("user"));
   });
 });
 
@@ -245,12 +274,12 @@ describe("cache marker", () => {
         [msg("assistant", text("e", { cache_control: { type: "ephemeral" } }))],
       ),
     );
-    expect(out.c).toBe(1);
+    expect(out.cache_marker).toBe(1);
   });
 
   it("is omitted when no input part carries a cache marker", () => {
     const out = parse(contextSizes(undefined, [msg("user", text("a"))], undefined));
-    expect("c" in out).toBe(false);
+    expect("cache_marker" in out).toBe(false);
   });
 });
 
@@ -280,56 +309,66 @@ describe("folding", () => {
 
   it("keeps per-part detail for exactly the last DETAIL_WINDOW messages", () => {
     const out = parse(contextSizes(undefined, longInput(DETAIL_WINDOW), undefined));
-    expect((out.i as unknown[]).length).toBe(DETAIL_WINDOW);
-    expect("f" in out).toBe(false);
+    expect((out.input_messages as unknown[]).length).toBe(DETAIL_WINDOW);
+    expect("folded" in out).toBe(false);
 
     const folded = parse(contextSizes(undefined, longInput(DETAIL_WINDOW + 1), undefined));
-    expect((folded.i as unknown[]).length).toBe(DETAIL_WINDOW);
-    expect((folded.i as unknown[][])[0]).toEqual(["u", 3, ["m", "image_url"]]); // message 1 survives
-    expect(folded.f).toEqual({ n: 1, s: 2 });
+    expect((folded.input_messages as unknown[]).length).toBe(DETAIL_WINDOW);
+    // message 1 survives the fold
+    expect((folded.input_messages as unknown[])[0]).toEqual(
+      message("user", textPart(3), media("image_url")),
+    );
+    expect(folded.folded).toEqual({ messages: 1, system_bytes: 2 });
   });
 
-  it("aggregates the folded messages per role, per tool, and counts media parts", () => {
+  it("aggregates the folded messages per role, per tool name, and counts media parts", () => {
     const tools = [{ name: "status" }];
     const input = longInput(60); // folds the first 10: indices 0..9, two of each kind
     const out = parse(contextSizes(tools, input, undefined));
     const callBytes = bytes(call("c2", "status")) + bytes(call("c7", "status"));
     const resultBytes = bytes(result("c2", "r")) + bytes(result("c7", "r"));
-    expect(out.f).toEqual({
-      n: 10,
-      s: 4,
-      u: 6 + 8, // two user texts plus two literal-role texts folded into "u"
-      a: 2,
-      t: [[0, callBytes + resultBytes]],
-      m: 2,
+    expect(out.folded).toEqual({
+      messages: 10,
+      system_bytes: 4,
+      user_bytes: 6 + 8, // two user texts plus two literal-role texts, both user-side
+      assistant_bytes: 2,
+      tools: [{ tool: "status", bytes: callBytes + resultBytes }],
+      multimodal_parts: 2,
     });
-    expect(Object.keys(out.f as object)).toEqual(["n", "s", "u", "a", "t", "m"]);
+    expect(Object.keys(out.folded as object)).toEqual([
+      "messages",
+      "system_bytes",
+      "user_bytes",
+      "assistant_bytes",
+      "tools",
+      "multimodal_parts",
+    ]);
   });
 
-  it("keeps separate tool sums for index, name and null references, in first-seen order", () => {
+  it("buckets tool bytes per name with null as its own bucket, in first-seen order", () => {
     const input = [
       msg("assistant", call("x1", "named"), call("x2", "status"), call("x3", undefined)),
       ...longInput(DETAIL_WINDOW),
     ];
     const out = parse(contextSizes([{ name: "status" }], input, undefined));
-    const f = out.f as { t: unknown[][] };
-    expect(f.t.map((e) => e[0])).toEqual(["named", 0, null]);
+    const folded = out.folded as { tools: { tool: unknown }[] };
+    expect(folded.tools.map((e) => e.tool)).toEqual(["named", "status", null]);
   });
 
-  it("leaves the cache index pre-folding and never folds the output", () => {
+  it("leaves the cache marker pre-folding and never folds the output", () => {
     const input = longInput(70);
     input[3].parts[0].cache_control = { type: "ephemeral" };
     const out = parse(contextSizes(undefined, input, longInput(70)));
-    expect(out.c).toBe(3);
-    expect((out.o as unknown[]).length).toBe(70);
+    expect(out.cache_marker).toBe(3);
+    expect((out.output_messages as unknown[]).length).toBe(70);
   });
 
-  it("puts the cache index in the wire order between o and f", () => {
+  it("puts the cache marker in the wire order between output_messages and folded", () => {
     const input = longInput(70);
     input[0].parts[0].cache_control = { type: "ephemeral" };
     const out = contextSizes(undefined, input, [msg("assistant", text("x"))]);
-    expect(out.indexOf('"o":')).toBeLessThan(out.indexOf('"c":'));
-    expect(out.indexOf('"c":')).toBeLessThan(out.indexOf('"f":'));
+    expect(out.indexOf('"output_messages":')).toBeLessThan(out.indexOf('"cache_marker":'));
+    expect(out.indexOf('"cache_marker":')).toBeLessThan(out.indexOf('"folded":'));
   });
 
   it("halves the detail window until the JSON fits in MAX_SIZES_BYTES", () => {
@@ -342,9 +381,10 @@ describe("folding", () => {
     const out = contextSizes(undefined, messages, undefined);
     expect(Buffer.byteLength(out)).toBeLessThanOrEqual(MAX_SIZES_BYTES);
     const parsed = parse(out);
-    expect(parsed.v).toBe(1);
-    expect((parsed.i as unknown[]).length).toBeLessThan(DETAIL_WINDOW);
-    expect((parsed.f as { n: number }).n).toBe(600 - (parsed.i as unknown[]).length);
+    expect(parsed.version).toBe(1);
+    const detailed = (parsed.input_messages as unknown[]).length;
+    expect(detailed).toBeLessThan(DETAIL_WINDOW);
+    expect((parsed.folded as { messages: number }).messages).toBe(600 - detailed);
   });
 
   it("stops at a zero window rather than truncating the string", () => {
@@ -354,8 +394,8 @@ describe("folding", () => {
     const messages = Array.from({ length: 3 }, (_, k) => msg("assistant", call(`c${k}`, huge)));
     const out = contextSizes(undefined, messages, undefined);
     const parsed = parse(out);
-    expect(parsed.i).toEqual([]);
-    expect((parsed.f as { n: number }).n).toBe(3);
+    expect(parsed.input_messages).toEqual([]);
+    expect((parsed.folded as { messages: number }).messages).toBe(3);
   });
 });
 
@@ -373,7 +413,11 @@ describe("robustness", () => {
     const out = parse(
       contextSizes([circular], [{ role: "user", parts: [text(circular)] }], undefined),
     );
-    expect(out.t).toEqual([[null, 0]]);
-    expect(out.i).toEqual([["u", 0]]);
+    expect(out.tool_definitions).toEqual([{ name: null, bytes: 0 }]);
+    expect(out.input_messages).toEqual([message("user", textPart(0))]);
+  });
+
+  it("ignores a non-list messages argument as unset, matching the Python SDK", () => {
+    expect(contextSizes(undefined, "hi" as unknown as unknown[], undefined)).toBe('{"version":1}');
   });
 });

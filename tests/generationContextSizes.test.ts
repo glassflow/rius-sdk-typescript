@@ -30,8 +30,8 @@ describe("rius.context.sizes on generation spans", () => {
     startGeneration("manual", { model: "m" }).end();
     await startAsCurrentGeneration("scoped", { model: "m" }, async () => "ok");
     await client?.flush();
-    expect(sizesOf(0)).toEqual({ v: 1 });
-    expect(sizesOf(1)).toEqual({ v: 1 });
+    expect(sizesOf(0)).toEqual({ version: 1 });
+    expect(sizesOf(1)).toEqual({ version: 1 });
   });
 
   it("describes the creation-time input and tools", async () => {
@@ -42,7 +42,11 @@ describe("rius.context.sizes on generation spans", () => {
       input: [{ role: "user", content: "héllo" }],
     }).end();
     await client?.flush();
-    expect(sizesOf()).toEqual({ v: 1, t: [["get_weather", toolBytes]], i: [["u", 6]] });
+    expect(sizesOf()).toEqual({
+      version: 1,
+      tool_definitions: [{ name: "get_weather", bytes: toolBytes }],
+      input_messages: [{ role: "user", parts: [{ type: "text", bytes: 6 }] }],
+    });
   });
 
   it("combines input, output and tools set in any order, last write wins", async () => {
@@ -59,13 +63,25 @@ describe("rius.context.sizes on generation spans", () => {
     await client?.flush();
     const callPart = { type: "tool_call", id: "c1", name: "get_weather", arguments: "{}" };
     expect(sizesOf()).toEqual({
-      v: 1,
-      t: [["get_weather", toolBytes]],
-      i: [
-        ["s", 3],
-        ["u", 2],
+      version: 1,
+      tool_definitions: [{ name: "get_weather", bytes: toolBytes }],
+      input_messages: [
+        { role: "system", parts: [{ type: "text", bytes: 3 }] },
+        { role: "user", parts: [{ type: "text", bytes: 2 }] },
       ],
-      o: [["a", 0, ["c", 0, Buffer.byteLength(JSON.stringify(callPart))]]],
+      output_messages: [
+        {
+          role: "assistant",
+          parts: [
+            { type: "text", bytes: 0 },
+            {
+              type: "tool_call",
+              tool: "get_weather",
+              bytes: Buffer.byteLength(JSON.stringify(callPart)),
+            },
+          ],
+        },
+      ],
     });
   });
 
@@ -80,7 +96,10 @@ describe("rius.context.sizes on generation spans", () => {
     expect(String(span.attributes["gen_ai.output.messages"]).endsWith(TRUNCATION_MARKER)).toBe(
       true,
     );
-    expect(sizesOf()).toEqual({ v: 1, o: [["a", 80_000]] });
+    expect(sizesOf()).toEqual({
+      version: 1,
+      output_messages: [{ role: "assistant", parts: [{ type: "text", bytes: 80_000 }] }],
+    });
   });
 
   it("survives captureContent: false while the content attributes are stripped", async () => {
@@ -90,7 +109,11 @@ describe("rius.context.sizes on generation spans", () => {
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.input.messages"]).toBeUndefined();
     expect(span.attributes["gen_ai.tool.definitions"]).toBeUndefined();
-    expect(sizesOf()).toEqual({ v: 1, t: [["get_weather", toolBytes]], i: [["u", 6]] });
+    expect(sizesOf()).toEqual({
+      version: 1,
+      tool_definitions: [{ name: "get_weather", bytes: toolBytes }],
+      input_messages: [{ role: "user", parts: [{ type: "text", bytes: 6 }] }],
+    });
   });
 
   it("describes the unmasked text and is itself never masked", async () => {
@@ -99,7 +122,10 @@ describe("rius.context.sizes on generation spans", () => {
     await client?.flush();
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.input.messages"]).toBe("[REDACTED]");
-    expect(sizesOf()).toEqual({ v: 1, i: [["u", 23]] });
+    expect(sizesOf()).toEqual({
+      version: 1,
+      input_messages: [{ role: "user", parts: [{ type: "text", bytes: 23 }] }],
+    });
   });
 
   it("does not change the JSON written to the content attributes", async () => {
