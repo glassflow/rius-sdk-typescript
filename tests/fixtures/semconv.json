@@ -31,6 +31,7 @@
   "ERROR_TYPE_TOOL_ERROR": "tool_error",
   "MCP_RESULT_TYPE": "mcp.result_type",
   "GEN_AI_REQUEST_PREFIX": "gen_ai.request.",
+  "RIUS_CONTEXT_SIZES": "rius.context.sizes",
   "GEN_AI_FIRST_TOKEN_EVENT": "gen_ai.first_token",
   "RIUS_SPAN_PENDING": "rius.span.pending",
   "LLM_INVOCATION_PARAMETERS": "llm.invocation_parameters"
