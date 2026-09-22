@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type InitOptions, RiusClient, getTracer, init } from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";
 import { REGISTRY } from "../src/instrumentation.js";
-import { RIUS_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
+import { GEN_AI_AGENT_NAME, RIUS_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
 import { startAsCurrentSpan } from "../src/spans.js";
 
 let client: RiusClient | undefined;
@@ -63,6 +63,40 @@ describe("init", () => {
     getTracer().startSpan("s").end();
     await client.flush();
     expect(exporter.getFinishedSpans()[0].resource.attributes["service.name"]).toBe("svc");
+  });
+
+  it("stamps the agent name on the resource", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", agentName: "planner", spanExporter: exporter });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].resource.attributes[GEN_AI_AGENT_NAME]).toBe("planner");
+  });
+
+  it("falls back to the service name when no agent name is configured", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", spanExporter: exporter });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].resource.attributes[GEN_AI_AGENT_NAME]).toBe("svc");
+  });
+
+  it("groups spans and heartbeats under the same agent name when it differs from the service name", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const exporter = new InMemorySpanExporter();
+    client = init({
+      serviceName: "svc",
+      agentName: "planner",
+      spanExporter: exporter,
+      heartbeatTransport: async (payload) => {
+        payloads.push(payload);
+      },
+    });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    const resourceAgent = exporter.getFinishedSpans()[0].resource.attributes[GEN_AI_AGENT_NAME];
+    expect(payloads.length).toBeGreaterThan(0);
+    expect(payloads[0]?.agent_name).toBe(resourceAgent);
   });
 
   it("creates spans but exports nothing when disabled", async () => {
