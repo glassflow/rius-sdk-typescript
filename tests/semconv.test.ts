@@ -101,3 +101,17 @@ describe("otelSpanKind", () => {
     }
   });
 });
+
+describe("rius.context.sizes", () => {
+  it("is the Rius vendor key for context part sizes", () => {
+    expect(semconv.RIUS_CONTEXT_SIZES).toBe("rius.context.sizes");
+  });
+
+  it("is not content: it must survive masking and captureContent: false", () => {
+    expect(semconv.CONTENT_ATTRIBUTES.has(semconv.RIUS_CONTEXT_SIZES)).toBe(false);
+  });
+
+  it("is not pending identity: content sizes are unknown at span start", () => {
+    expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(semconv.RIUS_CONTEXT_SIZES)).toBe(false);
+  });
+});
