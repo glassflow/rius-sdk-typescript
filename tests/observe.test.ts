@@ -149,6 +149,19 @@ describe("observe with kind TOOL", () => {
     expect(byName.get("search-docs")?.["gen_ai.tool.name"]).toBe("search-docs");
     expect(byName.get("lookup")?.["gen_ai.tool.name"]).toBe("lookup");
   });
+
+  it("takes an explicit tool name that differs from the span name", async () => {
+    const wrapped = observe(async () => 1, {
+      name: "execute_tool search-docs",
+      kind: SpanKind.TOOL,
+      toolName: "search-docs",
+    });
+    await wrapped();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("execute_tool search-docs");
+    expect(span.attributes["gen_ai.tool.name"]).toBe("search-docs");
+  });
 });
 
 describe("observe with kind RETRIEVER", () => {

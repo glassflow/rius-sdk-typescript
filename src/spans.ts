@@ -34,6 +34,13 @@ export interface SpanOptions {
    */
   userId?: string;
   /**
+   * The tool name a TOOL span carries as `gen_ai.tool.name`. Defaults to the
+   * span name, which is what a caller who passes nothing meant back when the
+   * two were necessarily the same string. Pass it explicitly whenever the
+   * span name is not the bare tool name.
+   */
+  toolName?: string;
+  /**
    * The index, collection or knowledge base a RETRIEVER span searched, set as
    * `gen_ai.data_source.id`. Ignored on every other kind: the key means the
    * target of a retrieval, and putting it elsewhere would make the attribute
@@ -170,7 +177,7 @@ function configure(observation: Observation, options: SpanOptions): Observation 
 function creationAttributes(name: string, options: SpanOptions): Record<string, string | number> {
   const kind = options.kind ?? SpanKind.CHAIN;
   const attributes: Record<string, string | number> = {
-    ...kindAttributes(kind, name),
+    ...kindAttributes(kind, options.toolName ?? name),
     ...options.attributes,
   };
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;

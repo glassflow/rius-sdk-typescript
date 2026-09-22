@@ -120,9 +120,12 @@ works when you have nothing to configure.
 
 `kind` sets the span's taxonomy (`openinference.span.kind`, our `SpanKind`
 enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, AGENT, LLM). A TOOL
-span also carries `gen_ai.tool.name`, set to the span name. A RETRIEVER span
-carries `gen_ai.data_source.id` when you pass `dataSourceId`, naming the index
-or collection it searched. Each kind also
+span also carries `gen_ai.tool.name`, set to the span name unless you pass
+`toolName`, which both the span helpers and `observe` accept for the case
+where the span name is not the bare tool name. A RETRIEVER span carries
+`gen_ai.data_source.id` when you pass `dataSourceId`, naming the index or
+collection it searched, and `gen_ai.retrieval.top_k` when you pass `topK`.
+Each kind also
 decides the OpenTelemetry `SpanKind` field the conventions expect: LLM,
 EMBEDDING and RETRIEVER spans are CLIENT, everything else INTERNAL. Pass
 `otelKind` to override it, for example CLIENT for a call to a hosted agent.

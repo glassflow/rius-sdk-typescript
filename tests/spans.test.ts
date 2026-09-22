@@ -251,6 +251,25 @@ describe("gen_ai.tool.name on local tool spans", () => {
     expect(pending[0].attributes["gen_ai.operation.name"]).toBe("execute_tool");
     expect(pending[0].attributes["input.value"]).toBeUndefined();
   });
+
+  it("takes an explicit tool name that differs from the span name", async () => {
+    startSpan("execute_tool weather", { kind: SpanKind.TOOL, toolName: "weather" }).end();
+    await startAsCurrentSpan(
+      "execute_tool lookup",
+      { kind: SpanKind.TOOL, toolName: "lookup" },
+      async () => 1,
+    );
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("execute_tool weather")?.["gen_ai.tool.name"]).toBe("weather");
+    expect(byName.get("execute_tool lookup")?.["gen_ai.tool.name"]).toBe("lookup");
+  });
+
+  it("ignores an explicit tool name on a kind that is not TOOL", async () => {
+    startSpan("step", { kind: SpanKind.CHAIN, toolName: "weather" }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.name"]).toBeUndefined();
+  });
 });
 
 describe("RETRIEVER spans", () => {

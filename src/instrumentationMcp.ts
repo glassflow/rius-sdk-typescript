@@ -2,7 +2,6 @@ import { SpanKind as OtelSpanKind, SpanStatusCode } from "@opentelemetry/api";
 import {
   ERROR_TYPE,
   ERROR_TYPE_TOOL_ERROR,
-  GEN_AI_TOOL_NAME,
   MCP_METHOD_NAME,
   MCP_METHOD_TOOLS_CALL,
   MCP_PROTOCOL_VERSION,
@@ -115,17 +114,16 @@ function negotiatedProtocolVersion(client: unknown): string | undefined {
 }
 
 /**
- * Every identity attribute of a tools/call span, for setting at CREATION.
+ * The protocol identity of a tools/call span, for setting at CREATION.
  * Pending snapshots are built at start, so anything set inside the callback
  * never reaches them — that includes the MCP marker, which an interim
  * input-required round must carry as much as a final one.
+ *
+ * The tool name is NOT here: it travels as the span helper's own `toolName`
+ * input, so it stays correct however the span name is composed.
  */
-function callAttributes(
-  toolName: string,
-  protocolVersion: string | undefined,
-): Record<string, string> {
+function callAttributes(protocolVersion: string | undefined): Record<string, string> {
   const attributes: Record<string, string> = {
-    [GEN_AI_TOOL_NAME]: toolName,
     [MCP_METHOD_NAME]: MCP_METHOD_TOOLS_CALL,
   };
   if (protocolVersion !== undefined) attributes[MCP_PROTOCOL_VERSION] = protocolVersion;
@@ -196,8 +194,9 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
         // a remote tool call is CLIENT under both the MCP and the GenAI
         // execute-tool conventions.
         otelKind: OtelSpanKind.CLIENT,
+        toolName: params.name,
         input: params.arguments,
-        attributes: callAttributes(params.name, negotiatedProtocolVersion(this)),
+        attributes: callAttributes(negotiatedProtocolVersion(this)),
       },
       async (observation) => {
         // A throw needs nothing here: the span runner records the exception,
