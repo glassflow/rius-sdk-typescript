@@ -15,11 +15,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
-import {
-  GLASSFLOW_SPAN_PENDING,
-  PENDING_IDENTITY_ATTRIBUTES,
-  WORKSPACE_ROUTE,
-} from "../src/semconv.js";
+import { PENDING_IDENTITY_ATTRIBUTES, RIUS_SPAN_PENDING, WORKSPACE_ROUTE } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 import { registerWorkspace, withWorkspace } from "../src/workspace.js";
 
@@ -218,7 +214,7 @@ describe("pending snapshots", () => {
         await client.flush();
         const pending = perKey["key-acme"].getFinishedSpans();
         expect(pending).toHaveLength(1);
-        expect(pending[0].attributes[GLASSFLOW_SPAN_PENDING]).toBe(true);
+        expect(pending[0].attributes[RIUS_SPAN_PENDING]).toBe(true);
         expect(pending[0].attributes[WORKSPACE_ROUTE]).toBeUndefined();
       });
     });

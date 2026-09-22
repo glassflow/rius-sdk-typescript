@@ -11,10 +11,10 @@ import { PendingSpanProcessor } from "../src/pending.js";
 import {
   GEN_AI_OPERATION_NAME,
   GEN_AI_TOOL_NAME,
-  GLASSFLOW_SPAN_PENDING,
   INPUT_VALUE,
   MCP_METHOD_NAME,
   MCP_PROTOCOL_VERSION,
+  RIUS_SPAN_PENDING,
 } from "../src/semconv.js";
 
 /** Minimal recording stub delegate, standing in for the provider's batch processor. */
@@ -73,7 +73,7 @@ describe("PendingSpanProcessor", () => {
 
     expect(delegate.onEnd).toHaveBeenCalledTimes(1);
     const snapshot = delegate.onEnd.mock.calls[0][0] as ReadableSpan;
-    expect(snapshot.attributes[GLASSFLOW_SPAN_PENDING]).toBe(true);
+    expect(snapshot.attributes[RIUS_SPAN_PENDING]).toBe(true);
   });
 
   it("emits synchronously at onStart when delayMs is explicitly 0", () => {
@@ -99,7 +99,7 @@ describe("PendingSpanProcessor", () => {
     const snapshot = delegate.onEnd.mock.calls[0][0] as ReadableSpan;
     expect(snapshot.attributes).toEqual({
       [GEN_AI_OPERATION_NAME]: "chat",
-      [GLASSFLOW_SPAN_PENDING]: true,
+      [RIUS_SPAN_PENDING]: true,
     });
   });
 
@@ -126,7 +126,7 @@ describe("PendingSpanProcessor", () => {
       [GEN_AI_TOOL_NAME]: "search",
       [MCP_METHOD_NAME]: "tools/call",
       [MCP_PROTOCOL_VERSION]: "2026-07-28",
-      [GLASSFLOW_SPAN_PENDING]: true,
+      [RIUS_SPAN_PENDING]: true,
     });
   });
 
@@ -184,7 +184,7 @@ describe("PendingSpanProcessor", () => {
     const snapshot = delegate.onEnd.mock.calls[0][0] as ReadableSpan;
     expect(snapshot.attributes).toEqual({
       [GEN_AI_OPERATION_NAME]: "chat",
-      [GLASSFLOW_SPAN_PENDING]: true,
+      [RIUS_SPAN_PENDING]: true,
     });
   });
 
@@ -244,13 +244,13 @@ describe("PendingSpanProcessor end-to-end (no debounce)", () => {
     expect(exported).toHaveLength(2);
 
     const [pendingSpan, finalSpan] = exported;
-    expect(pendingSpan.attributes[GLASSFLOW_SPAN_PENDING]).toBe(true);
+    expect(pendingSpan.attributes[RIUS_SPAN_PENDING]).toBe(true);
     expect(pendingSpan.duration).toEqual([0, 0]);
     expect(pendingSpan.spanContext().spanId).toBe(spanContext.spanId);
     expect(pendingSpan.spanContext().traceId).toBe(spanContext.traceId);
     expect(pendingSpan.startTime).toEqual(startTime);
 
-    expect(finalSpan.attributes[GLASSFLOW_SPAN_PENDING]).toBeUndefined();
+    expect(finalSpan.attributes[RIUS_SPAN_PENDING]).toBeUndefined();
     expect(finalSpan.spanContext().spanId).toBe(spanContext.spanId);
     expect(finalSpan.spanContext().traceId).toBe(spanContext.traceId);
     expect(finalSpan.startTime).toEqual(startTime);

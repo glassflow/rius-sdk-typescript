@@ -2,9 +2,9 @@ import type { Attributes, Context } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
-  GLASSFLOW_SPAN_PENDING,
   PENDING_IDENTITY_ATTRIBUTES,
   PENDING_IDENTITY_PREFIXES,
+  RIUS_SPAN_PENDING,
 } from "./semconv.js";
 
 /**
@@ -23,7 +23,7 @@ import {
  * - Same trace id, span id, parent, name, and start timestamp as the final
  *   span; `endTime == startTime` (OTLP cannot represent an unfinished span,
  *   so the snapshot is an ended zero-duration span with a marker).
- * - The `glassflow.span.pending` marker attribute (see semconv.ts).
+ * - The `rius.span.pending` marker attribute (see semconv.ts).
  * - Identity/taxonomy attributes only (`PENDING_IDENTITY_ATTRIBUTES` /
  *   `_PREFIXES`); never content, whatever instrumentation set it.
  *
@@ -51,7 +51,7 @@ function identityAttributes(attributes: Attributes | undefined): Attributes {
 /** Built once at onStart and never touched again: this is the privacy boundary. */
 function buildSnapshot(span: Span): ReadableSpan {
   const attributes = identityAttributes(span.attributes);
-  attributes[GLASSFLOW_SPAN_PENDING] = true;
+  attributes[RIUS_SPAN_PENDING] = true;
 
   return {
     name: span.name,

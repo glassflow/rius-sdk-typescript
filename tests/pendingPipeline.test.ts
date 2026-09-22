@@ -3,7 +3,7 @@ import type { ExportResult } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
 import { init } from "../src/client.js";
-import { GLASSFLOW_SPAN_PENDING } from "../src/semconv.js";
+import { RIUS_SPAN_PENDING } from "../src/semconv.js";
 
 class Capture implements SpanExporter {
   readonly spans: ReadableSpan[] = [];
@@ -52,8 +52,8 @@ describe("pending privacy through the real init() pipeline", () => {
     span.end();
     await client.flush();
 
-    const pending = exporter.spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true);
-    const finals = exporter.spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] !== true);
+    const pending = exporter.spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] === true);
+    const finals = exporter.spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] !== true);
     expect(pending).toHaveLength(1);
     expect(finals).toHaveLength(1);
 
@@ -82,8 +82,8 @@ describe("pending privacy through the real init() pipeline", () => {
     span.end();
     await client.flush();
 
-    const pending = exporter.spans.find((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true);
-    const final = exporter.spans.find((s) => s.attributes[GLASSFLOW_SPAN_PENDING] !== true);
+    const pending = exporter.spans.find((s) => s.attributes[RIUS_SPAN_PENDING] === true);
+    const final = exporter.spans.find((s) => s.attributes[RIUS_SPAN_PENDING] !== true);
     expect(pending?.attributes["gen_ai.request.model"]).toBe("gpt-4o");
     expect(Object.keys(pending?.attributes ?? {}).some((k) => k in CONTENTY)).toBe(false);
     expect(final?.attributes["input.value"]).toBe("[REDACTED]");
@@ -101,7 +101,7 @@ describe("pending privacy through the real init() pipeline", () => {
     await client.flush();
 
     const childPending = exporter.spans.find(
-      (s) => s.name === "child" && s.attributes[GLASSFLOW_SPAN_PENDING] === true,
+      (s) => s.name === "child" && s.attributes[RIUS_SPAN_PENDING] === true,
     );
     expect(childPending).toBeDefined();
     expect(childPending?.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
@@ -123,7 +123,7 @@ describe("pending privacy through the real init() pipeline", () => {
     await new Promise((r) => setTimeout(r, 60));
     await client.flush();
 
-    const pending = exporter.spans.find((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true);
+    const pending = exporter.spans.find((s) => s.attributes[RIUS_SPAN_PENDING] === true);
     expect(pending).toBeDefined();
     expect(pending?.attributes["input.value"]).toBeUndefined();
     span.end();
@@ -141,9 +141,7 @@ describe("pending privacy through the real init() pipeline", () => {
     span.end();
     await new Promise((r) => setTimeout(r, 50));
     await client.flush();
-    expect(
-      exporter.spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true),
-    ).toHaveLength(0);
+    expect(exporter.spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] === true)).toHaveLength(0);
   });
 });
 
@@ -159,9 +157,7 @@ describe("lifecycle interactions", () => {
     });
     trace.getTracer("t").startSpan("s").end();
     await client.flush();
-    expect(
-      exporter.spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true),
-    ).toHaveLength(1);
+    expect(exporter.spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] === true)).toHaveLength(1);
     await client.shutdown();
     client = undefined;
     expect(pings).toHaveLength(0);
@@ -228,9 +224,7 @@ describe("lifecycle interactions", () => {
     await client.flush(); // mid-operation flush
     await new Promise((r) => setTimeout(r, 120));
     await client.flush();
-    expect(
-      exporter.spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true),
-    ).toHaveLength(1);
+    expect(exporter.spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] === true)).toHaveLength(1);
     span.end();
   });
 });

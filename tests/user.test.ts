@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
 import {
-  GLASSFLOW_SPAN_PENDING,
   PENDING_IDENTITY_ATTRIBUTES,
+  RIUS_SPAN_PENDING,
   SESSION_ID,
   USER_ID,
 } from "../src/semconv.js";
@@ -137,7 +137,7 @@ describe("pending spans", () => {
       });
     });
     await client.flush();
-    const pending = exporter.getFinishedSpans().filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING]);
+    const pending = exporter.getFinishedSpans().filter((s) => s.attributes[RIUS_SPAN_PENDING]);
     expect(pending.length).toBeGreaterThan(0);
     expect(pending[0].attributes[USER_ID]).toBe("u-p");
   });

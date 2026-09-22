@@ -1,7 +1,12 @@
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 
-/** Wire-visible instrumentation scope name. The backend keys on this value. */
-export const TRACER_NAME = "glassflow";
+/**
+ * Wire-visible instrumentation scope name. "rius" since the vendor keys were
+ * normalized under the product name; it was "glassflow" before. Nothing in the
+ * backend keys on it: the sink stores the scope name verbatim and no reader
+ * filters on it, so both values coexist in stored data.
+ */
+export const TRACER_NAME = "rius";
 
 // OTel standard resource attribute: identity of one process lifetime (one
 // uuid per client, minted at init). The heartbeat payload's instance_id
@@ -97,7 +102,7 @@ export const MCP_RESULT_TYPE = "mcp.result_type";
  * cache_control part) and `folded` (aggregate of the input messages older
  * than the detail window). See contextSizes.ts. The backend uses it to
  * attribute `gen_ai.usage.input_tokens` across parts. A Rius vendor
- * attribute, NOT a convention (like `glassflow.span.pending` below: no
+ * attribute, NOT a convention (like `rius.span.pending` below: no
  * convention covers it). Computed from the normalized messages BEFORE
  * truncation, so it stays correct when the content attributes are cut at
  * the attribute cap, stripped by `captureContent: false` or rewritten by a
@@ -277,11 +282,13 @@ export const CONTENT_ATTRIBUTE_SUFFIXES: readonly string[] = [
 // --- Pending (partial) spans ---
 // Marks the content-free snapshot exported at span START; the backend maps it
 // to Finished=0 and the real span replaces it at end. This key knowingly bends
-// the convention-native rule (no glassflow.* namespace): OpenTelemetry has NO
+// the convention-native rule (no vendor namespace): OpenTelemetry has NO
 // pending-span mechanism to align with (spec #3732/#4646, semconv #2133, all
 // open, none planned), and the only shipping precedent (Logfire's
-// logfire.span_type) is equally vendor-namespaced.
-export const GLASSFLOW_SPAN_PENDING = "glassflow.span.pending";
+// logfire.span_type) is equally vendor-namespaced. Spelled glassflow.span.pending
+// before the vendor keys moved under rius.*; the backend reads both spellings
+// for as long as pre-rename SDK versions are in the field.
+export const RIUS_SPAN_PENDING = "rius.span.pending";
 
 // Attributes allowed to ride a pending snapshot: identity/taxonomy known at
 // span start. An ALLOWLIST on purpose: content exclusion must hold for
