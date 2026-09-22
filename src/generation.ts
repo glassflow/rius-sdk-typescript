@@ -80,9 +80,7 @@ export class Generation extends Observation {
   private readonly startedAt = performance.now();
   /**
    * The latest normalized input / output and the tool definitions, kept so
-   * `rius.context.sizes` can be recomputed from all three whenever any one of
-   * them changes: the attribute is then always current when the span ends,
-   * with no end hook.
+   * `rius.context.sizes` can be computed from all three once, in {@link end}.
    */
   private inputMessages?: Message[];
   private outputMessages?: Message[];
@@ -97,15 +95,30 @@ export class Generation extends Observation {
     private readonly provider?: string,
   ) {
     super(span);
-    // Every generation span carries the attribute, content or not.
-    this.refreshContextSizes();
+    // Every generation span carries the attribute: this seed stands in for a
+    // span ended through the raw OTel handle instead of end().
+    this.span.setAttribute(RIUS_CONTEXT_SIZES, contextSizes(undefined, undefined, undefined));
   }
 
-  private refreshContextSizes(): void {
+  /**
+   * Computed once, as the span ends, rather than on every content write: a
+   * generation with tools, input and output would otherwise pay for it three
+   * times, and only the last result matters. Derived from the normalized
+   * messages BEFORE truncation, which is what makes it trustworthy when the
+   * content attributes are not.
+   */
+  private setContextSizes(): void {
+    if (!this.inputMessages && !this.outputMessages && !this.tools) return; // the seed stands
     this.span.setAttribute(
       RIUS_CONTEXT_SIZES,
       contextSizes(this.tools, this.inputMessages, this.outputMessages),
     );
+  }
+
+  /** Ends the span after recording the context sizes; idempotent like the base. */
+  override end(): void {
+    if (!this.ended) this.setContextSizes();
+    super.end();
   }
 
   /**
@@ -119,7 +132,6 @@ export class Generation extends Observation {
     // of this list, and the sizes are measured on the same list, untruncated.
     this.inputMessages = normalizeMessages(value, "user");
     this.span.setAttribute(GEN_AI_INPUT_MESSAGES, toAttributeValue(this.inputMessages));
-    this.refreshContextSizes();
     return this;
   }
 
@@ -127,7 +139,6 @@ export class Generation extends Observation {
   setOutput(value: unknown): this {
     this.outputMessages = normalizeMessages(value, "assistant");
     this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, toAttributeValue(this.outputMessages));
-    this.refreshContextSizes();
     return this;
   }
 
@@ -142,7 +153,6 @@ export class Generation extends Observation {
   setToolDefinitions(tools: unknown[]): this {
     this.tools = tools;
     this.span.setAttribute(GEN_AI_TOOL_DEFINITIONS, toAttributeValue(tools));
-    this.refreshContextSizes();
     return this;
   }
 
