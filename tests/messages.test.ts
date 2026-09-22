@@ -17,11 +17,18 @@ describe("normalizeMessages", () => {
         role: "assistant",
         parts: [
           { type: "text", content: "hi" },
-          { type: "tool_call", id: "c1", name: "f", arguments: undefined },
+          // absent arguments are null, not dropped: same bytes as the Python SDK
+          { type: "tool_call", id: "c1", name: "f", arguments: null },
         ],
       },
       { role: "tool", parts: [{ type: "tool_call_response", id: "c1", response: "ok" }] },
       { role: "user", parts: [{ type: "text", content: "spec" }] },
+    ]);
+  });
+
+  it("writes null for a tool response without content, as the Python SDK does", () => {
+    expect(normalizeMessages([{ role: "tool", tool_call_id: "c9" }], "user")).toEqual([
+      { role: "tool", parts: [{ type: "tool_call_response", id: "c9", response: null }] },
     ]);
   });
 

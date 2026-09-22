@@ -51,7 +51,16 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
   if (role === "tool" && "tool_call_id" in message) {
     return {
       role: "tool",
-      parts: [{ type: "tool_call_response", id: message.tool_call_id, response: message.content }],
+      // Missing fields become null, never absent: Python's dict.get() writes
+      // null for them, and the two SDKs' parts must serialize to the same
+      // bytes for the context sizes to agree.
+      parts: [
+        {
+          type: "tool_call_response",
+          id: message.tool_call_id ?? null,
+          response: message.content ?? null,
+        },
+      ],
     };
   }
 
@@ -69,7 +78,12 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
     for (const call of toolCalls) {
       if (!isRecord(call)) continue;
       const fn = isRecord(call.function) ? call.function : {};
-      parts.push({ type: "tool_call", id: call.id, name: fn.name, arguments: fn.arguments });
+      parts.push({
+        type: "tool_call",
+        id: call.id ?? null,
+        name: fn.name ?? null,
+        arguments: fn.arguments ?? null,
+      });
     }
   }
   return { role, parts };
