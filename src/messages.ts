@@ -11,7 +11,8 @@
 import { toAttributeValue } from "./serde.js";
 
 type Part = Record<string, unknown>;
-type Message = { role: unknown; parts: Part[] } & Record<string, unknown>;
+/** A message in the spec `{role, parts}` shape, as the normalizer returns it. */
+export type Message = { role: unknown; parts: Part[] } & Record<string, unknown>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -74,8 +75,18 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
   return { role, parts };
 }
 
+/**
+ * Normalize one message or a list of them to the spec `{role, parts}` list.
+ * Exposed separately from the serializer so the context-size computation can
+ * walk the same normalized list the content attribute is serialized from:
+ * normalization runs once, and sizes are measured before truncation.
+ */
+export function normalizeMessages(messages: unknown, defaultRole: string): Message[] {
+  const list = Array.isArray(messages) ? messages : [messages];
+  return list.map((message) => normalizeMessage(message, defaultRole));
+}
+
 /** Serialize to the spec message-array shape (a JSON string attribute). */
 export function serializeMessages(messages: unknown, defaultRole: string): string {
-  const list = Array.isArray(messages) ? messages : [messages];
-  return toAttributeValue(list.map((message) => normalizeMessage(message, defaultRole))) as string;
+  return toAttributeValue(normalizeMessages(messages, defaultRole)) as string;
 }
