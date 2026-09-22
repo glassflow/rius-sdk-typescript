@@ -113,11 +113,13 @@ class Context {
     for (const messages of messageLists) {
       for (const message of messages) {
         for (const part of partsOf(message)) {
+          // First call with an id wins, as in the Python SDK: the two must
+          // resolve a duplicated id to the same tool.
           if (
             isRecord(part) &&
             part.type === "tool_call" &&
-            part.id !== undefined &&
-            part.id !== null
+            typeof part.id === "string" &&
+            !this.callNames.has(part.id)
           ) {
             this.callNames.set(part.id, part.name);
           }
@@ -141,8 +143,7 @@ class Context {
       case "tool_call":
         return ["c", this.toolRef(part.name), canonicalBytes(part)];
       case "tool_call_response": {
-        const id = part.id;
-        const name = id === undefined || id === null ? undefined : this.callNames.get(id);
+        const name = typeof part.id === "string" ? this.callNames.get(part.id) : undefined;
         return ["r", this.toolRef(name), canonicalBytes(part)];
       }
       default:
@@ -220,9 +221,9 @@ function assemble(
   return sizes;
 }
 
+/** Lists only; anything else counts as "not set", as in the Python SDK. */
 function asList(value: unknown): unknown[] | undefined {
-  if (value === undefined || value === null) return undefined;
-  return Array.isArray(value) ? value : [value];
+  return Array.isArray(value) ? value : undefined;
 }
 
 /**
