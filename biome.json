@@ -12,6 +12,10 @@
     {
       "include": ["package.json"],
       "formatter": { "enabled": false }
+    },
+    {
+      "include": ["tests/fixtures/context_sizes_*.json"],
+      "formatter": { "enabled": false }
     }
   ]
 }
