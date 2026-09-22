@@ -5,6 +5,11 @@ import { startAsCurrentSpan } from "./spans.js";
 export interface ObserveOptions {
   name?: string;
   kind?: SpanKind;
+  /**
+   * The index, collection or knowledge base a RETRIEVER-kind wrapper searched,
+   * set as `gen_ai.data_source.id`. Ignored on every other kind.
+   */
+  dataSourceId?: string;
   captureInput?: boolean;
   captureOutput?: boolean;
 }
@@ -39,7 +44,11 @@ export function observe<F extends (...args: never[]) => unknown>(
       // {args, kwargs} is the Python SDK's shape; JavaScript has no keyword
       // arguments, so kwargs is always empty, but the key stays so a saved
       // search or a console view reads both SDKs' input.value the same way.
-      { kind: options.kind, input: captureInput ? { args, kwargs: {} } : undefined },
+      {
+        kind: options.kind,
+        dataSourceId: options.dataSourceId,
+        input: captureInput ? { args, kwargs: {} } : undefined,
+      },
       async (observation): Promise<R> => {
         const result = (await fn(...(args as never[]))) as R;
         if (captureOutput && result !== undefined) observation.setOutput(result);

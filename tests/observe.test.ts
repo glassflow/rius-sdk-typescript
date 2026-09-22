@@ -150,3 +150,18 @@ describe("observe with kind TOOL", () => {
     expect(byName.get("lookup")?.["gen_ai.tool.name"]).toBe("lookup");
   });
 });
+
+describe("observe with kind RETRIEVER", () => {
+  it("carries the retrieval operation and an explicit data source", async () => {
+    const search = observe(async () => ["doc"], {
+      name: "search",
+      kind: SpanKind.RETRIEVER,
+      dataSourceId: "docs-index",
+    });
+    await search();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.operation.name"]).toBe("retrieval");
+    expect(span.attributes["gen_ai.data_source.id"]).toBe("docs-index");
+  });
+});

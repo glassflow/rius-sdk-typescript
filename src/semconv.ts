@@ -62,6 +62,13 @@ export const GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages";
 export const GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons";
 export const GEN_AI_TOOL_NAME = "gen_ai.tool.name";
 /**
+ * The index, collection or knowledge base a RETRIEVER span searched. Identity,
+ * set at span creation so pending snapshots carry it and so it can compose the
+ * span name. Conditionally Required by the conventions when a retrieval has a
+ * single identifiable data source; omitted rather than guessed otherwise.
+ */
+export const GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id";
+/**
  * The request's tool/function definitions, serialized verbatim (provider
  * shapes differ; the backend reads names and sizes from either). Content,
  * not identity — listed in CONTENT_ATTRIBUTES below.
@@ -136,11 +143,18 @@ export enum SpanKind {
   CHAIN = "CHAIN",
 }
 
+/**
+ * Partial on purpose. CHAIN has no GenAI operation: the conventions define
+ * none for a workflow step, and inventing one would put a value on the wire
+ * that no other producer agrees with. Every other kind maps to the operation
+ * the conventions define for it.
+ */
 const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.LLM]: "chat",
   [SpanKind.TOOL]: "execute_tool",
   [SpanKind.EMBEDDING]: "embeddings",
   [SpanKind.AGENT]: "invoke_agent",
+  [SpanKind.RETRIEVER]: "retrieval",
 };
 
 /**
@@ -299,6 +313,9 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_TOOL_NAME,
+  // The retrieval target is identity in the same sense the tool name is: a
+  // still-running retrieval must be attributable to the index it is hitting.
+  GEN_AI_DATA_SOURCE_ID,
   // Protocol identity, not content: a still-running MCP call must be
   // distinguishable from a local tool in the live view — the one place
   // setting the marker at creation pays off.

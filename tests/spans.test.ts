@@ -253,6 +253,60 @@ describe("gen_ai.tool.name on local tool spans", () => {
   });
 });
 
+describe("RETRIEVER spans", () => {
+  it("carries both taxonomy keys", async () => {
+    startSpan("retrieve", { kind: SpanKind.RETRIEVER }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["openinference.span.kind"]).toBe("RETRIEVER");
+    expect(span.attributes["gen_ai.operation.name"]).toBe("retrieval");
+  });
+
+  it("carries gen_ai.data_source.id when a data source is given", async () => {
+    startSpan("retrieve", { kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" }).end();
+    await startAsCurrentSpan(
+      "retrieve-scoped",
+      { kind: SpanKind.RETRIEVER, dataSourceId: "faq-index" },
+      async () => 1,
+    );
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("retrieve")?.["gen_ai.data_source.id"]).toBe("docs-index");
+    expect(byName.get("retrieve-scoped")?.["gen_ai.data_source.id"]).toBe("faq-index");
+  });
+
+  it("omits gen_ai.data_source.id when none is given", async () => {
+    startSpan("retrieve", { kind: SpanKind.RETRIEVER }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.data_source.id"]).toBeUndefined();
+  });
+
+  it("ignores a data source on a kind that is not RETRIEVER", async () => {
+    startSpan("step", { kind: SpanKind.CHAIN, dataSourceId: "docs-index" }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.data_source.id"]).toBeUndefined();
+  });
+
+  it("puts the data source on the pending snapshot, so a running retrieval is attributable", async () => {
+    await client.shutdown();
+    const pendingExporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: pendingExporter,
+      partialSpans: true,
+      heartbeatTransport: async () => {},
+    });
+    const obs = startSpan("retrieve", { kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" });
+    await client.flush();
+    const pending = pendingExporter
+      .getFinishedSpans()
+      .filter((s) => s.attributes["rius.span.pending"] === true);
+    obs.end();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].attributes["gen_ai.data_source.id"]).toBe("docs-index");
+    expect(pending[0].attributes["gen_ai.operation.name"]).toBe("retrieval");
+  });
+});
+
 describe("the OTel SpanKind field, derived from the taxonomy", () => {
   const cases: [SpanKind, OtelSpanKind][] = [
     [SpanKind.LLM, OtelSpanKind.CLIENT],

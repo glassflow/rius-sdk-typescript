@@ -35,10 +35,25 @@ describe("semconv", () => {
     });
   });
 
-  it("emits no operation name for kinds without a canonical one", () => {
+  it("maps RETRIEVER spans to the retrieval operation", () => {
+    expect(kindAttributes(SpanKind.RETRIEVER)).toEqual({
+      "openinference.span.kind": "RETRIEVER",
+      "gen_ai.operation.name": "retrieval",
+    });
+  });
+
+  it("emits no operation name for CHAIN, the one kind the conventions do not cover", () => {
     expect(kindAttributes(SpanKind.CHAIN)).toEqual({
       "openinference.span.kind": "CHAIN",
     });
+  });
+
+  it("gives every kind but CHAIN an operation name", () => {
+    for (const kind of Object.values(SpanKind)) {
+      const operation = kindAttributes(kind)["gen_ai.operation.name"];
+      if (kind === SpanKind.CHAIN) expect(operation).toBeUndefined();
+      else expect(operation, `${kind} has no operation name`).toBeDefined();
+    }
   });
 
   it("treats unflattened llm.prompts and llm.prompt_template as content", () => {
@@ -65,6 +80,7 @@ describe("semconv", () => {
       semconv.GEN_AI_OPERATION_NAME,
       semconv.GEN_AI_PROVIDER_NAME,
       semconv.GEN_AI_TOOL_NAME,
+      semconv.GEN_AI_DATA_SOURCE_ID,
       semconv.MCP_METHOD_NAME,
       semconv.MCP_PROTOCOL_VERSION,
       semconv.SESSION_ID,

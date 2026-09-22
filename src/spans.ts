@@ -2,6 +2,7 @@ import { type SpanKind as OtelSpanKind, type Span, SpanStatusCode } from "@opent
 import { getTracer } from "./client.js";
 import {
   ERROR_TYPE,
+  GEN_AI_DATA_SOURCE_ID,
   INPUT_VALUE,
   OUTPUT_VALUE,
   SpanKind,
@@ -30,6 +31,14 @@ export interface SpanOptions {
    * `withUser` around the handler.
    */
   userId?: string;
+  /**
+   * The index, collection or knowledge base a RETRIEVER span searched, set as
+   * `gen_ai.data_source.id`. Ignored on every other kind: the key means the
+   * target of a retrieval, and putting it elsewhere would make the attribute
+   * mean something different depending on the span. Omitted when not passed,
+   * never guessed.
+   */
+  dataSourceId?: string;
   /**
    * Identity attributes to set at span CREATION rather than after it. Pending
    * snapshots are built at start, so anything a caller would otherwise
@@ -132,11 +141,15 @@ function configure(observation: Observation, options: SpanOptions): Observation 
  * the span even on a provider without `UserSpanProcessor` installed.
  */
 function creationAttributes(name: string, options: SpanOptions): Record<string, string> {
+  const kind = options.kind ?? SpanKind.CHAIN;
   const attributes = {
-    ...kindAttributes(options.kind ?? SpanKind.CHAIN, name),
+    ...kindAttributes(kind, name),
     ...options.attributes,
   };
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;
+  if (kind === SpanKind.RETRIEVER && options.dataSourceId !== undefined) {
+    attributes[GEN_AI_DATA_SOURCE_ID] = options.dataSourceId;
+  }
   return attributes;
 }
 
