@@ -1,7 +1,7 @@
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
-import { GLASSFLOW_SPAN_PENDING, PENDING_IDENTITY_ATTRIBUTES, SESSION_ID } from "../src/semconv.js";
+import { PENDING_IDENTITY_ATTRIBUTES, RIUS_SPAN_PENDING, SESSION_ID } from "../src/semconv.js";
 import { withSession } from "../src/session.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 
@@ -126,7 +126,7 @@ describe("pending spans", () => {
       });
     });
     await client.flush();
-    const pending = exporter.getFinishedSpans().filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING]);
+    const pending = exporter.getFinishedSpans().filter((s) => s.attributes[RIUS_SPAN_PENDING]);
     expect(pending.length).toBeGreaterThan(0);
     expect(pending[0].attributes[SESSION_ID]).toBe("sess-p");
   });

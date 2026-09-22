@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type InitOptions, RiusClient, getTracer, init } from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";
 import { REGISTRY } from "../src/instrumentation.js";
-import { GLASSFLOW_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
+import { RIUS_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
 import { startAsCurrentSpan } from "../src/spans.js";
 
 let client: RiusClient | undefined;
@@ -54,7 +54,7 @@ describe("init", () => {
     client = testInit({ spanExporter: exporter });
     getTracer().startSpan("s").end();
     await client.flush();
-    expect(exporter.getFinishedSpans()[0].instrumentationScope.name).toBe("glassflow");
+    expect(exporter.getFinishedSpans()[0].instrumentationScope.name).toBe("rius");
   });
 
   it("stamps the service name on the resource", async () => {
@@ -285,8 +285,8 @@ describe("init: partial spans", () => {
     await client.flush();
 
     const spans = exporter.getFinishedSpans();
-    const pending = spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true);
-    const final = spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] !== true);
+    const pending = spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] === true);
+    const final = spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] !== true);
     expect(pending).toHaveLength(1);
     expect(final).toHaveLength(1);
     expect(pending[0].spanContext().spanId).toBe(final[0].spanContext().spanId);
@@ -300,7 +300,7 @@ describe("init: partial spans", () => {
     await client.flush();
 
     const spans = exporter.getFinishedSpans();
-    expect(spans.filter((s) => s.attributes[GLASSFLOW_SPAN_PENDING] === true)).toHaveLength(0);
+    expect(spans.filter((s) => s.attributes[RIUS_SPAN_PENDING] === true)).toHaveLength(0);
   });
 
   it("starts no pending processor when disabled, so a span emits nothing", async () => {

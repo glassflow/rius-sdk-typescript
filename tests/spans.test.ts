@@ -244,7 +244,7 @@ describe("gen_ai.tool.name on local tool spans", () => {
     await client.flush(); // the snapshot is exported while the span is still open
     const pending = pendingExporter
       .getFinishedSpans()
-      .filter((s) => s.attributes["glassflow.span.pending"] === true);
+      .filter((s) => s.attributes["rius.span.pending"] === true);
     obs.end();
     expect(pending).toHaveLength(1);
     expect(pending[0].attributes["gen_ai.tool.name"]).toBe("weather");

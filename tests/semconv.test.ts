@@ -6,7 +6,7 @@ import fixture from "./fixtures/semconv.json" with { type: "json" };
 
 describe("semconv", () => {
   it("uses the wire-visible tracer name the backend keys on", () => {
-    expect(semconv.TRACER_NAME).toBe("glassflow");
+    expect(semconv.TRACER_NAME).toBe("rius");
   });
 
   it("matches every Python constant verbatim", () => {

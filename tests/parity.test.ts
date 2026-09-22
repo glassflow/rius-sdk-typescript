@@ -56,7 +56,7 @@ describe("resource and scope identity", () => {
     startSpan("s").end();
     await client.flush();
     const scope = exporter.getFinishedSpans()[0].instrumentationScope;
-    expect(scope.name).toBe("glassflow");
+    expect(scope.name).toBe("rius");
     expect(scope.version).toBe(VERSION);
   });
 });
