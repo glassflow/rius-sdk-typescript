@@ -21,6 +21,7 @@ import { ExportOutcomeExporter } from "./exportHealth.js";
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
+import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
 import { GEN_AI_AGENT_NAME, SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
@@ -258,6 +259,13 @@ export function init(options: InitOptions = {}): RiusClient {
     // the session id (and the workspace route, which decides which
     // destination the snapshot itself goes to) must be stamped first to
     // ride it.
+    // FIRST of our own processors, at both hooks. At onEnd it must run before
+    // the batch processor queues the span, so the canonical keys exist by the
+    // time MaskingSpanExporter (which sits in the exporter chain, downstream of
+    // the queue) decides what is content. At onStart it must run before the
+    // pending processor snapshots the span, so the snapshot's canonical
+    // identity allowlist matches. Always on; there is no opt-out.
+    processors.add(new NormalizingSpanProcessor());
     processors.add(new SessionSpanProcessor(config.sessionId));
     processors.add(new UserSpanProcessor());
     if (routing !== undefined) {
