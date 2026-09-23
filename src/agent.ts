@@ -18,7 +18,7 @@
  */
 
 import { context as apiContext, createContextKey } from "@opentelemetry/api";
-import { DEFAULT_SERVICE_NAME } from "./config.js";
+import { namedAgent } from "./config.js";
 import { SpanKind } from "./semconv.js";
 
 let configured: string | undefined;
@@ -63,14 +63,13 @@ export function resolveAgentName(
 }
 
 /**
- * The configured name, unless it is the placeholder. The one place the
- * placeholder is turned into "no name": both readers of the configured name
- * — the agent an AGENT span invokes, and the agent a TOOL span was executed
- * by — must suppress it identically, or the same process would name itself
- * `unknown_service` on one span and nothing on the other.
+ * The configured name, unless it is the placeholder. The suppression itself
+ * lives in `config.ts` (see {@link namedAgent}) because the resource's
+ * `rius.main_agent.name` is a third reader of the same value and must answer
+ * identically; this is just the module-state binding of it.
  */
 function namedConfiguredAgent(): string | undefined {
-  return configured === DEFAULT_SERVICE_NAME ? undefined : configured;
+  return namedAgent(configured);
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   ERROR_TYPE,
   GEN_AI_AGENT_ID,
   GEN_AI_AGENT_NAME,
+  GEN_AI_AGENT_VERSION,
   GEN_AI_DATA_SOURCE_ID,
   GEN_AI_RETRIEVAL_DOCUMENTS,
   GEN_AI_RETRIEVAL_TOP_K,
@@ -106,6 +107,18 @@ export interface SpanOptions {
    * in-process agent leaves it unset. Ignored on every other kind.
    */
   agentId?: string;
+  /**
+   * The invoked agent's version, set as `gen_ai.agent.version`: the version of
+   * the agent DEFINITION this span invoked — its prompt, tools and policy.
+   * Taken verbatim; the conventions' own examples are `1.0.0` and
+   * `2025-05-01`, so there is no one format to hold callers to.
+   *
+   * Never derived from `service.version` (the build running this process) nor
+   * from the main-agent version (the agent this process IS): a process at one
+   * version can invoke agents at several others. Ignored on every other kind,
+   * like the name and the id it accompanies.
+   */
+  agentVersion?: string;
   /**
    * Identity attributes to set at span CREATION rather than after it. Pending
    * snapshots are built at start, so anything a caller would otherwise
@@ -306,6 +319,7 @@ function creationAttributes(
     const agentName = resolveAgentName(options.agentName, kind);
     if (agentName !== undefined) attributes[GEN_AI_AGENT_NAME] = agentName;
     if (options.agentId !== undefined) attributes[GEN_AI_AGENT_ID] = options.agentId;
+    if (options.agentVersion !== undefined) attributes[GEN_AI_AGENT_VERSION] = options.agentVersion;
   }
   return attributes;
 }

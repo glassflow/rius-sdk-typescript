@@ -287,11 +287,11 @@ describe("init: heartbeat", () => {
     client = init({ spanExporter: new InMemorySpanExporter(), heartbeatTransport: transport });
     transport.mockClear();
 
-    await client.shutdown();
+    await client?.shutdown();
     expect(transport).toHaveBeenCalledTimes(1);
     expect((transport.mock.calls[0]?.[0] as { stopped?: boolean }).stopped).toBe(true);
 
-    await client.shutdown();
+    await client?.shutdown();
     expect(transport).toHaveBeenCalledTimes(1);
     client = undefined;
   });
@@ -304,7 +304,7 @@ describe("init: heartbeat", () => {
     });
     expect(process.listenerCount("beforeExit")).toBe(before + 1);
 
-    await client.shutdown();
+    await client?.shutdown();
     expect(process.listenerCount("beforeExit")).toBe(before);
     client = undefined;
   });
@@ -392,7 +392,7 @@ describe("instance identity (service.instance.id)", () => {
     getTracer().startSpan("a").end();
     await client.flush();
     const idA = exporterA.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
-    await client.shutdown();
+    await client?.shutdown();
 
     const exporterB = new InMemorySpanExporter();
     client = testInit({ serviceName: "svc", spanExporter: exporterB });
@@ -453,5 +453,87 @@ describe("service.version on the resource", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("main-agent identity on the resource", () => {
+  /** The resource attributes of one span exported by `options`. */
+  async function resourceAttributes(options: InitOptions): Promise<Record<string, unknown>> {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ spanExporter: exporter, ...options });
+    await startAsCurrentSpan("s", () => {});
+    await client.flush();
+    return exporter.getFinishedSpans()[0].resource.attributes;
+  }
+
+  it("stamps the configured agent name in the rius namespace", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner" });
+    expect(attributes["rius.main_agent.name"]).toBe("planner");
+  });
+
+  it("STILL stamps gen_ai.agent.name: the move is additive, never a swap", async () => {
+    // A swap would blank agent identity for every deployment sitting between
+    // this SDK release and the sink release that reads the new key. If this
+    // assertion is ever deleted, that promise is being broken.
+    const attributes = await resourceAttributes({ agentName: "planner" });
+    expect(attributes["gen_ai.agent.name"]).toBe("planner");
+    expect(attributes["rius.main_agent.name"]).toBe(attributes["gen_ai.agent.name"]);
+  });
+
+  it("omits the main-agent name when the configured name is the placeholder", async () => {
+    // Nothing was named. gen_ai.agent.name keeps carrying the placeholder as
+    // it always has (the sink suppresses it on that leg); the new key simply
+    // never claims an identity the caller did not give.
+    const attributes = await resourceAttributes({});
+    expect(attributes["gen_ai.agent.name"]).toBe("unknown_service");
+    expect("rius.main_agent.name" in attributes).toBe(false);
+  });
+
+  it("leaves the id, description and version off the resource when unset", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner" });
+    for (const key of [
+      "rius.main_agent.id",
+      "rius.main_agent.description",
+      "rius.main_agent.version",
+    ]) {
+      expect(key in attributes, `${key} should be absent`).toBe(false);
+    }
+  });
+
+  it("stamps the id, description and version verbatim when set", async () => {
+    const attributes = await resourceAttributes({
+      agentName: "planner",
+      mainAgentId: "arn:aws:bedrock:eu-central-1:1:agent/ABC",
+      mainAgentDescription: "plans multi-city trips",
+      mainAgentVersion: "7",
+    });
+    expect(attributes["rius.main_agent.id"]).toBe("arn:aws:bedrock:eu-central-1:1:agent/ABC");
+    expect(attributes["rius.main_agent.description"]).toBe("plans multi-city trips");
+    expect(attributes["rius.main_agent.version"]).toBe("7");
+  });
+
+  it("reads RIUS_MAIN_AGENT_* from the process environment", async () => {
+    vi.stubEnv("RIUS_MAIN_AGENT_ID", "env-agent");
+    vi.stubEnv("RIUS_MAIN_AGENT_DESCRIPTION", "from the environment");
+    vi.stubEnv("RIUS_MAIN_AGENT_VERSION", "2025-05-01");
+    try {
+      const attributes = await resourceAttributes({ agentName: "planner" });
+      expect(attributes["rius.main_agent.id"]).toBe("env-agent");
+      expect(attributes["rius.main_agent.description"]).toBe("from the environment");
+      expect(attributes["rius.main_agent.version"]).toBe("2025-05-01");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("never derives the agent version from service.version, or the reverse", async () => {
+    const onlyService = await resourceAttributes({ agentName: "a", serviceVersion: "2.3.1" });
+    expect(onlyService["service.version"]).toBe("2.3.1");
+    expect("rius.main_agent.version" in onlyService).toBe(false);
+
+    await client?.shutdown();
+    const onlyAgent = await resourceAttributes({ agentName: "a", mainAgentVersion: "7" });
+    expect(onlyAgent["rius.main_agent.version"]).toBe("7");
+    expect("service.version" in onlyAgent).toBe(false);
   });
 });

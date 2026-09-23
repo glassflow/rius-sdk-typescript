@@ -51,6 +51,12 @@ export interface ObserveOptions {
    * resource such as a Bedrock agent ARN; an in-process agent leaves it unset.
    */
   agentId?: string;
+  /**
+   * The invoked agent's version (`gen_ai.agent.version`): the version of the
+   * agent definition, taken verbatim and never derived from the service
+   * version or from the version of the agent this process is.
+   */
+  agentVersion?: string;
   captureInput?: boolean;
   captureOutput?: boolean;
 }
@@ -104,6 +110,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       topK: options.topK,
       agentName: options.agentName,
       agentId: options.agentId,
+      agentVersion: options.agentVersion,
       // {args, kwargs} is the Python SDK's shape; JavaScript has no keyword
       // arguments, so kwargs is always empty, but the key stays so a saved
       // search or a console view reads both SDKs' input.value the same way.

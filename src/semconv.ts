@@ -164,6 +164,68 @@ export const SERVICE_VERSION = ATTR_SERVICE_VERSION;
  * shapes differ; the backend reads names and sizes from either). Content,
  * not identity — listed in CONTENT_ATTRIBUTES below.
  */
+/**
+ * The version of the agent an AGENT span INVOKES, per the GenAI registry
+ * (`gen_ai.agent.version`, string, examples `1.0.0` and `2025-05-01`). It
+ * describes the same callee `gen_ai.agent.name` and `gen_ai.agent.id` do, so
+ * it is set only on AGENT spans and only from the caller's own string, taken
+ * verbatim: the registry's examples are semver and a date, so there is no
+ * format to validate against.
+ *
+ * Deliberately NOT derived from `service.version` or from
+ * `rius.main_agent.version`. A service at 2.3.1 may invoke an agent whose
+ * prompt, tools and policy are at 7, and a process may invoke several agents
+ * at different versions; deriving one from another would answer a question
+ * nobody asked with a number nobody set.
+ *
+ * Identity, so it is set at span CREATION and allowlisted onto pending
+ * snapshots below — which agent version a still-running span invoked is
+ * exactly what a live view needs.
+ */
+export const GEN_AI_AGENT_VERSION = "gen_ai.agent.version";
+/**
+ * The agent THIS PROCESS IS, in our own namespace, stamped on the RESOURCE.
+ *
+ * `gen_ai.agent.name` has no resource-level meaning in the conventions, and on
+ * a span it means the agent being INVOKED, so using it for both made one key
+ * carry two questions. These keys ask only the process-level one. The value is
+ * the SAME resolved agent name `gen_ai.agent.name` carries, with the same
+ * placeholder suppression — this is a move into our namespace, not a second
+ * identity to configure.
+ *
+ * `gen_ai.agent.name` keeps being stamped alongside them. Dropping it would be
+ * a flag day: every deployment between this SDK release and the sink release
+ * would lose its agent identity. Resource attributes ride once per OTLP batch,
+ * not once per span, so the duplication is free.
+ */
+export const RIUS_MAIN_AGENT_NAME = "rius.main_agent.name";
+/**
+ * A STABLE identifier for the agent this process is, such as a registry id or
+ * a hosted agent's ARN. The upstream constraint on `gen_ai.agent.id` is
+ * adopted here deliberately, even though we own this namespace: a transient
+ * in-memory or process-local id (a uuid minted at startup, an object address,
+ * a pod name) must NOT be used, because it identifies a run rather than an
+ * agent and would shatter every agent into one bucket per restart.
+ * `service.instance.id` already answers "which process"; this answers "which
+ * agent". Keeping the constraint now is what makes a later rename to
+ * `gen_ai.main_agent.*` mechanical rather than a data-quality problem.
+ *
+ * Unset by default and never defaulted: unlike the name, it has no service-
+ * level value to fall back on, and inventing one would be the `unknown_service`
+ * mistake again.
+ */
+export const RIUS_MAIN_AGENT_ID = "rius.main_agent.id";
+/** A human-readable description of the agent this process is. Never defaulted. */
+export const RIUS_MAIN_AGENT_DESCRIPTION = "rius.main_agent.description";
+/**
+ * The version of the AGENT DEFINITION this process runs — its prompt, tools
+ * and policy — NOT of the build that hosts it. That is `service.version`, and
+ * the two move independently: a service can sit at 2.3.1 while the agent it
+ * runs is at 7, and a prompt change ships an agent version without touching
+ * the build. Neither is ever derived from the other, in either direction.
+ * Never defaulted, for the reason the id is not.
+ */
+export const RIUS_MAIN_AGENT_VERSION = "rius.main_agent.version";
 export const GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions";
 export const GEN_AI_REQUEST_PREFIX = "gen_ai.request.";
 /**
@@ -482,6 +544,10 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   // say which agent that process invoked here.
   GEN_AI_AGENT_NAME,
   GEN_AI_AGENT_ID,
+  // Same callee, same reason: the version of the agent being invoked is
+  // chosen before the work starts, so a still-running agent span can say
+  // which version of it is running.
+  GEN_AI_AGENT_VERSION,
   // Protocol identity, not content: a still-running MCP call must be
   // distinguishable from a local tool in the live view — the one place
   // setting the marker at creation pays off.

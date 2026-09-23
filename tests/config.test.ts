@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_ENDPOINT, resolveConfig } from "../src/config.js";
+import { DEFAULT_ENDPOINT, DEFAULT_SERVICE_NAME, resolveConfig } from "../src/config.js";
 
 describe("resolveConfig", () => {
   it("defaults with an empty environment", () => {
@@ -219,5 +219,80 @@ describe("serviceVersion", () => {
     expect(
       resolveConfig({}, { OTEL_RESOURCE_ATTRIBUTES: "service.version=" }).serviceVersion,
     ).toBeUndefined();
+  });
+});
+
+describe("main-agent identity", () => {
+  it("mirrors the resolved agent name, with no second option to configure", () => {
+    expect(resolveConfig({ agentName: "planner" }, {}).mainAgentName).toBe("planner");
+    expect(resolveConfig({}, { RIUS_AGENT_NAME: "from-env" }).mainAgentName).toBe("from-env");
+    // Defaulted to the service name, exactly as agentName is.
+    expect(resolveConfig({ serviceName: "svc" }, {}).mainAgentName).toBe("svc");
+  });
+
+  it("suppresses the placeholder, so an unconfigured process has no main-agent name", () => {
+    const c = resolveConfig({}, {});
+    expect(c.agentName).toBe(DEFAULT_SERVICE_NAME);
+    expect(c.mainAgentName).toBeUndefined();
+  });
+
+  it("takes the id and description from options, then the environment, then nothing", () => {
+    expect(resolveConfig({}, {}).mainAgentId).toBeUndefined();
+    expect(resolveConfig({}, {}).mainAgentDescription).toBeUndefined();
+    const explicit = resolveConfig(
+      { mainAgentId: "arn:agent/1", mainAgentDescription: "plans trips" },
+      { RIUS_MAIN_AGENT_ID: "env-id", RIUS_MAIN_AGENT_DESCRIPTION: "env-desc" },
+    );
+    expect(explicit.mainAgentId).toBe("arn:agent/1");
+    expect(explicit.mainAgentDescription).toBe("plans trips");
+    const fromEnv = resolveConfig(
+      {},
+      { RIUS_MAIN_AGENT_ID: "env-id", RIUS_MAIN_AGENT_DESCRIPTION: "env-desc" },
+    );
+    expect(fromEnv.mainAgentId).toBe("env-id");
+    expect(fromEnv.mainAgentDescription).toBe("env-desc");
+  });
+
+  it("treats an empty id, description or version as unset at every tier", () => {
+    expect(resolveConfig({ mainAgentId: "" }, {}).mainAgentId).toBeUndefined();
+    expect(resolveConfig({}, { RIUS_MAIN_AGENT_ID: "" }).mainAgentId).toBeUndefined();
+    expect(resolveConfig({ mainAgentDescription: "" }, {}).mainAgentDescription).toBeUndefined();
+    expect(resolveConfig({ mainAgentVersion: "" }, {}).mainAgentVersion).toBeUndefined();
+    expect(resolveConfig({}, { RIUS_MAIN_AGENT_VERSION: "" }).mainAgentVersion).toBeUndefined();
+  });
+});
+
+describe("mainAgentVersion is not serviceVersion", () => {
+  it("resolves from its own option and environment variable", () => {
+    expect(
+      resolveConfig({ mainAgentVersion: "7" }, { RIUS_MAIN_AGENT_VERSION: "8" }).mainAgentVersion,
+    ).toBe("7");
+    expect(resolveConfig({}, { RIUS_MAIN_AGENT_VERSION: "8" }).mainAgentVersion).toBe("8");
+  });
+
+  it("is not derived from serviceVersion, nor serviceVersion from it", () => {
+    // The whole point of the separate key: a build at 2.3.1 can run an agent
+    // definition at 7, and a prompt change moves one without the other.
+    const onlyService = resolveConfig(
+      { serviceVersion: "2.3.1" },
+      { OTEL_RESOURCE_ATTRIBUTES: "service.version=2.3.1" },
+    );
+    expect(onlyService.serviceVersion).toBe("2.3.1");
+    expect(onlyService.mainAgentVersion).toBeUndefined();
+
+    const onlyAgent = resolveConfig({ mainAgentVersion: "7" }, {});
+    expect(onlyAgent.mainAgentVersion).toBe("7");
+    expect(onlyAgent.serviceVersion).toBeUndefined();
+  });
+
+  it("never reads the agent version out of OTEL_RESOURCE_ATTRIBUTES", () => {
+    // No convention defines rius.main_agent.version, so the OTel variable
+    // cannot be carrying it; only service.version gets that extra tier.
+    const c = resolveConfig(
+      {},
+      { OTEL_RESOURCE_ATTRIBUTES: "rius.main_agent.version=7,service.version=2.3.1" },
+    );
+    expect(c.mainAgentVersion).toBeUndefined();
+    expect(c.serviceVersion).toBe("2.3.1");
   });
 });
