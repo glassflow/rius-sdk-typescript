@@ -1,5 +1,5 @@
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import { observe } from "../src/observe.js";
 import { SpanKind } from "../src/semconv.js";
@@ -136,18 +136,43 @@ describe("observe error.type", () => {
 });
 
 describe("observe with kind TOOL", () => {
-  it("carries gen_ai.tool.name equal to the span name, explicit or derived", async () => {
+  it("carries gen_ai.tool.name equal to the span name when the caller named the span", async () => {
     const named = observe(async () => 1, { name: "search-docs", kind: SpanKind.TOOL });
+    await named();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("search-docs");
+    expect(span.attributes["gen_ai.tool.name"]).toBe("search-docs");
+  });
+
+  it("names the span after the operation and the wrapped function, which is the tool", async () => {
     async function lookup(): Promise<number> {
       return 2;
     }
     const derived = observe(lookup, { kind: SpanKind.TOOL });
-    await named();
     await derived();
     await client.flush();
-    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
-    expect(byName.get("search-docs")?.["gen_ai.tool.name"]).toBe("search-docs");
-    expect(byName.get("lookup")?.["gen_ai.tool.name"]).toBe("lookup");
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("execute_tool lookup");
+    // The bare function name, never the rendered span name: the attribute is
+    // a metric dimension, and `execute_tool lookup` would be a different tool.
+    expect(span.attributes["gen_ai.tool.name"]).toBe("lookup");
+  });
+
+  it("derives the tool name from the function without the span-name warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      async function fetchPrice(): Promise<number> {
+        return 3;
+      }
+      await observe(fetchPrice, { kind: SpanKind.TOOL })();
+      await client.flush();
+      // Nothing is being reused as something else here, so there is nothing
+      // to deprecate: the warning is about span names doubling as tool names.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("takes an explicit tool name that differs from the span name", async () => {
@@ -161,6 +186,80 @@ describe("observe with kind TOOL", () => {
     const span = exporter.getFinishedSpans()[0];
     expect(span.name).toBe("execute_tool search-docs");
     expect(span.attributes["gen_ai.tool.name"]).toBe("search-docs");
+  });
+});
+
+// The conventions name a span `{operation} {target}`. `observe` has no span
+// name of its own to fall back to for those kinds — the function's name is
+// not a model, an agent or an index — so the composed name is the default,
+// and CHAIN, which has no operation, keeps the function name.
+describe("observe span names", () => {
+  it("keeps the function name on a CHAIN, the one kind with no operation", async () => {
+    async function planTrip(): Promise<number> {
+      return 1;
+    }
+    await observe(planTrip)();
+    await observe(planTrip, { kind: SpanKind.CHAIN })();
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["planTrip", "planTrip"]);
+  });
+
+  it("composes an AGENT name from the invoked agent", async () => {
+    async function delegate(): Promise<number> {
+      return 1;
+    }
+    await observe(delegate, { kind: SpanKind.AGENT, agentName: "planner" })();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].name).toBe("invoke_agent planner");
+  });
+
+  it("composes a RETRIEVER name from the data source", async () => {
+    async function search(): Promise<string[]> {
+      return ["doc"];
+    }
+    await observe(search, { kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" })();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].name).toBe("retrieval docs-index");
+  });
+
+  it("falls back to the bare operation when the target is unknown", async () => {
+    async function anon(): Promise<number> {
+      return 1;
+    }
+    await observe(anon, { kind: SpanKind.RETRIEVER })();
+    await observe(anon, { kind: SpanKind.EMBEDDING })();
+    await observe(anon, { kind: SpanKind.LLM })();
+    await client.flush();
+    // No AGENT here: an initialised client always knows an agent name, so
+    // that fallback is a semconv unit test rather than a wrapper one.
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([
+      "retrieval",
+      "embeddings",
+      "chat",
+    ]);
+  });
+
+  it("lets an explicit name win on every kind", async () => {
+    async function work(): Promise<number> {
+      return 1;
+    }
+    for (const kind of [SpanKind.TOOL, SpanKind.AGENT, SpanKind.RETRIEVER, SpanKind.CHAIN]) {
+      await observe(work, { kind, name: `mine-${kind}` })();
+    }
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([
+      "mine-TOOL",
+      "mine-AGENT",
+      "mine-RETRIEVER",
+      "mine-CHAIN",
+    ]);
+  });
+
+  it("names the wrapper after the function, not after the composed span", async () => {
+    async function lookup(): Promise<number> {
+      return 1;
+    }
+    expect(observe(lookup, { kind: SpanKind.TOOL }).name).toBe("lookup");
   });
 });
 

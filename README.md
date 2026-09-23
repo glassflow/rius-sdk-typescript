@@ -98,6 +98,23 @@ const handleQuery2 = observe(
 await handleQuery("hello");
 ```
 
+That is the CHAIN case, the default. On every other kind the span is named
+the way the GenAI conventions say to, `{operation} {target}`, and the
+wrapped function's name is used as the target only where it IS the target —
+a tool:
+
+```ts
+const getWeather = observe(async function getWeather(city: string) { ... }, {
+  kind: SpanKind.TOOL,
+});
+await getWeather("Berlin"); // span "execute_tool getWeather", gen_ai.tool.name "getWeather"
+```
+
+An AGENT wrapper is named after the agent it invokes (`agentName`, or the
+one `init()` was given), a RETRIEVER after its `dataSourceId`. A function
+name is not an agent or an index, so it is never used as one. Pass `{ name }`
+to override any of this.
+
 ### `startSpan` / `startAsCurrentSpan`: manual spans
 
 For finer control than `observe`, create spans directly:
@@ -118,10 +135,39 @@ automatically and recording any thrown exception. The options argument is
 optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
 works when you have nothing to configure.
 
+**The name is optional too.** Omit it and the span is named the way the
+OpenTelemetry GenAI conventions say to — `{operation} {target}` — composed
+from the attributes the span already carries. The callback still comes last,
+so `startAsCurrentSpan(options, fn)` and `startAsCurrentSpan(fn)` are both
+valid:
+
+| Kind | Default span name | Without the target |
+| --- | --- | --- |
+| LLM | `chat gpt-4o` (`{operation} {gen_ai.request.model}`) | `chat` |
+| EMBEDDING | `embeddings text-embedding-3-small` | `embeddings` |
+| TOOL | `execute_tool get_weather` | `execute_tool` |
+| AGENT | `invoke_agent planner` | `invoke_agent` |
+| RETRIEVER | `retrieval docs-index` | `retrieval` |
+| CHAIN | the function name for `observe`, else `chain` | — |
+
+```ts
+// Named "execute_tool get_weather", with gen_ai.tool.name "get_weather".
+await startAsCurrentSpan(
+  { kind: SpanKind.TOOL, toolName: "get_weather", input: city },
+  async (span) => { ... },
+);
+```
+
+A name you pass always wins; this changes the default, not your ability to
+choose. The LLM name uses the REQUEST model, never the response model: the
+span is named when it starts, and a partial-span snapshot has to carry the
+same name as the span that replaces it. CHAIN has no operation to compose
+from, so an unnamed CHAIN span is called `chain`.
+
 `kind` sets the span's taxonomy (`openinference.span.kind`, our `SpanKind`
 enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, AGENT, LLM). A TOOL
 span also carries `gen_ai.tool.name`, set to the span name unless you pass
-`toolName`, which both the span helpers and `observe` accept for the case
+`toolName` (and unset if you pass neither), which both the span helpers and `observe` accept for the case
 where the span name is not the bare tool name. A RETRIEVER span carries
 `gen_ai.data_source.id` when you pass `dataSourceId`, naming the index or
 collection it searched, and `gen_ai.retrieval.top_k` when you pass `topK`.
@@ -192,6 +238,10 @@ await startAsCurrentGeneration(
 Each `modelParameters` entry is recorded as `gen_ai.request.<key>`, so use the
 provider's own parameter names. `setFinishReasons` accepts one reason or a
 list.
+
+The name is optional here as well: `startAsCurrentGeneration({ model:
+"gpt-4o" }, fn)` names the span `chat gpt-4o`, and an `operation` override
+names it after that operation instead (`embeddings text-embedding-3-small`).
 
 ## Auto-instrumentation
 

@@ -12,6 +12,7 @@ import {
   OUTPUT_VALUE,
   SpanKind,
   USER_ID,
+  composeSpanName,
   kindAttributes,
   otelSpanKind,
 } from "./semconv.js";
@@ -40,7 +41,10 @@ export interface SpanOptions {
    * The tool name a TOOL span carries as `gen_ai.tool.name`. Defaults to the
    * span name, which is what a caller who passes nothing meant back when the
    * two were necessarily the same string. Pass it explicitly whenever the
-   * span name is not the bare tool name.
+   * span name is not the bare tool name — and prefer passing it INSTEAD of a
+   * span name, which gets you the conventions' `execute_tool {tool}` name for
+   * free. With neither, the span is named `execute_tool` and carries no tool
+   * name: nothing is invented.
    */
   toolName?: string;
   /**
@@ -210,8 +214,12 @@ function configure(observation: Observation, options: SpanOptions): Observation 
  * The fallback warns once per span so the coupling is visible and a major
  * release can drop it without a silent rename. Passing `toolName` silences it.
  */
-function resolveToolName(options: SpanOptions, name: string): string {
+function resolveToolName(options: SpanOptions, name: string | undefined): string | undefined {
   if (options.toolName !== undefined) return options.toolName;
+  // Nothing to fall back to: a caller who named neither the span nor the tool
+  // gets the bare `execute_tool` name and no tool attribute, which is honest.
+  // Nothing to warn about either, since no name is being reused as one.
+  if (name === undefined) return undefined;
   if (options.kind === SpanKind.TOOL) {
     warnOnce(
       `A span named "${name}" with kind TOOL is naming the tool as well as the span; gen_ai.tool.name will be "${name}". Pass toolName to set them separately. A future major release will stop deriving the tool name from the span name.`,
@@ -233,7 +241,10 @@ function warnOnce(message: string): void {
  * The user id is set here as well as via the `withUser` scope so it reaches
  * the span even on a provider without `UserSpanProcessor` installed.
  */
-function creationAttributes(name: string, options: SpanOptions): Record<string, string | number> {
+function creationAttributes(
+  name: string | undefined,
+  options: SpanOptions,
+): Record<string, string | number> {
   const kind = options.kind ?? SpanKind.CHAIN;
   const attributes: Record<string, string | number> = {
     ...kindAttributes(kind, resolveToolName(options, name)),
@@ -254,13 +265,74 @@ function creationAttributes(name: string, options: SpanOptions): Record<string, 
 }
 
 /**
+ * The span's name: the caller's if they gave one, else the conventions'
+ * `{operation} {target}` form composed from the attributes this span is being
+ * created with.
+ *
+ * Composing from the attributes rather than from the options is what keeps a
+ * name and the span under it in agreement — the tool name has already been
+ * resolved, the agent name has already fallen back to the configured one —
+ * and it is also why the rendered string can never leak back into an
+ * attribute: this reads the map, it never writes to it.
+ */
+function resolveName(
+  name: string | undefined,
+  kind: SpanKind | undefined,
+  attributes: Record<string, string | number>,
+): string {
+  return name ?? composeSpanName(kind ?? SpanKind.CHAIN, attributes);
+}
+
+/**
+ * Unpick `(name?, options?, fn)` from the scoped helpers' overload set, where
+ * everything but the trailing callback is optional. Shared with the
+ * generation helpers, whose options type differs but whose shape does not.
+ *
+ * Runtime discrimination is by `typeof`, which is exact here: a name is a
+ * string, a body is a function, and an options bag is neither. The casts
+ * only restate what those checks proved — TypeScript cannot narrow an
+ * unresolved generic through `typeof`.
+ *
+ * @internal Not re-exported from the package entry point.
+ */
+export function splitScopedArgs<O extends object, F>(
+  first: string | O | F,
+  second?: O | F,
+  third?: F,
+): { name: string | undefined; options: O; fn: F } {
+  if (typeof first === "function") return { name: undefined, options: {} as O, fn: first as F };
+  if (typeof first === "string") {
+    return typeof second === "function"
+      ? { name: first, options: {} as O, fn: second as F }
+      : { name: first, options: (second ?? {}) as O, fn: third as F };
+  }
+  return { name: undefined, options: first as O, fn: second as F };
+}
+
+/**
  * Create a span and return a handle. You MUST call end() (or use `using`).
  * The span is parented to whatever is current but does NOT become current.
+ *
+ * The name is optional: omit it and the span is named the way the GenAI
+ * conventions say to, `{operation} {target}` — `execute_tool get_weather`,
+ * `invoke_agent planner`, `retrieval docs-index` — from the attributes it is
+ * being created with. A name you pass always wins.
  */
-export function startSpan(name: string, options: SpanOptions = {}): Observation {
-  const span = getTracer().startSpan(name, {
+export function startSpan(name: string, options?: SpanOptions): Observation;
+export function startSpan(options?: SpanOptions): Observation;
+export function startSpan(
+  nameOrOptions?: string | SpanOptions,
+  maybeOptions?: SpanOptions,
+): Observation {
+  const [name, options] =
+    typeof nameOrOptions === "string"
+      ? [nameOrOptions, maybeOptions ?? {}]
+      : [undefined, nameOrOptions ?? {}];
+
+  const attributes = creationAttributes(name, options);
+  const span = getTracer().startSpan(resolveName(name, options.kind, attributes), {
     kind: options.otelKind ?? otelSpanKind(options.kind ?? SpanKind.CHAIN),
-    attributes: creationAttributes(name, options),
+    attributes,
   });
   return configure(new Observation(span), options);
 }
@@ -272,8 +344,11 @@ export type SpanBody<T> = (observation: Observation) => Promise<T> | T;
  * Run `fn` with a new span active, so spans created inside it nest under this
  * one across async boundaries. Auto-ends, records exceptions, rethrows.
  *
- * `options` is optional, so the common case is `startAsCurrentSpan(name, fn)`
- * rather than `startAsCurrentSpan(name, {}, fn)`. The callback stays last.
+ * Both the name and `options` are optional, and the callback always comes
+ * last: `startAsCurrentSpan(name, fn)`, `startAsCurrentSpan(options, fn)` and
+ * `startAsCurrentSpan(fn)` all work, as does the full three-argument form.
+ * Omitting the name asks for the conventions' `{operation} {target}` name;
+ * see {@link startSpan}.
  */
 export function startAsCurrentSpan<T>(name: string, fn: SpanBody<T>): Promise<T>;
 export function startAsCurrentSpan<T>(
@@ -281,19 +356,19 @@ export function startAsCurrentSpan<T>(
   options: SpanOptions,
   fn: SpanBody<T>,
 ): Promise<T>;
+export function startAsCurrentSpan<T>(options: SpanOptions, fn: SpanBody<T>): Promise<T>;
+export function startAsCurrentSpan<T>(fn: SpanBody<T>): Promise<T>;
 export function startAsCurrentSpan<T>(
-  name: string,
-  optionsOrFn: SpanOptions | SpanBody<T>,
-  maybeFn?: SpanBody<T>,
+  first: string | SpanOptions | SpanBody<T>,
+  second?: SpanOptions | SpanBody<T>,
+  third?: SpanBody<T>,
 ): Promise<T> {
-  const [options, fn] =
-    typeof optionsOrFn === "function"
-      ? [{} as SpanOptions, optionsOrFn]
-      : [optionsOrFn, maybeFn as SpanBody<T>];
+  const { name, options, fn } = splitScopedArgs<SpanOptions, SpanBody<T>>(first, second, third);
+  const attributes = creationAttributes(name, options);
 
   return runActive(
-    name,
-    creationAttributes(name, options),
+    resolveName(name, options.kind, attributes),
+    attributes,
     options.userId,
     (span) => configure(new Observation(span), options),
     fn,

@@ -23,11 +23,12 @@ import {
   RIUS_CONTEXT_SIZES,
   SpanKind,
   USER_ID,
+  composeSpanName,
   kindAttributes,
   otelSpanKind,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
-import { Observation, runActive } from "./spans.js";
+import { Observation, runActive, splitScopedArgs } from "./spans.js";
 
 /**
  * Options for {@link startGeneration} and {@link startAsCurrentGeneration}:
@@ -271,11 +272,38 @@ function configure(generation: Generation, options: GenerationOptions): Generati
   return generation;
 }
 
-/** Create a generation span and return a handle. You MUST call end(). */
-export function startGeneration(name: string, options: GenerationOptions = {}): Generation {
-  const span = getTracer().startSpan(name, {
+/**
+ * The generation's name: the caller's, else the conventions' `{operation}
+ * {model}` — `chat gpt-4o`, or `embeddings text-embedding-3-small` when the
+ * operation was overridden, which is why this composes from the resolved
+ * attributes instead of hardcoding `chat`. The REQUEST model, never the
+ * response one: the response model is not known when the span is named, and
+ * a pending snapshot must carry the same name as the final span.
+ */
+function resolveName(name: string | undefined, attributes: Record<string, string>): string {
+  return name ?? composeSpanName(SpanKind.LLM, attributes);
+}
+
+/**
+ * Create a generation span and return a handle. You MUST call end().
+ *
+ * The name is optional; omitted, the span is named `{operation} {model}`.
+ */
+export function startGeneration(name: string, options?: GenerationOptions): Generation;
+export function startGeneration(options?: GenerationOptions): Generation;
+export function startGeneration(
+  nameOrOptions?: string | GenerationOptions,
+  maybeOptions?: GenerationOptions,
+): Generation {
+  const [name, options] =
+    typeof nameOrOptions === "string"
+      ? [nameOrOptions, maybeOptions ?? {}]
+      : [undefined, nameOrOptions ?? {}];
+
+  const attributes = attributesFor(options);
+  const span = getTracer().startSpan(resolveName(name, attributes), {
     kind: otelSpanKind(SpanKind.LLM),
-    attributes: attributesFor(options),
+    attributes,
   });
   return configure(new Generation(span, options.provider), options);
 }
@@ -286,8 +314,9 @@ export type GenerationBody<T> = (generation: Generation) => Promise<T> | T;
 /**
  * Run `fn` with a generation span active. Auto-ends, records exceptions.
  *
- * `options` is optional, so `startAsCurrentGeneration(name, fn)` works without
- * an empty object. The callback stays last.
+ * Both the name and `options` are optional and the callback stays last, so
+ * `startAsCurrentGeneration({ model: "gpt-4o" }, fn)` names the span
+ * `chat gpt-4o` for you.
  */
 export function startAsCurrentGeneration<T>(name: string, fn: GenerationBody<T>): Promise<T>;
 export function startAsCurrentGeneration<T>(
@@ -296,18 +325,25 @@ export function startAsCurrentGeneration<T>(
   fn: GenerationBody<T>,
 ): Promise<T>;
 export function startAsCurrentGeneration<T>(
-  name: string,
-  optionsOrFn: GenerationOptions | GenerationBody<T>,
-  maybeFn?: GenerationBody<T>,
+  options: GenerationOptions,
+  fn: GenerationBody<T>,
+): Promise<T>;
+export function startAsCurrentGeneration<T>(fn: GenerationBody<T>): Promise<T>;
+export function startAsCurrentGeneration<T>(
+  first: string | GenerationOptions | GenerationBody<T>,
+  second?: GenerationOptions | GenerationBody<T>,
+  third?: GenerationBody<T>,
 ): Promise<T> {
-  const [options, fn] =
-    typeof optionsOrFn === "function"
-      ? [{} as GenerationOptions, optionsOrFn]
-      : [optionsOrFn, maybeFn as GenerationBody<T>];
+  const { name, options, fn } = splitScopedArgs<GenerationOptions, GenerationBody<T>>(
+    first,
+    second,
+    third,
+  );
+  const attributes = attributesFor(options);
 
   return runActive(
-    name,
-    attributesFor(options),
+    resolveName(name, attributes),
+    attributes,
     options.userId,
     (span) => configure(new Generation(span, options.provider), options),
     fn,

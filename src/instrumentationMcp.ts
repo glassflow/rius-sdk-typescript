@@ -183,11 +183,11 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
     params: { name: string; arguments?: unknown },
     ...rest: unknown[]
   ): Promise<unknown> {
-    // `execute_tool <name>`, matching the Python SDK: the same tool call must
-    // produce the same span name in every language, or cross-language
-    // dashboards and saved searches split by SDK.
+    // Unnamed on purpose: the span helpers compose `execute_tool <name>` from
+    // `toolName` below, which is the same string this used to build by hand
+    // and the same one the Python SDK produces. One composer means the manual
+    // helpers and this wrapper cannot drift apart, in either language.
     return startAsCurrentSpan(
-      `execute_tool ${params.name}`,
       {
         kind: SpanKind.TOOL,
         // The OTel SpanKind FIELD (orthogonal to our taxonomy attribute above):

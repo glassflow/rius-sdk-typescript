@@ -1,4 +1,5 @@
-import type { SpanKind } from "./semconv.js";
+import { SpanKind } from "./semconv.js";
+import type { Observation } from "./spans.js";
 import { startAsCurrentSpan } from "./spans.js";
 
 /** Options for {@link observe}. */
@@ -56,32 +57,57 @@ export function observe<F extends (...args: never[]) => unknown>(
   // Awaited<ReturnType<F>>") even though they are.
   type R = Awaited<ReturnType<F>>;
 
-  const name = options.name ?? (fn.name || "anonymous");
+  const kind = options.kind ?? SpanKind.CHAIN;
+  // A CHAIN has no operation to compose a name from, so the wrapped
+  // function's name stays its span name — the behaviour every existing
+  // caller has. Every other kind gets the conventions' `{operation}
+  // {target}` name, composed per call in the span helpers, so passing no
+  // name here is how we ask for it.
+  const name = options.name ?? (kind === SpanKind.CHAIN ? fn.name || "anonymous" : undefined);
+  // The wrapped function IS the tool, so its name is the tool's name — fed in
+  // as the tool name rather than as the span name, which both keeps
+  // `gen_ai.tool.name` bare (never the rendered `execute_tool x`) and avoids
+  // the span-name-as-tool-name deprecation warning, since nothing is being
+  // reused here. A caller who named the span keeps the old coupling, name and
+  // warning included: silently renaming their tool would split its metrics.
+  const toolName =
+    options.toolName ??
+    (kind === SpanKind.TOOL && name === undefined ? fn.name || undefined : undefined);
   const captureInput = options.captureInput ?? true;
   const captureOutput = options.captureOutput ?? true;
 
-  const wrapped = (...args: Parameters<F>): Promise<R> =>
-    startAsCurrentSpan<R>(
-      name,
+  const wrapped = (...args: Parameters<F>): Promise<R> => {
+    const spanOptions = {
+      kind: options.kind,
+      toolName,
+      dataSourceId: options.dataSourceId,
+      topK: options.topK,
+      agentName: options.agentName,
+      agentId: options.agentId,
       // {args, kwargs} is the Python SDK's shape; JavaScript has no keyword
       // arguments, so kwargs is always empty, but the key stays so a saved
       // search or a console view reads both SDKs' input.value the same way.
-      {
-        kind: options.kind,
-        toolName: options.toolName,
-        dataSourceId: options.dataSourceId,
-        topK: options.topK,
-        agentName: options.agentName,
-        agentId: options.agentId,
-        input: captureInput ? { args, kwargs: {} } : undefined,
-      },
-      async (observation): Promise<R> => {
-        const result = (await fn(...(args as never[]))) as R;
-        if (captureOutput && result !== undefined) observation.setOutput(result);
-        return result;
-      },
-    );
+      input: captureInput ? { args, kwargs: {} } : undefined,
+    };
+    const body = async (observation: Observation): Promise<R> => {
+      const result = (await fn(...(args as never[]))) as R;
+      if (captureOutput && result !== undefined) observation.setOutput(result);
+      return result;
+    };
+    // Two calls rather than one with an optional name: the span helpers keep
+    // the callback last, so "no name" is a different overload, not an
+    // undefined first argument.
+    return name === undefined
+      ? startAsCurrentSpan<R>(spanOptions, body)
+      : startAsCurrentSpan<R>(name, spanOptions, body);
+  };
 
-  Object.defineProperty(wrapped, "name", { value: name, configurable: true });
+  // The wrapper should look like what it wraps: its own name, or the
+  // function's, never the composed span name — `execute_tool x` is a span
+  // name, not an identifier.
+  Object.defineProperty(wrapped, "name", {
+    value: name ?? (fn.name || "anonymous"),
+    configurable: true,
+  });
   return wrapped;
 }
