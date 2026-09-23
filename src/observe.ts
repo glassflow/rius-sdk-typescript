@@ -21,6 +21,14 @@ export interface ObserveOptions {
    * `gen_ai.retrieval.top_k`. Ignored on every other kind.
    */
   topK?: number;
+  /**
+   * The agent an AGENT-kind wrapper invokes, set as `gen_ai.agent.name`.
+   * Unset, it falls back to the agent name `init()` was given; it is never
+   * taken from the wrapped function's name. Ignored on every other kind.
+   */
+  agentName?: string;
+  /** The invoked agent's stable identifier (`gen_ai.agent.id`), if any. */
+  agentId?: string;
   captureInput?: boolean;
   captureOutput?: boolean;
 }
@@ -60,6 +68,8 @@ export function observe<F extends (...args: never[]) => unknown>(
         toolName: options.toolName,
         dataSourceId: options.dataSourceId,
         topK: options.topK,
+        agentName: options.agentName,
+        agentId: options.agentId,
         input: captureInput ? { args, kwargs: {} } : undefined,
       },
       async (observation): Promise<R> => {

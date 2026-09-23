@@ -1,7 +1,10 @@
 import { type SpanKind as OtelSpanKind, type Span, SpanStatusCode } from "@opentelemetry/api";
+import { resolveAgentName } from "./agent.js";
 import { getTracer } from "./client.js";
 import {
   ERROR_TYPE,
+  GEN_AI_AGENT_ID,
+  GEN_AI_AGENT_NAME,
   GEN_AI_DATA_SOURCE_ID,
   GEN_AI_RETRIEVAL_DOCUMENTS,
   GEN_AI_RETRIEVAL_TOP_K,
@@ -55,6 +58,23 @@ export interface SpanOptions {
    * afterwards with `Observation.setRetrievedDocuments`.
    */
   topK?: number;
+  /**
+   * The agent an AGENT span invokes, set as `gen_ai.agent.name`, which the
+   * conventions make Conditionally Required on an invoke-agent span. Unset,
+   * it falls back to the agent name `init()` was given. It is never taken
+   * from the span name, unlike the tool name: that fallback exists only
+   * because a tool's name and its span name were historically one string,
+   * and a wrong agent name mislabels every span beneath it. Ignored on every
+   * other kind, where the key would read as "the agent that produced this
+   * span" — which is what the resource attribute of the same name says.
+   */
+  agentName?: string;
+  /**
+   * The invoked agent's stable identifier, set as `gen_ai.agent.id`. Never
+   * invented: unlike the name there is no configured default, because a name
+   * is not an identity. Ignored on every other kind.
+   */
+  agentId?: string;
   /**
    * Identity attributes to set at span CREATION rather than after it. Pending
    * snapshots are built at start, so anything a caller would otherwise
@@ -221,6 +241,11 @@ function creationAttributes(name: string, options: SpanOptions): Record<string, 
     if (options.dataSourceId !== undefined)
       attributes[GEN_AI_DATA_SOURCE_ID] = options.dataSourceId;
     if (options.topK !== undefined) attributes[GEN_AI_RETRIEVAL_TOP_K] = options.topK;
+  }
+  if (kind === SpanKind.AGENT) {
+    const agentName = resolveAgentName(options.agentName, kind);
+    if (agentName !== undefined) attributes[GEN_AI_AGENT_NAME] = agentName;
+    if (options.agentId !== undefined) attributes[GEN_AI_AGENT_ID] = options.agentId;
   }
   return attributes;
 }

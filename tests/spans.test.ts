@@ -443,3 +443,65 @@ describe("tool name resolution", () => {
     }
   });
 });
+
+describe("AGENT spans", () => {
+  it("takes an explicit agent name and id, on both surfaces", async () => {
+    startSpan("plan", { kind: SpanKind.AGENT, agentName: "planner", agentId: "ag_1" }).end();
+    await startAsCurrentSpan(
+      "research",
+      { kind: SpanKind.AGENT, agentName: "researcher" },
+      () => 1,
+    );
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("plan")?.["gen_ai.agent.name"]).toBe("planner");
+    expect(byName.get("plan")?.["gen_ai.agent.id"]).toBe("ag_1");
+    expect(byName.get("research")?.["gen_ai.agent.name"]).toBe("researcher");
+    expect(byName.get("research")?.["gen_ai.agent.id"]).toBeUndefined();
+  });
+
+  it("ignores an agent name on a kind that is not AGENT", async () => {
+    startSpan("step", { kind: SpanKind.CHAIN, agentName: "planner", agentId: "ag_1" }).end();
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0].attributes;
+    expect(attributes["gen_ai.agent.name"]).toBeUndefined();
+    expect(attributes["gen_ai.agent.id"]).toBeUndefined();
+  });
+});
+
+describe("the configured agent name", () => {
+  let scoped: RiusClient;
+  let scopedExporter: InMemorySpanExporter;
+
+  beforeEach(async () => {
+    await client.shutdown();
+    scopedExporter = new InMemorySpanExporter();
+    scoped = init({
+      spanExporter: scopedExporter,
+      agentName: "configured",
+      heartbeatTransport: async () => {},
+    });
+  });
+  afterEach(async () => {
+    await scoped.shutdown();
+    // the outer afterEach shuts down an already-shut-down client, which is a no-op
+  });
+
+  it("names an unnamed AGENT span, because a single-agent process knows the answer", async () => {
+    startSpan("plan", { kind: SpanKind.AGENT }).end();
+    await scoped.flush();
+    expect(scopedExporter.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBe("configured");
+  });
+
+  it("loses to an explicit name, the case a multi-agent process turns on", async () => {
+    startSpan("plan", { kind: SpanKind.AGENT, agentName: "researcher" }).end();
+    await scoped.flush();
+    expect(scopedExporter.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBe("researcher");
+  });
+
+  it("does not reach a span of any other kind", async () => {
+    startSpan("step", { kind: SpanKind.CHAIN }).end();
+    await scoped.flush();
+    expect(scopedExporter.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBeUndefined();
+  });
+});

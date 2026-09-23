@@ -94,6 +94,14 @@ export const GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents";
  */
 export const GEN_AI_AGENT_NAME = "gen_ai.agent.name";
 /**
+ * The agent's stable identifier, where the caller has one. Adopted alongside
+ * the name rather than deferred: the conventions define it, it costs one
+ * optional argument, and a name is not an identity — two deployments of the
+ * same agent share a name, and a renamed agent keeps its id. Never invented;
+ * unlike the name there is no configured default to fall back to.
+ */
+export const GEN_AI_AGENT_ID = "gen_ai.agent.id";
+/**
  * The request's tool/function definitions, serialized verbatim (provider
  * shapes differ; the backend reads names and sizes from either). Content,
  * not identity — listed in CONTENT_ATTRIBUTES below.
@@ -347,6 +355,12 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   // counterpart GEN_AI_RETRIEVAL_DOCUMENTS is deliberately absent: what came
   // back cannot be known while the span is open.
   GEN_AI_RETRIEVAL_TOP_K,
+  // Which agent a span invokes is chosen before the work starts, so a
+  // still-running agent is attributable in the live view. Distinct from the
+  // RESOURCE key of the same name, which says which PROCESS is running; these
+  // say which agent that process invoked here.
+  GEN_AI_AGENT_NAME,
+  GEN_AI_AGENT_ID,
   // Protocol identity, not content: a still-running MCP call must be
   // distinguishable from a local tool in the live view — the one place
   // setting the marker at creation pays off.

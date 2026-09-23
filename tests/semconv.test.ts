@@ -82,6 +82,8 @@ describe("semconv", () => {
       semconv.GEN_AI_TOOL_NAME,
       semconv.GEN_AI_DATA_SOURCE_ID,
       semconv.GEN_AI_RETRIEVAL_TOP_K,
+      semconv.GEN_AI_AGENT_NAME,
+      semconv.GEN_AI_AGENT_ID,
       semconv.MCP_METHOD_NAME,
       semconv.MCP_PROTOCOL_VERSION,
       semconv.SESSION_ID,
@@ -144,5 +146,28 @@ describe("retrieval attribute categories", () => {
     // document text, so it must survive captureContent: false.
     expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(semconv.GEN_AI_RETRIEVAL_DOCUMENTS)).toBe(false);
     expect(semconv.CONTENT_ATTRIBUTES.has(semconv.GEN_AI_RETRIEVAL_DOCUMENTS)).toBe(false);
+  });
+});
+
+describe("agent identity", () => {
+  it("is the Rius spelling of the conventions' agent keys", () => {
+    expect(semconv.GEN_AI_AGENT_NAME).toBe("gen_ai.agent.name");
+    expect(semconv.GEN_AI_AGENT_ID).toBe("gen_ai.agent.id");
+  });
+
+  it("is pending identity, not content: known at start, never sensitive", () => {
+    for (const key of [semconv.GEN_AI_AGENT_NAME, semconv.GEN_AI_AGENT_ID]) {
+      expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(key)).toBe(true);
+      expect(semconv.CONTENT_ATTRIBUTES.has(key)).toBe(false);
+    }
+  });
+
+  it("is not part of the kind taxonomy: the keys name a target, not a kind", () => {
+    // Set alongside dataSourceId in creationAttributes, where the other
+    // caller-supplied target identifiers live.
+    expect(kindAttributes(SpanKind.AGENT)).toEqual({
+      "openinference.span.kind": "AGENT",
+      "gen_ai.operation.name": "invoke_agent",
+    });
   });
 });
