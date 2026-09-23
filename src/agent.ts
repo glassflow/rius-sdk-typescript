@@ -1,5 +1,6 @@
 /**
- * The configured agent name, readable from the span helpers.
+ * Agent identity for the span helpers: the name this process was configured
+ * with, and the scope naming whichever agent is running right now.
  *
  * An AGENT span should say which agent it invokes. The caller usually names
  * it, but a process that runs a single agent already told us its name at
@@ -16,6 +17,7 @@
  * uses.
  */
 
+import { context as apiContext, createContextKey } from "@opentelemetry/api";
 import { DEFAULT_SERVICE_NAME } from "./config.js";
 import { SpanKind } from "./semconv.js";
 
@@ -57,5 +59,62 @@ export function resolveAgentName(
 ): string | undefined {
   if (kind !== SpanKind.AGENT) return undefined;
   if (agentName !== undefined) return agentName;
+  return namedConfiguredAgent();
+}
+
+/**
+ * The configured name, unless it is the placeholder. The one place the
+ * placeholder is turned into "no name": both readers of the configured name
+ * — the agent an AGENT span invokes, and the agent a TOOL span was executed
+ * by — must suppress it identically, or the same process would name itself
+ * `unknown_service` on one span and nothing on the other.
+ */
+function namedConfiguredAgent(): string | undefined {
   return configured === DEFAULT_SERVICE_NAME ? undefined : configured;
+}
+
+/**
+ * The enclosing agent scope: who is RUNNING, as opposed to who was invoked.
+ *
+ * `gen_ai.agent.name` carries two different facts, told apart by
+ * `gen_ai.operation.name`. On an `invoke_agent` span it names the agent BEING
+ * INVOKED — the span's subject, which the caller passes as `agentName`. On an
+ * `execute_tool` span the conventions define it as "the human-readable name
+ * of the agent executing the tool", i.e. the agent DOING the call, which is
+ * not a property of the tool span at all but of whatever opened it. This key
+ * carries that second fact down to the tool spans that need it.
+ *
+ * It rides OTel context rather than being read back off the parent span, for
+ * the reasons `session.ts` gives: scopes nest, unwind with the callback even
+ * on a throw, and follow async continuations. Reading the parent span would
+ * additionally fail whenever a tool span is not a DIRECT child of the agent
+ * span — one CHAIN in between is enough — and the parent's attributes are not
+ * reachable through the public API anyway.
+ */
+const AGENT_SCOPE_KEY = createContextKey("rius-enclosing-agent-name");
+
+/**
+ * Run `fn` with `agentName` as the enclosing agent, so TOOL spans opened
+ * inside it can say which agent executed them. Nested scopes override outer
+ * ones: the innermost agent is the one actually making the call.
+ *
+ * @internal Not re-exported from the package entry point. The span helpers
+ * establish this scope themselves; a caller who wants to name the executing
+ * agent opens an AGENT span, which is the thing the name is meant to describe.
+ */
+export function withAgentScope<T>(agentName: string, fn: () => T): T {
+  return apiContext.with(apiContext.active().setValue(AGENT_SCOPE_KEY, agentName), fn);
+}
+
+/**
+ * The agent a tool call happening right now should be attributed to: the
+ * innermost enclosing AGENT scope, else the agent this process was configured
+ * with — a single-agent process knows the answer without being told — and
+ * nothing at all when that is the placeholder.
+ *
+ * @internal
+ */
+export function executingAgentName(): string | undefined {
+  const scoped = apiContext.active().getValue(AGENT_SCOPE_KEY);
+  return typeof scoped === "string" ? scoped : namedConfiguredAgent();
 }

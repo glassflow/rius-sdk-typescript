@@ -2,6 +2,7 @@ import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
+import { observe } from "../src/observe.js";
 import { SpanKind } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 
@@ -689,6 +690,180 @@ describe("the unknown_service placeholder", () => {
       expect(exp.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBe("researcher");
     } finally {
       await bare.shutdown();
+    }
+  });
+});
+
+/**
+ * `gen_ai.agent.name` says two different things, told apart by
+ * `gen_ai.operation.name`: on an `invoke_agent` span it is the agent BEING
+ * INVOKED, on an `execute_tool` span the agent EXECUTING the tool. These
+ * tests pin the second reading, and the last one pins both at once so a
+ * future refactor cannot quietly merge them.
+ */
+describe("the agent executing a tool", () => {
+  it("names the enclosing agent on a TOOL span, on the scoped surface", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    });
+    await client.flush();
+    const tool = exporter.getFinishedSpans().find((s) => s.name === "execute_tool get_weather");
+    expect(tool?.attributes["gen_ai.agent.name"]).toBe("planner");
+  });
+
+  it("names it through observe, which is built on the same scope", async () => {
+    const getWeather = observe(async () => "sunny", {
+      kind: SpanKind.TOOL,
+      toolName: "get_weather",
+    });
+    const plan = observe(async () => await getWeather(), {
+      kind: SpanKind.AGENT,
+      agentName: "planner",
+    });
+    await plan();
+    await client.flush();
+    const tool = exporter.getFinishedSpans().find((s) => s.name === "execute_tool get_weather");
+    expect(tool?.attributes["gen_ai.agent.name"]).toBe("planner");
+  });
+
+  it("lets the innermost agent win, since that is the one making the call", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "orchestrator" }, async () => {
+      await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "researcher" }, async () => {
+        await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "search" }, () => {});
+      });
+      await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "report" }, () => {});
+    });
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("execute_tool search")?.["gen_ai.agent.name"]).toBe("researcher");
+    // And the outer scope is intact once the inner one unwinds.
+    expect(byName.get("execute_tool report")?.["gen_ai.agent.name"]).toBe("orchestrator");
+  });
+
+  it("survives an await and an intervening CHAIN, because it rides OTel context", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      await startAsCurrentSpan("step", { kind: SpanKind.CHAIN }, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+      });
+    });
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("execute_tool get_weather")?.["gen_ai.agent.name"]).toBe("planner");
+    // The key has no meaning on a CHAIN span, so nothing stamps it there.
+    expect(byName.get("step")?.["gen_ai.agent.name"]).toBeUndefined();
+  });
+
+  it("does not rename the TOOL span: the name targets the tool, not the agent", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    });
+    await client.flush();
+    const names = exporter.getFinishedSpans().map((s) => s.name);
+    expect(names).toContain("execute_tool get_weather");
+    expect(names).not.toContain("execute_tool planner");
+  });
+
+  it("says nothing when no agent encloses the call and none is configured", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    await client.flush();
+    const tool = exporter.getFinishedSpans()[0];
+    expect(tool.attributes["gen_ai.agent.name"]).toBeUndefined();
+  });
+
+  it("opens no scope from startSpan, which never becomes current", async () => {
+    // The documented limitation: a manual AGENT span activates no context, so
+    // there is nothing for the tool below it to read.
+    const agent = startSpan({ kind: SpanKind.AGENT, agentName: "planner" });
+    await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    agent.end();
+    await client.flush();
+    const tool = exporter.getFinishedSpans().find((s) => s.name === "execute_tool get_weather");
+    expect(tool?.attributes["gen_ai.agent.name"]).toBeUndefined();
+  });
+
+  it("carries it on a pending snapshot of a still-running tool call", async () => {
+    await client.shutdown();
+    const pendingExporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: pendingExporter,
+      partialSpans: true,
+      heartbeatTransport: async () => {},
+    });
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      // Started, never ended inside the scope: this is the crashed-agent case.
+      const tool = startSpan({ kind: SpanKind.TOOL, toolName: "get_weather" });
+      await client.flush();
+      const pending = pendingExporter
+        .getFinishedSpans()
+        .filter((s) => s.attributes["rius.span.pending"] === true);
+      expect(pending.map((s) => s.name)).toContain("execute_tool get_weather");
+      expect(
+        pending.find((s) => s.name === "execute_tool get_weather")?.attributes["gen_ai.agent.name"],
+      ).toBe("planner");
+      tool.end();
+    });
+  });
+
+  it("distinguishes the invoked agent from the executing one on the same key", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "orchestrator" }, async () => {
+      // An invoke_agent span: the key names the agent this span INVOKES.
+      await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "researcher" }, () => {});
+      // An execute_tool span: the same key names the agent RUNNING the tool.
+      await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    });
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    const invoked = byName.get("invoke_agent researcher");
+    const executed = byName.get("execute_tool get_weather");
+    expect(invoked?.["gen_ai.operation.name"]).toBe("invoke_agent");
+    expect(invoked?.["gen_ai.agent.name"]).toBe("researcher");
+    expect(executed?.["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(executed?.["gen_ai.agent.name"]).toBe("orchestrator");
+  });
+});
+
+describe("the executing agent and the configured agent name", () => {
+  let scoped: RiusClient;
+  let scopedExporter: InMemorySpanExporter;
+
+  beforeEach(async () => {
+    await client.shutdown();
+    scopedExporter = new InMemorySpanExporter();
+    scoped = init({
+      spanExporter: scopedExporter,
+      agentName: "configured",
+      heartbeatTransport: async () => {},
+    });
+  });
+  afterEach(async () => {
+    await scoped.shutdown();
+  });
+
+  it("falls back to it when no AGENT span encloses the tool call", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    await scoped.flush();
+    expect(scopedExporter.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBe("configured");
+  });
+
+  it("loses to an enclosing agent, which is the more specific answer", async () => {
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    });
+    await scoped.flush();
+    const tool = scopedExporter
+      .getFinishedSpans()
+      .find((s) => s.name === "execute_tool get_weather");
+    expect(tool?.attributes["gen_ai.agent.name"]).toBe("planner");
+  });
+
+  it("does not reach a span of any other kind", async () => {
+    await startAsCurrentSpan("step", { kind: SpanKind.CHAIN }, () => {});
+    startSpan("retrieve", { kind: SpanKind.RETRIEVER, dataSourceId: "docs" }).end();
+    await scoped.flush();
+    for (const span of scopedExporter.getFinishedSpans()) {
+      expect(span.attributes["gen_ai.agent.name"]).toBeUndefined();
     }
   });
 });

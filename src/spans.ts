@@ -1,5 +1,5 @@
 import { type SpanKind as OtelSpanKind, type Span, SpanStatusCode } from "@opentelemetry/api";
-import { resolveAgentName } from "./agent.js";
+import { executingAgentName, resolveAgentName, withAgentScope } from "./agent.js";
 import { getTracer } from "./client.js";
 import {
   ERROR_TYPE,
@@ -73,6 +73,10 @@ export interface SpanOptions {
    * and a wrong agent name mislabels every span beneath it. Ignored on every
    * other kind, where the key would read as "the agent that produced this
    * span" — which is what the resource attribute of the same name says.
+   *
+   * On the scoped surface this name also becomes the enclosing agent scope,
+   * so TOOL spans opened inside the callback carry it as the agent that
+   * EXECUTED them. See {@link startAsCurrentSpan}.
    */
   agentName?: string;
   /**
@@ -256,6 +260,21 @@ function creationAttributes(
       attributes[GEN_AI_DATA_SOURCE_ID] = options.dataSourceId;
     if (options.topK !== undefined) attributes[GEN_AI_RETRIEVAL_TOP_K] = options.topK;
   }
+  if (kind === SpanKind.TOOL) {
+    // `gen_ai.agent.name` on an execute-tool span is Conditionally Required
+    // and means something else than it does on the AGENT span above: the
+    // agent EXECUTING the tool, not the one being invoked. It is read from
+    // the enclosing AGENT scope, falling back to the configured agent.
+    //
+    // Read here, in the TOOL branch, rather than stamped on every span by a
+    // processor: the conventions give this key no meaning on a chat,
+    // retrieval or chain span, where it would read as "the agent that
+    // produced this span" — a claim the resource attribute of the same name
+    // already makes, and one the sink would then see twice with two
+    // meanings.
+    const executedBy = executingAgentName();
+    if (executedBy !== undefined) attributes[GEN_AI_AGENT_NAME] = executedBy;
+  }
   if (kind === SpanKind.AGENT) {
     const agentName = resolveAgentName(options.agentName, kind);
     if (agentName !== undefined) attributes[GEN_AI_AGENT_NAME] = agentName;
@@ -313,6 +332,11 @@ export function splitScopedArgs<O extends object, F>(
  * Create a span and return a handle. You MUST call end() (or use `using`).
  * The span is parented to whatever is current but does NOT become current.
  *
+ * Because it never becomes current, an AGENT span created here opens no
+ * agent scope: a TOOL span started while it is open falls back to the
+ * configured agent name for `gen_ai.agent.name` rather than naming this one.
+ * Use {@link startAsCurrentSpan} (or `observe`) where that matters.
+ *
  * The name is optional: omit it and the span is named the way the GenAI
  * conventions say to, `{operation} {target}` — `execute_tool get_weather`,
  * `invoke_agent planner`, `retrieval docs-index` — from the attributes it is
@@ -366,14 +390,34 @@ export function startAsCurrentSpan<T>(
   const { name, options, fn } = splitScopedArgs<SpanOptions, SpanBody<T>>(first, second, third);
   const attributes = creationAttributes(name, options);
 
-  return runActive(
-    resolveName(name, options.kind, attributes),
-    attributes,
-    options.userId,
-    (span) => configure(new Observation(span), options),
-    fn,
-    options.otelKind ?? otelSpanKind(options.kind ?? SpanKind.CHAIN),
-  );
+  const run = () =>
+    runActive(
+      resolveName(name, options.kind, attributes),
+      attributes,
+      options.userId,
+      (span) => configure(new Observation(span), options),
+      fn,
+      options.otelKind ?? otelSpanKind(options.kind ?? SpanKind.CHAIN),
+    );
+
+  // An AGENT span here establishes the scope that TOOL spans beneath it read
+  // as `gen_ai.agent.name` — the agent EXECUTING the tool. The name is taken
+  // from the attribute map rather than resolved a second time, the same way
+  // `resolveName` reads it, so the scope and the span can never disagree
+  // about which agent this is.
+  //
+  // Only this surface sets it, because only this surface activates a context.
+  // `startSpan` returns a handle without making its span current, so there is
+  // no scope for it to open and no place to close one; a TOOL span opened
+  // "inside" a manual AGENT span therefore falls back to the configured name.
+  // Callers who want the scope use the scoped helper or `observe`, which is
+  // built on it.
+  const scopeName =
+    (options.kind ?? SpanKind.CHAIN) === SpanKind.AGENT ? attributes[GEN_AI_AGENT_NAME] : undefined;
+  // An AGENT span with no resolvable name (nothing passed, nothing
+  // configured) opens no scope: it has nothing to say, and an outer named
+  // agent remains the truer answer for the tools below it.
+  return typeof scopeName === "string" ? withAgentScope(scopeName, run) : run();
 }
 
 /**

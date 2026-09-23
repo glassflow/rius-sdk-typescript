@@ -85,8 +85,24 @@ describe("pending allowlist coverage", () => {
       userId: "u",
     }).end();
     await new FakeMcpClient().callTool({ name: "search", arguments: { q: "x" } });
+    // Inside an AGENT scope, where a TOOL span additionally carries the name
+    // of the agent executing it — an identity key set at creation like any
+    // other, so the allowlist has to cover it too.
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      await startAsCurrentSpan("scoped-tool-in-agent", { kind: SpanKind.TOOL }, async () => 1);
+      await new FakeMcpClient().callTool({ name: "remote", arguments: { q: "x" } });
+    });
 
-    const expected = ["manual-tool", "scoped-tool", "gen", "retrieve", "execute_tool search"];
+    const expected = [
+      "manual-tool",
+      "scoped-tool",
+      "gen",
+      "retrieve",
+      "execute_tool search",
+      "invoke_agent planner",
+      "scoped-tool-in-agent",
+      "execute_tool remote",
+    ];
     expect([...recorder.seen.keys()].sort()).toEqual([...expected].sort());
     for (const name of expected) {
       expectAllowlisted(name, recorder.seen.get(name) as Record<string, unknown>);
