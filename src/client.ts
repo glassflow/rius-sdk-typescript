@@ -23,7 +23,15 @@ import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
-import { GEN_AI_AGENT_NAME, SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
+import {
+  GEN_AI_AGENT_NAME,
+  RIUS_MAIN_AGENT_DESCRIPTION,
+  RIUS_MAIN_AGENT_ID,
+  RIUS_MAIN_AGENT_NAME,
+  RIUS_MAIN_AGENT_VERSION,
+  SERVICE_INSTANCE_ID,
+  TRACER_NAME,
+} from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
 import { UserSpanProcessor } from "./user.js";
 import { SDK_VERSION } from "./version.js";
@@ -296,6 +304,35 @@ export function init(options: InitOptions = {}): RiusClient {
       // agents view and its trace list disagree. Resolution defaults the agent
       // name to the service name, so nothing changes when they are the same.
       [GEN_AI_AGENT_NAME]: config.agentName,
+      // The same fact in our own namespace, and the one the sink reads first.
+      // `gen_ai.agent.name` above is kept ADDITIVELY and on purpose: it has no
+      // resource-level meaning in the conventions and on a span it names the
+      // agent being INVOKED, so it was one key answering two questions — but
+      // dropping it here would be a flag day, blanking agent identity for
+      // every deployment sitting between this SDK release and the sink
+      // release. A resource rides once per OTLP batch, not once per span, so
+      // carrying both costs essentially nothing.
+      //
+      // Spread like `service.version` below, for the same reason: a process
+      // that named nothing resolves to the `unknown_service` placeholder, and
+      // the main-agent name must then be ABSENT rather than claim an identity
+      // the caller never gave — exactly what the span helpers already do.
+      ...(config.mainAgentName === undefined
+        ? {}
+        : { [RIUS_MAIN_AGENT_NAME]: config.mainAgentName }),
+      // Optional and never defaulted; see config.ts. `service.instance.id`
+      // above is the process identity, these describe the AGENT the process
+      // runs, which outlives any one process.
+      ...(config.mainAgentId === undefined ? {} : { [RIUS_MAIN_AGENT_ID]: config.mainAgentId }),
+      ...(config.mainAgentDescription === undefined
+        ? {}
+        : { [RIUS_MAIN_AGENT_DESCRIPTION]: config.mainAgentDescription }),
+      // The version of the AGENT DEFINITION, never derived from (nor deriving)
+      // `service.version` below: the build and the prompt/tools/policy it runs
+      // move independently.
+      ...(config.mainAgentVersion === undefined
+        ? {}
+        : { [RIUS_MAIN_AGENT_VERSION]: config.mainAgentVersion }),
       "telemetry.distro.name": "glassflow-rius",
       "telemetry.distro.version": SDK_VERSION,
       // Spread rather than assigned so an unresolved version leaves the key

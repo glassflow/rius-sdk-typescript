@@ -115,6 +115,12 @@ one `init()` was given), a RETRIEVER after its `dataSourceId`. A function
 name is not an agent or an index, so it is never used as one. Pass `{ name }`
 to override any of this.
 
+An AGENT span (from `observe`, `startSpan` or `startAsCurrentSpan`) can also
+carry `agentId` and `agentVersion`, which describe the agent it *invoked*, as
+`gen_ai.agent.id` and `gen_ai.agent.version`. Both are taken verbatim — the
+conventions' own version examples are `1.0.0` and `2025-05-01` — and both are
+ignored on every other kind.
+
 An AGENT wrapper also scopes the calls it makes: TOOL spans opened while it
 runs, local or MCP, carry that agent as `gen_ai.agent.name` — on an
 execute-tool span the conventions define that key as the agent *executing*
@@ -337,6 +343,9 @@ variables, then the defaults below.
 | `heartbeat`        | `RIUS_HEARTBEAT`         | `true`                                        |
 | `heartbeatInterval` | `RIUS_HEARTBEAT_INTERVAL` | `15` (seconds; clamped 5-300)               |
 | `agentName`        | `RIUS_AGENT_NAME`        | `serviceName`                                 |
+| `mainAgentId`      | `RIUS_MAIN_AGENT_ID`     | none (a STABLE id for the agent this process is; never a transient in-memory id) |
+| `mainAgentDescription` | `RIUS_MAIN_AGENT_DESCRIPTION` | none                                |
+| `mainAgentVersion` | `RIUS_MAIN_AGENT_VERSION` | none (the version of the AGENT DEFINITION, never derived from `serviceVersion`) |
 | `partialSpans`     | `RIUS_PARTIAL_SPANS`     | `false`                                       |
 | `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
@@ -351,6 +360,33 @@ key is simply absent until you supply one. This SDK builds its resource
 explicitly, which in OpenTelemetry for JavaScript means the OTel environment
 is not merged into it, so `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is
 read here by hand as the last tier after the option and `RIUS_SERVICE_VERSION`.
+
+The agent this process *is* is described on the resource under
+`rius.main_agent.*`: `rius.main_agent.name` (the resolved `agentName`, absent
+when nothing was named and it is still the `unknown_service` placeholder),
+plus the optional `rius.main_agent.id`, `.description` and `.version`.
+`gen_ai.agent.name` is still stamped alongside them, unchanged: the new keys
+are additive so that no deployment loses its agent identity between an SDK
+upgrade and a backend one. The vendor namespace exists because
+`gen_ai.agent.name` has no resource-level meaning in the conventions and on a
+span means the agent being *invoked*, so one key was answering two questions.
+
+`mainAgentId` must be a **stable** identifier — a registry id, a hosted
+agent's ARN. A uuid minted at startup or another process-local id identifies
+a *run*, not an agent, and would split one agent into a fresh bucket per
+restart; `service.instance.id` already answers "which process".
+
+Three versions travel separately and none is ever derived from another:
+
+| Key                        | Answers                                             |
+| -------------------------- | --------------------------------------------------- |
+| `service.version`          | which build of the deployment is running             |
+| `rius.main_agent.version`  | which version of the agent *definition* it runs — its prompt, tools and policy |
+| `gen_ai.agent.version`     | which version of the agent a given AGENT span *invoked* |
+
+A service can sit at `2.3.1` while the agent definition it runs is at `7` and
+the agent it calls out to is at `1.0.0`; a prompt change moves the second
+without touching the first.
 
 `captureContent` controls whether input/output content (prompts,
 completions, tool arguments) is attached to spans. It defaults to

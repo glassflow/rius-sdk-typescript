@@ -468,6 +468,41 @@ describe("AGENT spans", () => {
     expect(attributes["gen_ai.agent.name"]).toBeUndefined();
     expect(attributes["gen_ai.agent.id"]).toBeUndefined();
   });
+
+  it("takes the invoked agent's version verbatim, on both surfaces", async () => {
+    startSpan("plan", { kind: SpanKind.AGENT, agentName: "planner", agentVersion: "1.0.0" }).end();
+    await startAsCurrentSpan(
+      "research",
+      { kind: SpanKind.AGENT, agentName: "researcher", agentVersion: "2025-05-01" },
+      () => 1,
+    );
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    // Both of the registry's own example shapes, neither normalized: there is
+    // no single format to hold a caller's agent version to.
+    expect(byName.get("plan")?.["gen_ai.agent.version"]).toBe("1.0.0");
+    expect(byName.get("research")?.["gen_ai.agent.version"]).toBe("2025-05-01");
+  });
+
+  it("leaves the version off when the caller does not give one", async () => {
+    startSpan("plan", { kind: SpanKind.AGENT, agentName: "planner" }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.agent.version"]).toBeUndefined();
+  });
+
+  it("ignores an agent version on every kind that is not AGENT", async () => {
+    for (const kind of Object.values(SpanKind)) {
+      if (kind === SpanKind.AGENT) continue;
+      startSpan(`k-${kind}`, { kind, agentVersion: "9.9.9" }).end();
+    }
+    await client.flush();
+    for (const span of exporter.getFinishedSpans()) {
+      expect(
+        span.attributes["gen_ai.agent.version"],
+        `${span.name} carries an agent version`,
+      ).toBeUndefined();
+    }
+  });
 });
 
 describe("the configured agent name", () => {

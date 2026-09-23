@@ -87,6 +87,7 @@ describe("semconv", () => {
       semconv.GEN_AI_RETRIEVAL_TOP_K,
       semconv.GEN_AI_AGENT_NAME,
       semconv.GEN_AI_AGENT_ID,
+      semconv.GEN_AI_AGENT_VERSION,
       semconv.MCP_METHOD_NAME,
       semconv.MCP_PROTOCOL_VERSION,
       semconv.SESSION_ID,
@@ -120,6 +121,44 @@ describe("otelSpanKind", () => {
   it("covers every taxonomy kind", () => {
     for (const kind of Object.values(SpanKind)) {
       expect(otelSpanKind(kind), `${kind} has no OTel kind`).toBeDefined();
+    }
+  });
+});
+
+describe("agent identity keys", () => {
+  it("spells the invoked agent's version as the GenAI registry does", () => {
+    expect(semconv.GEN_AI_AGENT_VERSION).toBe("gen_ai.agent.version");
+  });
+
+  it("spells the process-level agent identity in the rius namespace", () => {
+    expect(semconv.RIUS_MAIN_AGENT_NAME).toBe("rius.main_agent.name");
+    expect(semconv.RIUS_MAIN_AGENT_ID).toBe("rius.main_agent.id");
+    expect(semconv.RIUS_MAIN_AGENT_DESCRIPTION).toBe("rius.main_agent.description");
+    expect(semconv.RIUS_MAIN_AGENT_VERSION).toBe("rius.main_agent.version");
+  });
+
+  it("keeps the three versions distinct keys, so none can be read as another", () => {
+    // service.version is the deployment build, rius.main_agent.version the
+    // agent definition this process runs, gen_ai.agent.version the agent a
+    // span invoked. Nothing derives one from another, so nothing may collapse
+    // two of them onto one key either.
+    const versions = new Set([
+      "service.version",
+      semconv.RIUS_MAIN_AGENT_VERSION,
+      semconv.GEN_AI_AGENT_VERSION,
+    ]);
+    expect(versions.size).toBe(3);
+  });
+
+  it("carries no main-agent key onto a span: they are resource-level facts", () => {
+    for (const key of [
+      semconv.RIUS_MAIN_AGENT_NAME,
+      semconv.RIUS_MAIN_AGENT_ID,
+      semconv.RIUS_MAIN_AGENT_DESCRIPTION,
+      semconv.RIUS_MAIN_AGENT_VERSION,
+    ]) {
+      expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(key)).toBe(false);
+      expect(semconv.CONTENT_ATTRIBUTES.has(key)).toBe(false);
     }
   });
 });

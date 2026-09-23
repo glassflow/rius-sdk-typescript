@@ -88,10 +88,13 @@ describe("pending allowlist coverage", () => {
     // Inside an AGENT scope, where a TOOL span additionally carries the name
     // of the agent executing it — an identity key set at creation like any
     // other, so the allowlist has to cover it too.
-    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
-      await startAsCurrentSpan("scoped-tool-in-agent", { kind: SpanKind.TOOL }, async () => 1);
-      await new FakeMcpClient().callTool({ name: "remote", arguments: { q: "x" } });
-    });
+    await startAsCurrentSpan(
+      { kind: SpanKind.AGENT, agentName: "planner", agentId: "ag_1", agentVersion: "1.0.0" },
+      async () => {
+        await startAsCurrentSpan("scoped-tool-in-agent", { kind: SpanKind.TOOL }, async () => 1);
+        await new FakeMcpClient().callTool({ name: "remote", arguments: { q: "x" } });
+      },
+    );
 
     const expected = [
       "manual-tool",

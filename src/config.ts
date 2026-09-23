@@ -6,6 +6,24 @@ export const DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com";
  */
 export const DEFAULT_SERVICE_NAME = "unknown_service";
 
+/**
+ * A configured agent name, unless it is the placeholder — the single place
+ * "nothing was named" is turned into "no name".
+ *
+ * `DEFAULT_SERVICE_NAME` is what BOTH the service name and the agent name
+ * fall back to, so emitting it would claim an identity the caller never gave.
+ * Every reader of the configured name must suppress it identically — the
+ * agent an AGENT span invokes, the agent a TOOL span was executed by, and the
+ * process-level `rius.main_agent.name` — or one process would call itself
+ * `unknown_service` in one place and nothing in another.
+ *
+ * Lives here rather than in `agent.ts` only because `agent.ts` imports this
+ * module for the placeholder; the dependency cannot run back the other way.
+ */
+export function namedAgent(agentName: string | undefined): string | undefined {
+  return agentName === undefined || agentName === DEFAULT_SERVICE_NAME ? undefined : agentName;
+}
+
 // The backend expresses staleness as multiples of the interval, so the clamp
 // bounds are part of the heartbeat wire contract.
 const HEARTBEAT_INTERVAL_MIN = 5;
@@ -50,6 +68,34 @@ export interface RiusOptions {
   heartbeatInterval?: number;
   heartbeat?: boolean;
   agentName?: string;
+  /**
+   * A STABLE identifier for the agent this process is, stamped on the
+   * resource as `rius.main_agent.id`. A registry id or a hosted agent's ARN,
+   * NOT a transient in-memory or process-local id: a uuid minted at startup
+   * identifies a run, not an agent, and would split one agent into a fresh
+   * bucket per restart. `service.instance.id` already answers "which
+   * process". Absent by default and never defaulted.
+   *
+   * Resolution: this option, then `RIUS_MAIN_AGENT_ID`, then unset.
+   */
+  mainAgentId?: string;
+  /**
+   * A human-readable description of the agent this process is, stamped as
+   * `rius.main_agent.description`. This option, then
+   * `RIUS_MAIN_AGENT_DESCRIPTION`, then unset.
+   */
+  mainAgentDescription?: string;
+  /**
+   * The version of the AGENT DEFINITION this process runs — its prompt, tools
+   * and policy — stamped as `rius.main_agent.version`. Deliberately NOT
+   * `serviceVersion`, which is the version of the build hosting it: the two
+   * move independently, and neither is ever derived from the other.
+   *
+   * Resolution: this option, then `RIUS_MAIN_AGENT_VERSION`, then unset. The
+   * OTel environment is not consulted, unlike `serviceVersion`: no convention
+   * defines this key, so `OTEL_RESOURCE_ATTRIBUTES` cannot be carrying it.
+   */
+  mainAgentVersion?: string;
   partialSpans?: boolean;
   /** Seconds to debounce a pending-span snapshot after span start. */
   partialSpansDelay?: number;
@@ -75,6 +121,17 @@ export interface ResolvedConfig {
   heartbeatIntervalMs: number;
   heartbeatEndpoint: string;
   agentName: string;
+  /**
+   * The agent name for the resource's main-agent keys: `agentName`, unless it
+   * is the placeholder, in which case nothing was named and there is no
+   * main-agent name to stamp. Resolved once here so the resource and the span
+   * helpers suppress the placeholder identically.
+   */
+  mainAgentName?: string;
+  /** Absent unless supplied; never placeholders. */
+  mainAgentId?: string;
+  mainAgentDescription?: string;
+  mainAgentVersion?: string;
   partialSpans: boolean;
   partialSpansDelayMs: number;
   sessionId?: string;
@@ -212,6 +269,17 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     // Empty falls through to serviceName rather than shipping a blank identity
     // on every heartbeat payload, so `??` would be wrong here.
     agentName: options.agentName || env.RIUS_AGENT_NAME || serviceName,
+    // Derived from the SAME value, not resolved a second time: the
+    // main-agent name is a move of the existing agent name into our
+    // namespace, so a new option here would let the two disagree.
+    mainAgentName: namedAgent(options.agentName || env.RIUS_AGENT_NAME || serviceName),
+    // Empty is unset, as everywhere above. None of the three has a fallback:
+    // there is no service-level id, description or agent version to borrow,
+    // and inventing one would repeat the `unknown_service` mistake.
+    mainAgentId: options.mainAgentId || env.RIUS_MAIN_AGENT_ID || undefined,
+    mainAgentDescription:
+      options.mainAgentDescription || env.RIUS_MAIN_AGENT_DESCRIPTION || undefined,
+    mainAgentVersion: options.mainAgentVersion || env.RIUS_MAIN_AGENT_VERSION || undefined,
     partialSpans: options.partialSpans ?? bool("RIUS_PARTIAL_SPANS", env.RIUS_PARTIAL_SPANS, false),
     partialSpansDelayMs: partialSpansDelaySeconds * 1000,
     // Empty is unset, like agentName: a blank session id would group every

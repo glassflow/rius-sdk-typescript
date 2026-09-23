@@ -3,7 +3,8 @@ import type { ExportResult } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
 import { init } from "../src/client.js";
-import { RIUS_SPAN_PENDING } from "../src/semconv.js";
+import { RIUS_SPAN_PENDING, SpanKind } from "../src/semconv.js";
+import { startAsCurrentSpan } from "../src/spans.js";
 
 class Capture implements SpanExporter {
   readonly spans: ReadableSpan[] = [];
@@ -87,6 +88,24 @@ describe("pending privacy through the real init() pipeline", () => {
     expect(pending?.attributes["gen_ai.request.model"]).toBe("gpt-4o");
     expect(Object.keys(pending?.attributes ?? {}).some((k) => k in CONTENTY)).toBe(false);
     expect(final?.attributes["input.value"]).toBe("[REDACTED]");
+  });
+
+  it("carries the invoked agent's version on an AGENT span's pending snapshot", async () => {
+    // Set at CREATION precisely so it reaches the snapshot: a live view of a
+    // still-running agent must say which version of that agent is running.
+    const exporter = new Capture();
+    client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
+    const done = startAsCurrentSpan(
+      "plan",
+      { kind: SpanKind.AGENT, agentName: "planner", agentVersion: "1.0.0" },
+      async () => 1,
+    );
+    await done;
+    await client.flush();
+
+    const pending = exporter.spans.find((s) => s.attributes[RIUS_SPAN_PENDING] === true);
+    expect(pending?.attributes["gen_ai.agent.name"]).toBe("planner");
+    expect(pending?.attributes["gen_ai.agent.version"]).toBe("1.0.0");
   });
 
   it("preserves parent linkage and identity for a CHILD span pending", async () => {
