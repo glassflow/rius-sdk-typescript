@@ -191,9 +191,7 @@ function resolveToolName(options: SpanOptions, name: string): string {
   if (options.toolName !== undefined) return options.toolName;
   if (options.kind === SpanKind.TOOL) {
     warnOnce(
-      `A span named "${name}" with kind TOOL is naming the tool as well as the span; ` +
-        `gen_ai.tool.name will be "${name}". Pass toolName to set them separately. ` +
-        "A future major release will stop deriving the tool name from the span name.",
+      `A span named "${name}" with kind TOOL is naming the tool as well as the span; gen_ai.tool.name will be "${name}". Pass toolName to set them separately. A future major release will stop deriving the tool name from the span name.`,
     );
   }
   return name;
