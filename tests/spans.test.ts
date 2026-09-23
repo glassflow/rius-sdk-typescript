@@ -505,3 +505,34 @@ describe("the configured agent name", () => {
     expect(scopedExporter.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBeUndefined();
   });
 });
+
+describe("the unknown_service placeholder", () => {
+  it("is not an agent name: a process that named nothing has none", async () => {
+    // Both the service name and the agent name resolve to the same
+    // placeholder when nothing was configured, so emitting it would claim an
+    // identity the caller never supplied.
+    await client.shutdown();
+    const exp = new InMemorySpanExporter();
+    const bare = init({ spanExporter: exp, heartbeatTransport: async () => {} });
+    try {
+      startSpan("plan", { kind: SpanKind.AGENT }).end();
+      await bare.flush();
+      expect(exp.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBeUndefined();
+    } finally {
+      await bare.shutdown();
+    }
+  });
+
+  it("does not suppress a real name in a process with no service name", async () => {
+    await client.shutdown();
+    const exp = new InMemorySpanExporter();
+    const bare = init({ spanExporter: exp, heartbeatTransport: async () => {} });
+    try {
+      startSpan("plan", { kind: SpanKind.AGENT, agentName: "researcher" }).end();
+      await bare.flush();
+      expect(exp.getFinishedSpans()[0].attributes["gen_ai.agent.name"]).toBe("researcher");
+    } finally {
+      await bare.shutdown();
+    }
+  });
+});
