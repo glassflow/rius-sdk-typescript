@@ -263,8 +263,12 @@ const NAME_TARGET_BY_KIND: Partial<Record<SpanKind, string>> = {
  * the function behind it. The one degenerate case: a CHAIN has no operation
  * and no target, so there is nothing to compose from, and an empty span name
  * is worse than a vague one.
+ *
+ * Exported because the Python SDK defines the same literal and the parity
+ * fixture keeps the two in lockstep; a CHAIN span must be named identically
+ * whichever SDK produced it.
  */
-const CHAIN_SPAN_NAME = "chain";
+export const CHAIN_SPAN_NAME = "chain";
 
 /**
  * The conventions' span name for a span that will carry `attributes`:
