@@ -35,10 +35,25 @@ describe("semconv", () => {
     });
   });
 
-  it("emits no operation name for kinds without a canonical one", () => {
+  it("maps RETRIEVER spans to the retrieval operation", () => {
+    expect(kindAttributes(SpanKind.RETRIEVER)).toEqual({
+      "openinference.span.kind": "RETRIEVER",
+      "gen_ai.operation.name": "retrieval",
+    });
+  });
+
+  it("emits no operation name for CHAIN, the one kind the conventions do not cover", () => {
     expect(kindAttributes(SpanKind.CHAIN)).toEqual({
       "openinference.span.kind": "CHAIN",
     });
+  });
+
+  it("gives every kind but CHAIN an operation name", () => {
+    for (const kind of Object.values(SpanKind)) {
+      const operation = kindAttributes(kind)["gen_ai.operation.name"];
+      if (kind === SpanKind.CHAIN) expect(operation).toBeUndefined();
+      else expect(operation, `${kind} has no operation name`).toBeDefined();
+    }
   });
 
   it("treats unflattened llm.prompts and llm.prompt_template as content", () => {
@@ -65,6 +80,8 @@ describe("semconv", () => {
       semconv.GEN_AI_OPERATION_NAME,
       semconv.GEN_AI_PROVIDER_NAME,
       semconv.GEN_AI_TOOL_NAME,
+      semconv.GEN_AI_DATA_SOURCE_ID,
+      semconv.GEN_AI_RETRIEVAL_TOP_K,
       semconv.MCP_METHOD_NAME,
       semconv.MCP_PROTOCOL_VERSION,
       semconv.SESSION_ID,
@@ -113,5 +130,19 @@ describe("rius.context.sizes", () => {
 
   it("is not pending identity: content sizes are unknown at span start", () => {
     expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(semconv.RIUS_CONTEXT_SIZES)).toBe(false);
+  });
+});
+
+describe("retrieval attribute categories", () => {
+  it("puts top_k on the pending allowlist and documents on neither list", async () => {
+    const semconv = await import("../src/semconv.js");
+    // The request half is knowable at span start.
+    expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(semconv.GEN_AI_RETRIEVAL_TOP_K)).toBe(true);
+    expect(semconv.CONTENT_ATTRIBUTES.has(semconv.GEN_AI_RETRIEVAL_TOP_K)).toBe(false);
+    // The result half is not, so it never rides a snapshot. It is not content
+    // either: the conventions define the entries as ids and scores rather than
+    // document text, so it must survive captureContent: false.
+    expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(semconv.GEN_AI_RETRIEVAL_DOCUMENTS)).toBe(false);
+    expect(semconv.CONTENT_ATTRIBUTES.has(semconv.GEN_AI_RETRIEVAL_DOCUMENTS)).toBe(false);
   });
 });

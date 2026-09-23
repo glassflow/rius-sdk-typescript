@@ -79,9 +79,14 @@ describe("pending allowlist coverage", () => {
     startSpan("manual-tool", { kind: SpanKind.TOOL, userId: "u", input: { q: "x" } }).end();
     await startAsCurrentSpan("scoped-tool", { kind: SpanKind.TOOL, userId: "u" }, async () => 1);
     startGeneration("gen", { model: "m", provider: "p", operation: "chat", userId: "u" }).end();
+    startSpan("retrieve", {
+      kind: SpanKind.RETRIEVER,
+      dataSourceId: "docs-index",
+      userId: "u",
+    }).end();
     await new FakeMcpClient().callTool({ name: "search", arguments: { q: "x" } });
 
-    const expected = ["manual-tool", "scoped-tool", "gen", "execute_tool search"];
+    const expected = ["manual-tool", "scoped-tool", "gen", "retrieve", "execute_tool search"];
     expect([...recorder.seen.keys()].sort()).toEqual([...expected].sort());
     for (const name of expected) {
       expectAllowlisted(name, recorder.seen.get(name) as Record<string, unknown>);
