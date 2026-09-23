@@ -1,12 +1,18 @@
 import type { AttributeValue, Attributes } from "@opentelemetry/api";
 import { trace } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
-import type { ReadableSpan, Span, SpanExporter } from "@opentelemetry/sdk-trace-base";
-import { afterEach, describe, expect, it } from "vitest";
-import { init } from "../src/client.js";
+import {
+  BasicTracerProvider,
+  type ReadableSpan,
+  type Span,
+  type SpanExporter,
+  type SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { describe, expect, it } from "vitest";
 import { MaskingSpanExporter } from "../src/masking.js";
 import {
   type Converter,
+  NORMALIZATION_RULES,
   type NormalizationRule,
   NormalizingSpanProcessor,
   copy,
@@ -15,6 +21,7 @@ import {
   toInt,
   wrapInList,
 } from "../src/normalize.js";
+import { PendingSpanProcessor } from "../src/pending.js";
 import { RIUS_SPAN_PENDING } from "../src/semconv.js";
 
 /** An ended span carrying just an attribute bag; the bag is mutated in place. */
@@ -170,20 +177,37 @@ class Capture implements SpanExporter {
   async forceFlush(): Promise<void> {}
 }
 
-let client: ReturnType<typeof init> | undefined;
-afterEach(async () => {
-  await client?.shutdown();
-  client = undefined;
+describe("the shipped table", () => {
+  it("is empty, so nothing speculative rides the wire", () => {
+    expect(NORMALIZATION_RULES).toEqual([]);
+  });
+
+  it("short-circuits both hooks when the table is empty", () => {
+    const processor = new NormalizingSpanProcessor([]);
+    const attributes: Attributes = { "ai.prompt": "x", "llm.model_name": "gpt-4o" };
+    processor.onStart(startingSpan(attributes), {} as never);
+    processor.onEnd(endedSpan(attributes));
+    expect(attributes).toEqual({ "ai.prompt": "x", "llm.model_name": "gpt-4o" });
+  });
 });
 
 describe("ordering against masking", () => {
   const VERCEL_PROMPT = { "ai.prompt": '{"messages":[{"role":"user"}]}' };
+  /**
+   * A test fixture, NOT a shipped rule: the shipped table is empty on purpose
+   * (see normalize.ts). It exists here because a CONTENT source is what makes
+   * the ordering contract observable, and this is the shape the Vercel ticket
+   * will have to map for real.
+   */
+  const CONTENT_RULES: readonly NormalizationRule[] = [
+    { source: "ai.prompt", target: "gen_ai.input.messages", convert: jsonMember("messages") },
+  ];
 
   /** Normalize, then mask: the order init() wires. */
   it("maps the dialect content key before masking strips it", () => {
     const inner = new Capture();
     const span = endedSpan({ ...VERCEL_PROMPT });
-    new NormalizingSpanProcessor().onEnd(span);
+    new NormalizingSpanProcessor(CONTENT_RULES).onEnd(span);
     new MaskingSpanExporter(inner, { captureContent: true, mask: () => "[REDACTED]" }).export(
       [span],
       () => {},
@@ -200,73 +224,64 @@ describe("ordering against masking", () => {
     const inner = new Capture();
     const span = endedSpan({ ...VERCEL_PROMPT });
     new MaskingSpanExporter(inner, { captureContent: false }).export([span], () => {});
-    new NormalizingSpanProcessor().onEnd(span);
+    new NormalizingSpanProcessor(CONTENT_RULES).onEnd(span);
     expect(span.attributes["gen_ai.input.messages"]).toBeUndefined();
+  });
+
+  it("the mask is handed the CANONICAL key, never the dialect", () => {
+    const keys: string[] = [];
+    const span = endedSpan({ ...VERCEL_PROMPT });
+    new NormalizingSpanProcessor(CONTENT_RULES).onEnd(span);
+    new MaskingSpanExporter(new Capture(), {
+      captureContent: true,
+      mask: (_value, ctx) => {
+        if (ctx?.key !== undefined) keys.push(ctx.key);
+        return "[REDACTED]";
+      },
+    }).export([span], () => {});
+    expect(keys).toContain("gen_ai.input.messages");
+    expect(keys).not.toContain("ai.prompt");
   });
 });
 
-describe("normalization through the real init() pipeline", () => {
+/** Collects whatever the pending processor hands its delegate. */
+class CaptureProcessor implements SpanProcessor {
+  readonly spans: ReadableSpan[] = [];
+  onStart(): void {}
+  onEnd(span: ReadableSpan): void {
+    this.spans.push({ ...span, attributes: { ...span.attributes } } as ReadableSpan);
+  }
+  async forceFlush(): Promise<void> {}
+  async shutdown(): Promise<void> {}
+}
+
+describe("the start hook through the pending pipeline", () => {
   it("start-time mapping reaches the pending snapshot", async () => {
-    const exporter = new Capture();
-    client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
-    // The dialect key is not on the pending identity allowlist; its canonical
-    // target is. Only the start hook can bridge that.
-    trace
+    // The processor order init() wires: normalizer, then pending. The dialect
+    // key is NOT on the pending identity allowlist and its canonical target
+    // is, so only the start hook can bridge the two.
+    const captured = new CaptureProcessor();
+    const provider = new BasicTracerProvider({
+      spanProcessors: [
+        new NormalizingSpanProcessor([
+          {
+            source: "llm.model_name",
+            target: "gen_ai.request.model",
+            convert: copy,
+            identity: true,
+          },
+        ]),
+        new PendingSpanProcessor(captured),
+      ],
+    });
+    provider
       .getTracer("t")
       .startSpan("llm", { attributes: { "llm.model_name": "gpt-4o" } })
       .end();
-    await client.flush();
 
-    const pending = exporter.spans.find((s) => s.attributes[RIUS_SPAN_PENDING] === true);
+    const pending = captured.spans.find((s) => s.attributes[RIUS_SPAN_PENDING] === true);
     expect(pending?.attributes["gen_ai.request.model"]).toBe("gpt-4o");
     expect(pending?.attributes["llm.model_name"]).toBeUndefined();
-  });
-
-  it("normalizes before masking: the mask sees the CANONICAL key", async () => {
-    const exporter = new Capture();
-    const keys: string[] = [];
-    client = init({
-      spanExporter: exporter,
-      heartbeat: false,
-      mask: (_value, context) => {
-        if (context?.key !== undefined) keys.push(context.key);
-        return "[REDACTED]";
-      },
-    });
-    trace
-      .getTracer("t")
-      .startSpan("llm", { attributes: { "ai.prompt": '{"messages":[{"role":"user"}]}' } })
-      .end();
-    await client.flush();
-
-    // Reversed, the mask would have been handed "ai.prompt" and the canonical
-    // key would never have existed.
-    expect(keys).toContain("gen_ai.input.messages");
-    expect(keys).not.toContain("ai.prompt");
-    expect(exporter.spans[0].attributes["gen_ai.input.messages"]).toBe("[REDACTED]");
-  });
-
-  it("normalizes before masking: captureContent:false strips the canonical key", async () => {
-    const exporter = new Capture();
-    client = init({ spanExporter: exporter, heartbeat: false, captureContent: false });
-    trace
-      .getTracer("t")
-      .startSpan("llm", {
-        attributes: {
-          "ai.prompt": '{"messages":[{"role":"user"}]}',
-          "llm.token_count.prompt": "12",
-        },
-      })
-      .end();
-    await client.flush();
-
-    const attributes = exporter.spans[0].attributes;
-    // The content key was mapped and then stripped: neither spelling survives.
-    expect(attributes["ai.prompt"]).toBeUndefined();
-    expect(attributes["gen_ai.input.messages"]).toBeUndefined();
-    // ...while the non-content mapping on the same span proves the normalizer
-    // ran at all, rather than masking having eaten its input first.
-    expect(attributes["gen_ai.usage.input_tokens"]).toBe(12);
-    expect(attributes["llm.token_count.prompt"]).toBeUndefined();
+    await provider.shutdown();
   });
 });

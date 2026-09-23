@@ -18,9 +18,9 @@ import {
  * the dialects once, at the edge, and everything downstream sees one vocabulary.
  *
  * This module is the SKELETON: the mapping mechanism, the contract rules and
- * the converters. The real tables (OpenInference, Vercel, OpenLLMetry) are
- * separate tickets; the two example rules below exist only to prove the
- * machinery end to end.
+ * the converters. The shipped table is EMPTY, deliberately — see
+ * NORMALIZATION_RULES. The real tables (OpenInference, Vercel, OpenLLMetry)
+ * are separate tickets.
  *
  * Kept deliberately structural so the Python SDK's table can stay in lockstep
  * with this one: rules are DATA (source key, target key, converter), never
@@ -134,27 +134,25 @@ export const sum: Converter = (values) => {
 // --- The table ---
 
 /**
- * EXAMPLES ONLY, deliberately two-and-a-bit rules: this ticket ships the
- * mechanism, and the real per-instrumentor tables (OpenInference, Vercel,
- * OpenLLMetry) are their own tickets. These three were chosen because each
- * pins one contract the tables depend on:
+ * The rules `init()` applies. EMPTY on purpose, and it must stay empty until a
+ * real table lands.
  *
- * - `llm.model_name` is an `identity` rule, so it proves the start-time hook
- *   reaches a pending snapshot.
- * - `llm.token_count.prompt` proves a converter that rewrites the value.
- * - `ai.prompt` is a CONTENT source, so it proves normalization runs before
- *   masking: reversed, masking would strip it and the canonical key would
- *   arrive empty. The Vercel ticket decides whether the promoted messages
- *   also need their shape translated; this rule only moves them.
+ * Normalization is always on and has no opt-out, so anything listed here is a
+ * live production rule the moment it is merged — and every rule DELETES its
+ * source key, so a rule that maps the wrong thing destroys the original beyond
+ * recovery. That trade is justified only by a mapping that is correct and
+ * total; it is never justified by an example. A half-migrated key is worse
+ * than an unmigrated one: the canonical name tells the sink and the console
+ * that the value is conventional, and they have no way to find out otherwise.
  *
- * Keep this list structurally identical to the Python SDK's: same rule order,
- * same source and target spellings, same converter names.
+ * So the example rules that prove this machinery live in the tests, injected
+ * through the constructor, and nothing speculative rides the wire. The real
+ * per-instrumentor tables (OpenInference, Vercel, OpenLLMetry) are their own
+ * tickets. Those tables must stay aligned with the Python SDK's, which ships
+ * an equally empty default today; RIUS-933 is where that alignment gets
+ * enforced rather than merely intended.
  */
-export const NORMALIZATION_RULES: readonly NormalizationRule[] = [
-  { source: "llm.model_name", target: GEN_AI_REQUEST_MODEL, convert: copy, identity: true },
-  { source: "llm.token_count.prompt", target: GEN_AI_USAGE_INPUT_TOKENS, convert: toInt },
-  { source: "ai.prompt", target: GEN_AI_INPUT_MESSAGES, convert: jsonMember("messages") },
-];
+export const NORMALIZATION_RULES: readonly NormalizationRule[] = [];
 
 /** A rule's source keys, always as a list. */
 function sourceKeys(rule: NormalizationRule): readonly string[] {
@@ -233,6 +231,9 @@ function applyRules(
  * Attributes are never mutated while being iterated: every rule reads through
  * explicit key lookups and the mapped sources are deleted only after the whole
  * table has run, so a delegate iterating the same bag is unaffected.
+ *
+ * With the default (empty) table both hooks short-circuit on the first line,
+ * so the component costs nothing until a real table lands.
  *
  * `onStart` applies the `identity` rules only. A pending snapshot is built at
  * span start from an allowlist of canonical identity keys, so a dialect key
