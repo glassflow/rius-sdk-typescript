@@ -6,6 +6,12 @@ export interface ObserveOptions {
   name?: string;
   kind?: SpanKind;
   /**
+   * The tool name a TOOL-kind wrapper carries as `gen_ai.tool.name`. Defaults
+   * to the span name, so a wrapped function whose name IS the tool name needs
+   * nothing; pass it when the two differ.
+   */
+  toolName?: string;
+  /**
    * The index, collection or knowledge base a RETRIEVER-kind wrapper searched,
    * set as `gen_ai.data_source.id`. Ignored on every other kind.
    */
@@ -51,6 +57,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       // search or a console view reads both SDKs' input.value the same way.
       {
         kind: options.kind,
+        toolName: options.toolName,
         dataSourceId: options.dataSourceId,
         topK: options.topK,
         input: captureInput ? { args, kwargs: {} } : undefined,

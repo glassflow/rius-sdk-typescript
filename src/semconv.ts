@@ -217,16 +217,18 @@ export function otelSpanKind(kind: SpanKind): OtelSpanKind {
  * Identity attributes for a span of `kind`, for setting AT CREATION.
  * Set at creation so future pending-span snapshots can classify the span.
  *
- * `name` is the span name. The GenAI execute-tool convention requires
- * `gen_ai.tool.name`, and for a local tool the span name IS the tool name,
- * so a TOOL span with a name gets it here rather than relying on every
- * caller to remember.
+ * `toolName` is the tool name a TOOL span carries as `gen_ai.tool.name`,
+ * Required by the GenAI execute-tool convention. It is taken as its own
+ * input rather than read off the span name: once span names follow the
+ * `{operation} {target}` convention the two are different strings, so one
+ * input cannot serve both. Callers that have no separate tool name pass the
+ * span name, which is what they meant before.
  */
-export function kindAttributes(kind: SpanKind, name?: string): Record<string, string> {
+export function kindAttributes(kind: SpanKind, toolName?: string): Record<string, string> {
   const attributes: Record<string, string> = { [OPENINFERENCE_SPAN_KIND]: kind };
   const operation = OPERATION_BY_KIND[kind];
   if (operation !== undefined) attributes[GEN_AI_OPERATION_NAME] = operation;
-  if (kind === SpanKind.TOOL && name !== undefined) attributes[GEN_AI_TOOL_NAME] = name;
+  if (kind === SpanKind.TOOL && toolName !== undefined) attributes[GEN_AI_TOOL_NAME] = toolName;
   return attributes;
 }
 

@@ -1,6 +1,6 @@
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import { SpanKind } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
@@ -251,6 +251,25 @@ describe("gen_ai.tool.name on local tool spans", () => {
     expect(pending[0].attributes["gen_ai.operation.name"]).toBe("execute_tool");
     expect(pending[0].attributes["input.value"]).toBeUndefined();
   });
+
+  it("takes an explicit tool name that differs from the span name", async () => {
+    startSpan("execute_tool weather", { kind: SpanKind.TOOL, toolName: "weather" }).end();
+    await startAsCurrentSpan(
+      "execute_tool lookup",
+      { kind: SpanKind.TOOL, toolName: "lookup" },
+      async () => 1,
+    );
+    await client.flush();
+    const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s.attributes]));
+    expect(byName.get("execute_tool weather")?.["gen_ai.tool.name"]).toBe("weather");
+    expect(byName.get("execute_tool lookup")?.["gen_ai.tool.name"]).toBe("lookup");
+  });
+
+  it("ignores an explicit tool name on a kind that is not TOOL", async () => {
+    startSpan("step", { kind: SpanKind.CHAIN, toolName: "weather" }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.name"]).toBeUndefined();
+  });
 });
 
 describe("RETRIEVER spans", () => {
@@ -378,5 +397,49 @@ describe("the OTel SpanKind field, derived from the taxonomy", () => {
       "remote-tool": OtelSpanKind.CLIENT,
       "local-llm": OtelSpanKind.INTERNAL,
     });
+  });
+});
+
+describe("tool name resolution", () => {
+  it("still names the tool from the span name, and warns once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      startSpan("search-docs", { kind: SpanKind.TOOL }).end();
+      startSpan("search-docs", { kind: SpanKind.TOOL }).end();
+      await client.flush();
+      const spans = exporter.getFinishedSpans();
+      // The identity is preserved, which is the point: dropping it would
+      // rename the tool of every existing caller who passed a span name.
+      expect(spans[0].attributes["gen_ai.tool.name"]).toBe("search-docs");
+      // Warned, but once, not per span: a tool in a loop must not flood.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("naming the tool as well as the span");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays quiet when the tool name is given explicitly", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      startSpan("execute_tool weather", { kind: SpanKind.TOOL, toolName: "weather" }).end();
+      await client.flush();
+      expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.name"]).toBe("weather");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays quiet on a kind that is not TOOL", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      startSpan("step-one", { kind: SpanKind.CHAIN }).end();
+      await client.flush();
+      expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.name"]).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
