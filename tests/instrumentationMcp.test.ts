@@ -252,3 +252,27 @@ describe("instrumentMcpClient", () => {
     expect(Client.prototype.callTool).toBe(trueOriginal);
   });
 });
+
+describe("tool-call identity is deliberately NOT invented for an MCP call", () => {
+  it("sets neither gen_ai.tool.call.id nor gen_ai.tool.type", async () => {
+    // A tool call id belongs to the MODEL's tool-call message. The MCP
+    // wrapper only ever sees the protocol exchange — a name and arguments
+    // handed to callTool — so it has no id, and the JSON-RPC request id is
+    // NOT one: it identifies the protocol round trip, not the model's
+    // request, and joining on it would fabricate a link that does not exist.
+    // gen_ai.tool.type is declined for the same reason: which of
+    // function / extension / datastore an MCP-served tool is depends on what
+    // the server does with it, which the client cannot observe.
+    //
+    // Both stay available as explicit options on the local span helpers; if
+    // this decline is ever reversed, it must be by a deliberate change that
+    // breaks this test rather than by a passing guess.
+    const mcp = new FakeClient();
+    await mcp.callTool({ name: "search", arguments: { q: "x" } });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.tool.name"]).toBe("search");
+    expect(span.attributes["gen_ai.tool.call.id"]).toBeUndefined();
+    expect(span.attributes["gen_ai.tool.type"]).toBeUndefined();
+  });
+});

@@ -31,6 +31,17 @@ export interface RiusOptions {
   endpoint?: string;
   apiKey?: string;
   serviceName?: string;
+  /**
+   * The running build's version, stamped on the resource as `service.version`.
+   * There is deliberately NO default: `service.name` already shows what a
+   * missing value costs, where the `unknown_service` placeholder merges every
+   * unconfigured process into one bucket. An absent version is a visibly
+   * absent version, so the resource simply omits the key.
+   *
+   * Resolution: this option, then `RIUS_SERVICE_VERSION`, then
+   * `service.version` inside `OTEL_RESOURCE_ATTRIBUTES`, then unset.
+   */
+  serviceVersion?: string;
   disabled?: boolean;
   sampleRate?: number;
   captureContent?: boolean;
@@ -54,6 +65,8 @@ export interface ResolvedConfig {
   endpoint: string;
   apiKey?: string;
   serviceName: string;
+  /** Absent when nothing supplied one; never a placeholder. */
+  serviceVersion?: string;
   disabled: boolean;
   sampleRate: number;
   captureContent: boolean;
@@ -121,6 +134,38 @@ function clamp(name: string, value: number, min: number, max: number, fallback: 
 }
 
 /**
+ * `service.version` as `OTEL_RESOURCE_ATTRIBUTES` carries it, or undefined.
+ *
+ * Parsed here by hand because, unlike Python, the JS SDK never reads that
+ * variable on this path: `Resource.create` merges the OTel env detector in
+ * Python, whereas `NodeTracerProvider` takes `options.resource ??
+ * defaultResource()` and `resourceFromAttributes` merges nothing — so an
+ * explicit resource, which is what client.ts builds, shuts the variable out
+ * entirely. Only `service.version` is read, and only as the last tier: pulling
+ * the whole detector in would also let the variable rewrite `service.name` and
+ * the agent name, which resolve through their own precedence rules above.
+ *
+ * The format is the spec's: comma-separated `key=value` pairs, values
+ * percent-encoded. A malformed pair is skipped rather than thrown on — a
+ * broken environment variable must not stop a process from starting.
+ */
+function serviceVersionFromOtelEnv(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  for (const pair of raw.split(",")) {
+    const separator = pair.indexOf("=");
+    if (separator === -1) continue;
+    if (pair.slice(0, separator).trim() !== "service.version") continue;
+    const value = pair.slice(separator + 1).trim();
+    try {
+      return decodeURIComponent(value) || undefined;
+    } catch {
+      return value || undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Explicit options win, then RIUS_* environment variables, then defaults.
  * GLASSFLOW_* is deliberately not read: this package never shipped under it.
  */
@@ -147,6 +192,15 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     endpoint,
     apiKey: options.apiKey ?? env.RIUS_API_KEY,
     serviceName,
+    // Empty is unset, as it is for the agent name and the session id: a blank
+    // version would stamp `service.version=""` on every span, which reads as
+    // a real (and wrong) answer rather than as no answer. Falls through to
+    // the OTel environment last, and to nothing after that.
+    serviceVersion:
+      options.serviceVersion ||
+      env.RIUS_SERVICE_VERSION ||
+      serviceVersionFromOtelEnv(env.OTEL_RESOURCE_ATTRIBUTES) ||
+      undefined,
     disabled: options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false),
     sampleRate: options.sampleRate ?? rate(env.RIUS_SAMPLE_RATE, 1.0),
     captureContent:

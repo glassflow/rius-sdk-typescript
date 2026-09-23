@@ -13,6 +13,20 @@ export interface ObserveOptions {
    */
   toolName?: string;
   /**
+   * The id of the model tool-call a TOOL-kind wrapper answers, set as
+   * `gen_ai.tool.call.id`. Only the caller has it — a wrapper sees the
+   * arguments, never the assistant message that produced them — so it is
+   * passed or omitted, never derived. Ignored on every other kind.
+   */
+  toolCallId?: string;
+  /**
+   * What kind of tool a TOOL-kind wrapper runs, set as `gen_ai.tool.type`
+   * (`"function"`, `"extension"`, `"datastore"`). Recorded verbatim and never
+   * inferred from the wrapped callable: the wrapper shape says nothing about
+   * where the tool actually executes. Ignored on every other kind.
+   */
+  toolType?: string;
+  /**
    * The index, collection or knowledge base a RETRIEVER-kind wrapper searched,
    * set as `gen_ai.data_source.id`. Ignored on every other kind.
    */
@@ -84,6 +98,8 @@ export function observe<F extends (...args: never[]) => unknown>(
     const spanOptions = {
       kind: options.kind,
       toolName,
+      toolCallId: options.toolCallId,
+      toolType: options.toolType,
       dataSourceId: options.dataSourceId,
       topK: options.topK,
       agentName: options.agentName,

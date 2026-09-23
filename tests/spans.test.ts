@@ -867,3 +867,95 @@ describe("the executing agent and the configured agent name", () => {
     }
   });
 });
+
+// Verified against semantic-conventions-genai @ 8ffdf568e1b4391a99adb081db16e8102e36918e:
+// on an execute_tool span gen_ai.tool.call.id is Recommended "if available"
+// and gen_ai.tool.type is Recommended "if available" and sampling-relevant.
+describe("tool-call identity on local tool spans", () => {
+  it("sets both at creation on a TOOL span", async () => {
+    startSpan({
+      kind: SpanKind.TOOL,
+      toolName: "get_weather",
+      toolCallId: "call_mszuSIzqtI65i1wAUOE8w5H4",
+      toolType: "function",
+    }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.tool.call.id"]).toBe("call_mszuSIzqtI65i1wAUOE8w5H4");
+    expect(span.attributes["gen_ai.tool.type"]).toBe("function");
+  });
+
+  it("names the span after the tool, never after the call id or the type", async () => {
+    startSpan({
+      kind: SpanKind.TOOL,
+      toolName: "get_weather",
+      toolCallId: "call_abc123",
+      toolType: "extension",
+    }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].name).toBe("execute_tool get_weather");
+  });
+
+  it("still names an untooled TOOL span after the bare operation", async () => {
+    // Neither key may stand in for a missing tool name.
+    startSpan({ kind: SpanKind.TOOL, toolCallId: "call_abc123", toolType: "function" }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("execute_tool");
+    expect(span.attributes["gen_ai.tool.name"]).toBeUndefined();
+  });
+
+  it("ignores both on every other kind, where they would claim a call that is not there", async () => {
+    for (const kind of [SpanKind.LLM, SpanKind.AGENT, SpanKind.RETRIEVER, SpanKind.CHAIN]) {
+      startSpan(`s-${kind}`, { kind, toolCallId: "call_abc123", toolType: "function" }).end();
+    }
+    await client.flush();
+    for (const span of exporter.getFinishedSpans()) {
+      expect(
+        span.attributes["gen_ai.tool.call.id"],
+        `${span.name} leaked a call id`,
+      ).toBeUndefined();
+      expect(
+        span.attributes["gen_ai.tool.type"],
+        `${span.name} leaked a tool type`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("omits each independently; neither is defaulted", async () => {
+    startSpan({ kind: SpanKind.TOOL, toolName: "a", toolCallId: "call_1" }).end();
+    startSpan({ kind: SpanKind.TOOL, toolName: "b", toolType: "datastore" }).end();
+    await client.flush();
+    const [first, second] = exporter.getFinishedSpans();
+    expect(first.attributes["gen_ai.tool.call.id"]).toBe("call_1");
+    expect(first.attributes["gen_ai.tool.type"]).toBeUndefined();
+    expect(second.attributes["gen_ai.tool.type"]).toBe("datastore");
+    expect(second.attributes["gen_ai.tool.call.id"]).toBeUndefined();
+  });
+
+  it("carries both through the scoped helper", async () => {
+    await startAsCurrentSpan(
+      { kind: SpanKind.TOOL, toolName: "get_weather", toolCallId: "call_2", toolType: "function" },
+      () => {},
+    );
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.tool.call.id"]).toBe("call_2");
+    expect(span.attributes["gen_ai.tool.type"]).toBe("function");
+  });
+
+  it("carries both through observe", async () => {
+    const wrapped = observe(async (city: string) => `sunny in ${city}`, {
+      kind: SpanKind.TOOL,
+      toolName: "get_weather",
+      toolCallId: "call_3",
+      toolType: "extension",
+    });
+    await wrapped("berlin");
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.tool.call.id"]).toBe("call_3");
+    expect(span.attributes["gen_ai.tool.type"]).toBe("extension");
+    expect(span.name).toBe("execute_tool get_weather");
+  });
+});

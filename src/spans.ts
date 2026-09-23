@@ -8,6 +8,8 @@ import {
   GEN_AI_DATA_SOURCE_ID,
   GEN_AI_RETRIEVAL_DOCUMENTS,
   GEN_AI_RETRIEVAL_TOP_K,
+  GEN_AI_TOOL_CALL_ID,
+  GEN_AI_TOOL_TYPE,
   INPUT_VALUE,
   OUTPUT_VALUE,
   SpanKind,
@@ -47,6 +49,24 @@ export interface SpanOptions {
    * name: nothing is invented.
    */
   toolName?: string;
+  /**
+   * The id of the model's tool-call message this TOOL span answers, set as
+   * `gen_ai.tool.call.id`. Caller-supplied and nothing else: the id belongs
+   * to the assistant turn that requested the call, which the SDK never sees,
+   * so there is nothing to derive it from and it is omitted rather than
+   * invented. Scoped to TOOL, like `toolName`: on any other kind the key
+   * would claim a tool call that is not there.
+   */
+  toolCallId?: string;
+  /**
+   * What kind of tool this TOOL span ran, set as `gen_ai.tool.type` — the
+   * conventions' examples are `"function"`, `"extension"` and `"datastore"`.
+   * Caller-supplied, recorded verbatim, never guessed from the callable: a
+   * wrapped function is not automatically a `function` tool, since the same
+   * wrapper is what an agent-side extension call goes through. Scoped to
+   * TOOL, like `toolCallId`.
+   */
+  toolType?: string;
   /**
    * The index, collection or knowledge base a RETRIEVER span searched, set as
    * `gen_ai.data_source.id`. Ignored on every other kind: the key means the
@@ -274,6 +294,13 @@ function creationAttributes(
     // meanings.
     const executedBy = executingAgentName();
     if (executedBy !== undefined) attributes[GEN_AI_AGENT_NAME] = executedBy;
+    // Caller-supplied tool-call identity. Set here with the tool name so it
+    // reaches pending snapshots, and only on TOOL for the same reason the
+    // agent name is read only here: neither key means anything on a chat,
+    // retrieval or chain span. Neither has a fallback — an absent value is
+    // absent, not defaulted.
+    if (options.toolCallId !== undefined) attributes[GEN_AI_TOOL_CALL_ID] = options.toolCallId;
+    if (options.toolType !== undefined) attributes[GEN_AI_TOOL_TYPE] = options.toolType;
   }
   if (kind === SpanKind.AGENT) {
     const agentName = resolveAgentName(options.agentName, kind);

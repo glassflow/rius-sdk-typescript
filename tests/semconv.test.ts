@@ -80,6 +80,9 @@ describe("semconv", () => {
       semconv.GEN_AI_OPERATION_NAME,
       semconv.GEN_AI_PROVIDER_NAME,
       semconv.GEN_AI_TOOL_NAME,
+      semconv.GEN_AI_TOOL_CALL_ID,
+      semconv.GEN_AI_TOOL_TYPE,
+      semconv.GEN_AI_OUTPUT_TYPE,
       semconv.GEN_AI_DATA_SOURCE_ID,
       semconv.GEN_AI_RETRIEVAL_TOP_K,
       semconv.GEN_AI_AGENT_NAME,
@@ -235,5 +238,83 @@ describe("composeSpanName", () => {
         "gen_ai.tool.name": "get_weather",
       }),
     ).toBe("invoke_agent");
+  });
+});
+
+describe("conformance keys added for the GenAI registry sweep", () => {
+  // Verified against semantic-conventions-genai @ 8ffdf568e1b4391a99adb081db16e8102e36918e
+  // (model/gen-ai/registry.yaml, model/gen-ai/spans.yaml). The repo has no
+  // releases, so the commit is the citation.
+  it("spells each key the way the registry does", () => {
+    expect(semconv.GEN_AI_RESPONSE_ID).toBe("gen_ai.response.id");
+    expect(semconv.GEN_AI_OUTPUT_TYPE).toBe("gen_ai.output.type");
+    expect(semconv.GEN_AI_TOOL_CALL_ID).toBe("gen_ai.tool.call.id");
+    expect(semconv.GEN_AI_TOOL_TYPE).toBe("gen_ai.tool.type");
+  });
+
+  it("treats none of them as content: they survive captureContent: false", () => {
+    // Ids, a modality and a tool category. Nothing the model was shown, and
+    // none of them marked sensitive by the conventions — unlike
+    // gen_ai.tool.call.arguments, which sits one key away and IS content.
+    for (const key of [
+      semconv.GEN_AI_RESPONSE_ID,
+      semconv.GEN_AI_OUTPUT_TYPE,
+      semconv.GEN_AI_TOOL_CALL_ID,
+      semconv.GEN_AI_TOOL_TYPE,
+    ]) {
+      expect(semconv.CONTENT_ATTRIBUTES.has(key), `${key} must not be content`).toBe(false);
+    }
+    expect(semconv.CONTENT_ATTRIBUTES.has("gen_ai.tool.call.arguments")).toBe(true);
+  });
+
+  it("allowlists the three request-side keys and excludes the response-side one", () => {
+    // Identity is exactly "knowable when the span is created".
+    for (const key of [
+      semconv.GEN_AI_OUTPUT_TYPE,
+      semconv.GEN_AI_TOOL_CALL_ID,
+      semconv.GEN_AI_TOOL_TYPE,
+    ]) {
+      expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(key), `${key} must ride snapshots`).toBe(true);
+    }
+    // The completion id arrives with the response, so no snapshot can carry it.
+    expect(semconv.PENDING_IDENTITY_ATTRIBUTES.has(semconv.GEN_AI_RESPONSE_ID)).toBe(false);
+  });
+
+  it("needs its own allowlist entry for the output type, which no prefix covers", () => {
+    // gen_ai.output.type is a request property spelled outside
+    // gen_ai.request., so PENDING_IDENTITY_PREFIXES cannot reach it.
+    const covered = semconv.PENDING_IDENTITY_PREFIXES.some((prefix) =>
+      semconv.GEN_AI_OUTPUT_TYPE.startsWith(prefix),
+    );
+    expect(covered).toBe(false);
+  });
+
+  it("keeps the tool keys out of the span name, which names the tool only", () => {
+    expect(
+      composeSpanName(SpanKind.TOOL, {
+        ...kindAttributes(SpanKind.TOOL, "get_weather"),
+        [semconv.GEN_AI_TOOL_CALL_ID]: "call_abc123",
+        [semconv.GEN_AI_TOOL_TYPE]: "function",
+      }),
+    ).toBe("execute_tool get_weather");
+    // And a tool span with no tool name is still named after the operation
+    // alone: neither new key may stand in as the name target.
+    expect(
+      composeSpanName(SpanKind.TOOL, {
+        ...kindAttributes(SpanKind.TOOL),
+        [semconv.GEN_AI_TOOL_CALL_ID]: "call_abc123",
+        [semconv.GEN_AI_TOOL_TYPE]: "function",
+      }),
+    ).toBe("execute_tool");
+  });
+
+  it("keeps the output type out of a generation's span name", () => {
+    expect(
+      composeSpanName(SpanKind.LLM, {
+        ...kindAttributes(SpanKind.LLM),
+        "gen_ai.request.model": "gpt-4o",
+        [semconv.GEN_AI_OUTPUT_TYPE]: "json",
+      }),
+    ).toBe("chat gpt-4o");
   });
 });

@@ -403,3 +403,55 @@ describe("instance identity (service.instance.id)", () => {
     expect(idA).not.toBe(idB);
   });
 });
+
+describe("service.version on the resource", () => {
+  /** The resource attributes of one span exported by `options`. */
+  async function resourceAttributes(options: InitOptions): Promise<Record<string, unknown>> {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ spanExporter: exporter, ...options });
+    await startAsCurrentSpan("s", () => {});
+    await client.flush();
+    return exporter.getFinishedSpans()[0].resource.attributes;
+  }
+
+  it("stamps the configured version", async () => {
+    expect((await resourceAttributes({ serviceVersion: "1.2.3" }))["service.version"]).toBe(
+      "1.2.3",
+    );
+  });
+
+  it("leaves the key OFF the resource entirely when unset", async () => {
+    // Not empty, not a placeholder: absent. `in` rather than a value check,
+    // because resourceFromAttributes keeps an explicitly-undefined key.
+    const attributes = await resourceAttributes({});
+    expect("service.version" in attributes).toBe(false);
+  });
+
+  it("never stamps an empty version", async () => {
+    const attributes = await resourceAttributes({ serviceVersion: "" });
+    expect("service.version" in attributes).toBe(false);
+  });
+
+  it("reads RIUS_SERVICE_VERSION from the process environment", async () => {
+    vi.stubEnv("RIUS_SERVICE_VERSION", "4.5.6");
+    try {
+      expect((await resourceAttributes({}))["service.version"]).toBe("4.5.6");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reads service.version out of OTEL_RESOURCE_ATTRIBUTES, which the JS SDK would not", async () => {
+    // NodeTracerProvider takes `options.resource ?? defaultResource()` and
+    // resourceFromAttributes merges nothing, so the OTel env detector never
+    // runs on this path — unlike Python, where Resource.create merges it.
+    // config.ts reads the variable by hand to close that gap; without that,
+    // this assertion would find the key missing.
+    vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", "service.version=7.8.9");
+    try {
+      expect((await resourceAttributes({}))["service.version"]).toBe("7.8.9");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

@@ -569,3 +569,61 @@ describe("spec-form generation names", () => {
     expect(final[0].name).toBe(pending[0].name);
   });
 });
+
+// Verified against semantic-conventions-genai @ 8ffdf568e1b4391a99adb081db16e8102e36918e:
+// gen_ai.response.id is Recommended on an inference span, gen_ai.output.type
+// Conditionally Required "when applicable and if the request includes an
+// output format", with the members text / json / image / speech.
+describe("the completion id and the requested output type", () => {
+  it("sets the output type at creation, where the rest of the request lives", async () => {
+    const gen = startGeneration({ model: "gpt-4o", outputType: "json" });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.output.type"]).toBe("json");
+  });
+
+  it("records the completion id afterwards, since it arrives with the response", async () => {
+    const gen = startGeneration({ model: "gpt-4o" });
+    gen.setResponseId("chatcmpl-123").setModel("gpt-4o-2024-08-06");
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.response.id"]).toBe("chatcmpl-123");
+    expect(span.attributes["gen_ai.response.model"]).toBe("gpt-4o-2024-08-06");
+  });
+
+  it("takes an unrecognised output type at its word rather than validating it", async () => {
+    // The registry's member list is open, and a provider's own spelling is
+    // still what the caller requested. Silently dropping it would lose the
+    // only record of what was asked for.
+    const gen = startGeneration({ model: "some-model", outputType: "video" });
+    gen.end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.output.type"]).toBe("video");
+  });
+
+  it("omits both when the caller supplies neither: nothing is invented", async () => {
+    startGeneration({ model: "gpt-4o" }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.output.type"]).toBeUndefined();
+    expect(span.attributes["gen_ai.response.id"]).toBeUndefined();
+  });
+
+  it("carries the output type on the scoped helper too", async () => {
+    await startAsCurrentGeneration({ model: "gpt-4o", outputType: "speech" }, (gen) => {
+      gen.setResponseId("msg_01abc");
+    });
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.output.type"]).toBe("speech");
+    expect(span.attributes["gen_ai.response.id"]).toBe("msg_01abc");
+  });
+
+  it("does not let the output type into the span name", async () => {
+    startGeneration({ model: "gpt-4o", outputType: "image" }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].name).toBe("chat gpt-4o");
+  });
+});
