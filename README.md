@@ -115,6 +115,15 @@ one `init()` was given), a RETRIEVER after its `dataSourceId`. A function
 name is not an agent or an index, so it is never used as one. Pass `{ name }`
 to override any of this.
 
+An AGENT wrapper also scopes the calls it makes: TOOL spans opened while it
+runs, local or MCP, carry that agent as `gen_ai.agent.name` — on an
+execute-tool span the conventions define that key as the agent *executing*
+the tool, where on an invoke-agent span it is the agent being *invoked*.
+Outside any agent, a tool span falls back to the agent `init()` was given.
+The scope follows async calls, so any nesting depth works; only
+`startAsCurrentSpan` and `observe` open it, since `startSpan` does not make
+its span current.
+
 ### `startSpan` / `startAsCurrentSpan`: manual spans
 
 For finer control than `observe`, create spans directly:

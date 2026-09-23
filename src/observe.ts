@@ -26,6 +26,10 @@ export interface ObserveOptions {
    * The agent an AGENT-kind wrapper invokes, set as `gen_ai.agent.name`.
    * Unset, it falls back to the agent name `init()` was given; it is never
    * taken from the wrapped function's name. Ignored on every other kind.
+   *
+   * It also scopes the call: TOOL spans opened while the wrapped function
+   * runs carry this name as the agent that EXECUTED them, which is what the
+   * same key means on an execute-tool span.
    */
   agentName?: string;
   /**

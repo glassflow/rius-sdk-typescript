@@ -204,6 +204,17 @@ describe("instrumentMcpClient", () => {
     expect(span.attributes["mcp.method.name"]).toBeUndefined();
   });
 
+  it("names the enclosing agent, since an MCP call is an execute_tool span too", async () => {
+    // `gen_ai.agent.name` on an execute-tool span is the agent EXECUTING the
+    // tool, and a remote tool is executed by the same agent a local one is.
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, async () => {
+      await new FakeClient().callTool({ name: "search", arguments: { q: "x" } });
+    });
+    await client.flush();
+    const span = exporter.getFinishedSpans().find((s) => s.name === "execute_tool search");
+    expect(span?.attributes["gen_ai.agent.name"]).toBe("planner");
+  });
+
   it("restores the original method on uninstrument", async () => {
     uninstrument();
     expect(FakeClient.prototype.callTool).toBe(trueOriginalCallTool);
