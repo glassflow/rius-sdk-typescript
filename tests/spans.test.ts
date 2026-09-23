@@ -506,6 +506,162 @@ describe("the configured agent name", () => {
   });
 });
 
+// The GenAI conventions name a span `{operation} {target}` — `chat gpt-4o`,
+// `execute_tool get_weather` — falling back to the bare operation when the
+// target is unknown. Omitting the name is how a caller asks for that.
+describe("spec-form span names", () => {
+  it("composes the name from the operation and the target, on both surfaces", async () => {
+    startSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }).end();
+    startSpan({ kind: SpanKind.AGENT, agentName: "planner" }).end();
+    startSpan({ kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" }).end();
+    startSpan({
+      kind: SpanKind.EMBEDDING,
+      attributes: { "gen_ai.request.model": "text-embedding-3-small" },
+    }).end();
+    await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
+    await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, () => {});
+    await startAsCurrentSpan({ kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" }, () => {});
+    await startAsCurrentSpan(
+      {
+        kind: SpanKind.EMBEDDING,
+        attributes: { "gen_ai.request.model": "text-embedding-3-small" },
+      },
+      () => {},
+    );
+    await client.flush();
+    const expected = [
+      "execute_tool get_weather",
+      "invoke_agent planner",
+      "retrieval docs-index",
+      "embeddings text-embedding-3-small",
+    ];
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([...expected, ...expected]);
+  });
+
+  it("falls back to the bare operation when the target is unknown", async () => {
+    startSpan({ kind: SpanKind.TOOL }).end();
+    startSpan({ kind: SpanKind.RETRIEVER }).end();
+    startSpan({ kind: SpanKind.EMBEDDING }).end();
+    startSpan({ kind: SpanKind.LLM }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([
+      "execute_tool",
+      "retrieval",
+      "embeddings",
+      "chat",
+    ]);
+    // AGENT is absent on purpose: an initialised client always has an agent
+    // name (it defaults to the service name), so an AGENT span always has a
+    // target here. The nameless case is covered in the semconv unit tests.
+  });
+
+  it("leaves an unnamed TOOL span's tool attribute unset rather than guessing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      startSpan({ kind: SpanKind.TOOL }).end();
+      await client.flush();
+      expect(exporter.getFinishedSpans()[0].attributes["gen_ai.tool.name"]).toBeUndefined();
+      // No name is being reused as a tool name, so nothing to deprecate.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("never feeds the rendered name back into the tool attribute", async () => {
+    startSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("execute_tool get_weather");
+    expect(span.attributes["gen_ai.tool.name"]).toBe("get_weather");
+  });
+
+  it("uses the literal chain for an unnamed CHAIN, which has nothing to compose from", async () => {
+    startSpan().end();
+    startSpan({ kind: SpanKind.CHAIN, input: { q: "x" } }).end();
+    await startAsCurrentSpan(() => {});
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["chain", "chain", "chain"]);
+  });
+
+  it("lets an explicit name win on every kind, on both surfaces", async () => {
+    const kinds = [
+      SpanKind.LLM,
+      SpanKind.EMBEDDING,
+      SpanKind.TOOL,
+      SpanKind.AGENT,
+      SpanKind.RETRIEVER,
+      SpanKind.CHAIN,
+    ];
+    for (const kind of kinds) {
+      startSpan(`manual-${kind}`, { kind, toolName: "t", agentName: "a", dataSourceId: "d" }).end();
+      await startAsCurrentSpan(
+        `scoped-${kind}`,
+        { kind, toolName: "t", agentName: "a", dataSourceId: "d" },
+        () => {},
+      );
+    }
+    await client.flush();
+    const names = new Set(exporter.getFinishedSpans().map((s) => s.name));
+    for (const kind of kinds) {
+      expect(names.has(`manual-${kind}`)).toBe(true);
+      expect(names.has(`scoped-${kind}`)).toBe(true);
+    }
+  });
+
+  it("gives a pending snapshot the same name as the final span", async () => {
+    await client.shutdown();
+    const pendingExporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: pendingExporter,
+      partialSpans: true,
+      heartbeatTransport: async () => {},
+    });
+    const obs = startSpan({ kind: SpanKind.TOOL, toolName: "get_weather" });
+    await client.flush();
+    const pending = pendingExporter
+      .getFinishedSpans()
+      .filter((s) => s.attributes["rius.span.pending"] === true);
+    obs.end();
+    await client.flush();
+    const final = pendingExporter
+      .getFinishedSpans()
+      .filter((s) => s.attributes["rius.span.pending"] === undefined);
+    expect(pending).toHaveLength(1);
+    expect(final).toHaveLength(1);
+    // The wire contract: the snapshot is replaced by the final span, so the
+    // two must agree on the name as well as on the ids.
+    expect(pending[0].name).toBe("execute_tool get_weather");
+    expect(final[0].name).toBe(pending[0].name);
+  });
+});
+
+describe("spec-form names and the configured agent name", () => {
+  let scoped: RiusClient;
+  let scopedExporter: InMemorySpanExporter;
+
+  beforeEach(async () => {
+    await client.shutdown();
+    scopedExporter = new InMemorySpanExporter();
+    scoped = init({
+      spanExporter: scopedExporter,
+      agentName: "configured",
+      heartbeatTransport: async () => {},
+    });
+  });
+  afterEach(async () => {
+    await scoped.shutdown();
+  });
+
+  it("names an unnamed AGENT span after the agent init() was given", async () => {
+    startSpan({ kind: SpanKind.AGENT }).end();
+    await scoped.flush();
+    const span = scopedExporter.getFinishedSpans()[0];
+    expect(span.name).toBe("invoke_agent configured");
+    expect(span.attributes["gen_ai.agent.name"]).toBe("configured");
+  });
+});
+
 describe("the unknown_service placeholder", () => {
   it("is not an agent name: a process that named nothing has none", async () => {
     // Both the service name and the agent name resolve to the same

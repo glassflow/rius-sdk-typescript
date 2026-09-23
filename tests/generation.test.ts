@@ -492,3 +492,80 @@ describe("the OTel SpanKind field", () => {
     expect(kinds).toEqual({ manual: OtelSpanKind.CLIENT, scoped: OtelSpanKind.CLIENT });
   });
 });
+
+// `{gen_ai.operation.name} {gen_ai.request.model}`, per the conventions.
+describe("spec-form generation names", () => {
+  it("composes from the request model on both surfaces", async () => {
+    startGeneration({ model: "gpt-4o" }).end();
+    await startAsCurrentGeneration({ model: "gpt-4o" }, () => {});
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["chat gpt-4o", "chat gpt-4o"]);
+  });
+
+  it("composes from the resolved operation, which callers may override", async () => {
+    startGeneration({ model: "text-embedding-3-small", operation: "embeddings" }).end();
+    await startAsCurrentGeneration(
+      { model: "claude-haiku", operation: "text_completion" },
+      () => {},
+    );
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([
+      "embeddings text-embedding-3-small",
+      "text_completion claude-haiku",
+    ]);
+  });
+
+  it("falls back to the bare operation without a model", async () => {
+    startGeneration().end();
+    await startAsCurrentGeneration({ operation: "embeddings" }, () => {});
+    await startAsCurrentGeneration(() => {});
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["chat", "embeddings", "chat"]);
+  });
+
+  it("never names the span after the response model, which arrives too late", async () => {
+    const gen = startGeneration({ model: "gpt-4o" });
+    gen.setModel("gpt-4o-2024-11-20");
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.name).toBe("chat gpt-4o");
+    expect(span.attributes["gen_ai.response.model"]).toBe("gpt-4o-2024-11-20");
+  });
+
+  it("lets an explicit name win", async () => {
+    startGeneration("summarise", { model: "gpt-4o" }).end();
+    await startAsCurrentGeneration("summarise-scoped", { model: "gpt-4o" }, () => {});
+    await client.flush();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([
+      "summarise",
+      "summarise-scoped",
+    ]);
+  });
+
+  it("gives a pending snapshot the same name as the final span", async () => {
+    await client.shutdown();
+    const pendingExporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: pendingExporter,
+      partialSpans: true,
+      heartbeatTransport: async () => {},
+    });
+    const gen = startGeneration({ model: "gpt-4o" });
+    await client.flush();
+    const pending = pendingExporter
+      .getFinishedSpans()
+      .filter((s) => s.attributes["rius.span.pending"] === true);
+    // The response model lands after the snapshot; the name must not move.
+    gen.setModel("gpt-4o-2024-11-20");
+    gen.end();
+    await client.flush();
+    const final = pendingExporter
+      .getFinishedSpans()
+      .filter((s) => s.attributes["rius.span.pending"] === undefined);
+    expect(pending).toHaveLength(1);
+    expect(final).toHaveLength(1);
+    expect(pending[0].name).toBe("chat gpt-4o");
+    expect(final[0].name).toBe(pending[0].name);
+  });
+});

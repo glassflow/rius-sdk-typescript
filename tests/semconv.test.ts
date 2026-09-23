@@ -1,7 +1,7 @@
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
 import * as semconv from "../src/semconv.js";
-import { SpanKind, kindAttributes, otelSpanKind } from "../src/semconv.js";
+import { SpanKind, composeSpanName, kindAttributes, otelSpanKind } from "../src/semconv.js";
 import fixture from "./fixtures/semconv.json" with { type: "json" };
 
 describe("semconv", () => {
@@ -169,5 +169,71 @@ describe("agent identity", () => {
       "openinference.span.kind": "AGENT",
       "gen_ai.operation.name": "invoke_agent",
     });
+  });
+});
+
+// The conventions' span name, composed from the attributes the span carries.
+describe("composeSpanName", () => {
+  it("renders {operation} {target} for every kind that has one", () => {
+    const cases: [SpanKind, Record<string, string>, string][] = [
+      [SpanKind.LLM, { "gen_ai.request.model": "gpt-4o" }, "chat gpt-4o"],
+      [
+        SpanKind.EMBEDDING,
+        { "gen_ai.request.model": "text-embedding-3-small" },
+        "embeddings text-embedding-3-small",
+      ],
+      [SpanKind.TOOL, { "gen_ai.tool.name": "get_weather" }, "execute_tool get_weather"],
+      [SpanKind.AGENT, { "gen_ai.agent.name": "planner" }, "invoke_agent planner"],
+      [SpanKind.RETRIEVER, { "gen_ai.data_source.id": "docs-index" }, "retrieval docs-index"],
+    ];
+    for (const [kind, target, expected] of cases) {
+      expect(composeSpanName(kind, { ...kindAttributes(kind), ...target })).toBe(expected);
+    }
+  });
+
+  it("falls back to the bare operation when the target is unknown", () => {
+    const expected: [SpanKind, string][] = [
+      [SpanKind.LLM, "chat"],
+      [SpanKind.EMBEDDING, "embeddings"],
+      [SpanKind.TOOL, "execute_tool"],
+      [SpanKind.AGENT, "invoke_agent"],
+      [SpanKind.RETRIEVER, "retrieval"],
+    ];
+    for (const [kind, name] of expected) {
+      expect(composeSpanName(kind, kindAttributes(kind))).toBe(name);
+    }
+  });
+
+  it("reads the operation off the attributes, so an override renames the span", () => {
+    // A generation may be a text_completion or an embeddings call; the name
+    // must follow the operation that is actually on the span.
+    expect(
+      composeSpanName(SpanKind.LLM, {
+        ...kindAttributes(SpanKind.LLM),
+        "gen_ai.operation.name": "embeddings",
+        "gen_ai.request.model": "text-embedding-3-small",
+      }),
+    ).toBe("embeddings text-embedding-3-small");
+  });
+
+  it("uses the literal chain for a CHAIN, the one kind with no operation", () => {
+    expect(composeSpanName(SpanKind.CHAIN, kindAttributes(SpanKind.CHAIN))).toBe("chain");
+  });
+
+  it("ignores an empty target rather than trailing a space", () => {
+    expect(
+      composeSpanName(SpanKind.TOOL, { ...kindAttributes(SpanKind.TOOL), "gen_ai.tool.name": "" }),
+    ).toBe("execute_tool");
+  });
+
+  it("ignores a target belonging to another kind", () => {
+    // Keys are read per kind, so a tool name on an agent span cannot leak
+    // into the agent span's name.
+    expect(
+      composeSpanName(SpanKind.AGENT, {
+        ...kindAttributes(SpanKind.AGENT),
+        "gen_ai.tool.name": "get_weather",
+      }),
+    ).toBe("invoke_agent");
   });
 });

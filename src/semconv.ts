@@ -241,6 +241,55 @@ export function kindAttributes(kind: SpanKind, toolName?: string): Record<string
   return attributes;
 }
 
+/**
+ * The attribute whose value completes a span's name, per kind. The GenAI
+ * conventions name a span `{operation} {target}`, and each operation has its
+ * own target: the model for inference and embeddings, the tool, the agent,
+ * the data source. CHAIN is absent because it has no operation to compose
+ * with, and LLM reads the REQUEST model on purpose — the response model can
+ * arrive long after the span was named, and a pending snapshot must carry the
+ * same name as the final span.
+ */
+const NAME_TARGET_BY_KIND: Partial<Record<SpanKind, string>> = {
+  [SpanKind.LLM]: GEN_AI_REQUEST_MODEL,
+  [SpanKind.EMBEDDING]: GEN_AI_REQUEST_MODEL,
+  [SpanKind.TOOL]: GEN_AI_TOOL_NAME,
+  [SpanKind.AGENT]: GEN_AI_AGENT_NAME,
+  [SpanKind.RETRIEVER]: GEN_AI_DATA_SOURCE_ID,
+};
+
+/**
+ * The name a CHAIN span falls back to when the caller named neither it nor
+ * the function behind it. The one degenerate case: a CHAIN has no operation
+ * and no target, so there is nothing to compose from, and an empty span name
+ * is worse than a vague one.
+ */
+const CHAIN_SPAN_NAME = "chain";
+
+/**
+ * The conventions' span name for a span that will carry `attributes`:
+ * `{operation} {target}`, e.g. `chat gpt-4o`, `execute_tool get_weather`,
+ * falling back to the bare operation when the target is unknown.
+ *
+ * Composed from the attributes the span is actually being created with, not
+ * from the caller's options, so the name can never disagree with the span it
+ * names: the operation is whatever `gen_ai.operation.name` ended up being
+ * (a generation may override it to `embeddings`), and the target is the
+ * resolved value (a tool name defaulted from the span name, an agent name
+ * fallen back to the configured one). It only READS them, so the rendered
+ * name never contaminates the attribute it was built from.
+ */
+export function composeSpanName(
+  kind: SpanKind,
+  attributes: Record<string, string | number | boolean>,
+): string {
+  const operation = attributes[GEN_AI_OPERATION_NAME];
+  if (typeof operation !== "string") return CHAIN_SPAN_NAME;
+  const targetKey = NAME_TARGET_BY_KIND[kind];
+  const target = targetKey === undefined ? undefined : attributes[targetKey];
+  return typeof target === "string" && target !== "" ? `${operation} ${target}` : operation;
+}
+
 /** Attribute keys carrying user content: masked or stripped at export. */
 export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   INPUT_VALUE,
