@@ -2,6 +2,7 @@
   "TRACER_NAME": "rius",
   "SERVICE_INSTANCE_ID": "service.instance.id",
   "GEN_AI_AGENT_NAME": "gen_ai.agent.name",
+  "GEN_AI_AGENT_ID": "gen_ai.agent.id",
   "OPENINFERENCE_SPAN_KIND": "openinference.span.kind",
   "INPUT_VALUE": "input.value",
   "OUTPUT_VALUE": "output.value",
@@ -38,5 +39,6 @@
   "RIUS_CONTEXT_SIZES": "rius.context.sizes",
   "GEN_AI_FIRST_TOKEN_EVENT": "gen_ai.first_token",
   "RIUS_SPAN_PENDING": "rius.span.pending",
-  "LLM_INVOCATION_PARAMETERS": "llm.invocation_parameters"
+  "LLM_INVOCATION_PARAMETERS": "llm.invocation_parameters",
+  "CHAIN_SPAN_NAME": "chain"
 }
