@@ -1,6 +1,7 @@
 {
   "TRACER_NAME": "rius",
   "SERVICE_INSTANCE_ID": "service.instance.id",
+  "GEN_AI_AGENT_NAME": "gen_ai.agent.name",
   "OPENINFERENCE_SPAN_KIND": "openinference.span.kind",
   "INPUT_VALUE": "input.value",
   "OUTPUT_VALUE": "output.value",
@@ -24,6 +25,9 @@
   "GEN_AI_RESPONSE_FINISH_REASONS": "gen_ai.response.finish_reasons",
   "GEN_AI_TOOL_NAME": "gen_ai.tool.name",
   "GEN_AI_TOOL_DEFINITIONS": "gen_ai.tool.definitions",
+  "GEN_AI_DATA_SOURCE_ID": "gen_ai.data_source.id",
+  "GEN_AI_RETRIEVAL_TOP_K": "gen_ai.retrieval.top_k",
+  "GEN_AI_RETRIEVAL_DOCUMENTS": "gen_ai.retrieval.documents",
   "MCP_METHOD_NAME": "mcp.method.name",
   "MCP_METHOD_TOOLS_CALL": "tools/call",
   "MCP_PROTOCOL_VERSION": "mcp.protocol.version",
