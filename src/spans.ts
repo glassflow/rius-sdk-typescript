@@ -170,6 +170,44 @@ function configure(observation: Observation, options: SpanOptions): Observation 
 }
 
 /**
+ * The tool's identity: explicit `toolName`, else the span name.
+ *
+ * Every comparable decorator in the ecosystem resolves tool identity as
+ * "explicit name, else function name", feeding one value to both the span name
+ * and the tool attribute, so a custom name on a tool-kind span names the tool
+ * rather than merely labelling it. Dropping that would silently rename the tool
+ * of every caller who passed a name, and `gen_ai.tool.name` is Required as a
+ * dimension on the execute-tool duration histogram, so the rename splits their
+ * series with no error anywhere.
+ *
+ * The contamination this guards against is unaffected: what must never feed the
+ * attribute is the RENDERED `execute_tool {tool}` form, and this reads the
+ * caller's own string, never the rendered one.
+ *
+ * The fallback warns once per span so the coupling is visible and a major
+ * release can drop it without a silent rename. Passing `toolName` silences it.
+ */
+function resolveToolName(options: SpanOptions, name: string): string {
+  if (options.toolName !== undefined) return options.toolName;
+  if (options.kind === SpanKind.TOOL) {
+    warnOnce(
+      `A span named "${name}" with kind TOOL is naming the tool as well as the span; ` +
+        `gen_ai.tool.name will be "${name}". Pass toolName to set them separately. ` +
+        "A future major release will stop deriving the tool name from the span name.",
+    );
+  }
+  return name;
+}
+
+/** One warning per distinct message; a per-span warning would flood a loop. */
+const warned = new Set<string>();
+function warnOnce(message: string): void {
+  if (warned.has(message)) return;
+  warned.add(message);
+  console.warn(`[rius] ${message}`);
+}
+
+/**
  * Identity attributes at CREATION so pending snapshots (onStart) carry them.
  * The user id is set here as well as via the `withUser` scope so it reaches
  * the span even on a provider without `UserSpanProcessor` installed.
@@ -177,7 +215,7 @@ function configure(observation: Observation, options: SpanOptions): Observation 
 function creationAttributes(name: string, options: SpanOptions): Record<string, string | number> {
   const kind = options.kind ?? SpanKind.CHAIN;
   const attributes: Record<string, string | number> = {
-    ...kindAttributes(kind, options.toolName ?? name),
+    ...kindAttributes(kind, resolveToolName(options, name)),
     ...options.attributes,
   };
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;
