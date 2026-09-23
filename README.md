@@ -317,8 +317,9 @@ graceful exit if you want that distinction to show up.
 
 The heartbeat never keeps the process alive, its timer is unref'd, and never
 throws into your code; delivery failures are logged once per client and
-silent after that. `agentName` identifies the agent in heartbeat payloads
-and defaults to `serviceName`.
+silent after that. `agentName` identifies the agent in heartbeat payloads and
+on every span, where it is stamped on the resource as `gen_ai.agent.name`. It
+defaults to `serviceName`, so the two agree unless you set it.
 
 ### Partial spans
 

@@ -21,7 +21,7 @@ import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from ".
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { PendingSpanProcessor } from "./pending.js";
-import { SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
+import { GEN_AI_AGENT_NAME, SERVICE_INSTANCE_ID, TRACER_NAME } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
 import { UserSpanProcessor } from "./user.js";
 import { SDK_VERSION } from "./version.js";
@@ -280,6 +280,12 @@ export function init(options: InitOptions = {}): RiusClient {
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: config.serviceName,
       [SERVICE_INSTANCE_ID]: instanceId,
+      // The agent name the heartbeats already carry. Without it here, spans
+      // fall back to service.name downstream while heartbeats group under the
+      // agent name, so a process that configures the two differently sees its
+      // agents view and its trace list disagree. Resolution defaults the agent
+      // name to the service name, so nothing changes when they are the same.
+      [GEN_AI_AGENT_NAME]: config.agentName,
       "telemetry.distro.name": "glassflow-rius",
       "telemetry.distro.version": SDK_VERSION,
     }),

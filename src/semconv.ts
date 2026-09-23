@@ -85,6 +85,15 @@ export const GEN_AI_RETRIEVAL_TOP_K = "gen_ai.retrieval.top_k";
  */
 export const GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents";
 /**
+ * The agent this process is. Stamped on the RESOURCE, once per client, from
+ * the configured agent name. The backend derives a span's agent from the
+ * resource first and falls back to `service.name`, so a process whose agent
+ * name and service name are equal is unchanged on the wire, and one where
+ * they differ stops having its spans and its heartbeats grouped under two
+ * different values.
+ */
+export const GEN_AI_AGENT_NAME = "gen_ai.agent.name";
+/**
  * The request's tool/function definitions, serialized verbatim (provider
  * shapes differ; the backend reads names and sizes from either). Content,
  * not identity — listed in CONTENT_ATTRIBUTES below.
