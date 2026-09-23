@@ -3,6 +3,8 @@ import { getTracer } from "./client.js";
 import {
   ERROR_TYPE,
   GEN_AI_DATA_SOURCE_ID,
+  GEN_AI_RETRIEVAL_DOCUMENTS,
+  GEN_AI_RETRIEVAL_TOP_K,
   INPUT_VALUE,
   OUTPUT_VALUE,
   SpanKind,
@@ -40,6 +42,13 @@ export interface SpanOptions {
    */
   dataSourceId?: string;
   /**
+   * How many documents a RETRIEVER span asked for, set as
+   * `gen_ai.retrieval.top_k`. Ignored on every other kind. What came back is
+   * not an option here: it is unknown at span creation, so it is recorded
+   * afterwards with `Observation.setRetrievedDocuments`.
+   */
+  topK?: number;
+  /**
    * Identity attributes to set at span CREATION rather than after it. Pending
    * snapshots are built at start, so anything a caller would otherwise
    * `setAttribute` first thing (a tool name, say) belongs here to reach them.
@@ -69,6 +78,24 @@ export class Observation {
 
   setOutput(value: unknown): this {
     this.span.setAttribute(OUTPUT_VALUE, toAttributeValue(value));
+    return this;
+  }
+
+  /**
+   * Record what a retrieval returned, as `gen_ai.retrieval.documents`.
+   *
+   * The conventions define this as an array of objects, each with an optional
+   * `id` and an optional `score`. Identifiers and relevance, never document
+   * text, which is why it is not treated as content: it survives
+   * `captureContent: false` the way token counts do. Put the retrieved text in
+   * `setOutput` if you want it captured, and masking applies to it there.
+   *
+   * Unlike `dataSourceId` and `topK`, which describe the request and are
+   * passed at span creation, this is only knowable once the search has run, so
+   * it never reaches a pending snapshot.
+   */
+  setRetrievedDocuments(documents: unknown): this {
+    this.span.setAttribute(GEN_AI_RETRIEVAL_DOCUMENTS, toAttributeValue(documents));
     return this;
   }
 
@@ -140,15 +167,17 @@ function configure(observation: Observation, options: SpanOptions): Observation 
  * The user id is set here as well as via the `withUser` scope so it reaches
  * the span even on a provider without `UserSpanProcessor` installed.
  */
-function creationAttributes(name: string, options: SpanOptions): Record<string, string> {
+function creationAttributes(name: string, options: SpanOptions): Record<string, string | number> {
   const kind = options.kind ?? SpanKind.CHAIN;
-  const attributes = {
+  const attributes: Record<string, string | number> = {
     ...kindAttributes(kind, name),
     ...options.attributes,
   };
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;
-  if (kind === SpanKind.RETRIEVER && options.dataSourceId !== undefined) {
-    attributes[GEN_AI_DATA_SOURCE_ID] = options.dataSourceId;
+  if (kind === SpanKind.RETRIEVER) {
+    if (options.dataSourceId !== undefined)
+      attributes[GEN_AI_DATA_SOURCE_ID] = options.dataSourceId;
+    if (options.topK !== undefined) attributes[GEN_AI_RETRIEVAL_TOP_K] = options.topK;
   }
   return attributes;
 }
@@ -212,7 +241,9 @@ export function startAsCurrentSpan<T>(
  */
 export function runActive<H extends Observation, T>(
   name: string,
-  attributes: Record<string, string>,
+  // Widened from string-only for gen_ai.retrieval.top_k, the first numeric
+  // identity attribute set at creation. OTel accepts either.
+  attributes: Record<string, string | number>,
   userId: string | undefined,
   makeHandle: (span: Span) => H,
   fn: (handle: H) => Promise<T> | T,

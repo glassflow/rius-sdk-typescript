@@ -262,6 +262,40 @@ describe("RETRIEVER spans", () => {
     expect(span.attributes["gen_ai.operation.name"]).toBe("retrieval");
   });
 
+  it("carries gen_ai.retrieval.top_k, which describes the request", async () => {
+    startSpan("retrieve", { kind: SpanKind.RETRIEVER, topK: 5 }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.retrieval.top_k"]).toBe(5);
+  });
+
+  it("ignores topK on a kind that is not RETRIEVER", async () => {
+    startSpan("step", { kind: SpanKind.CHAIN, topK: 5 }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.retrieval.top_k"]).toBeUndefined();
+  });
+
+  it("records what came back separately, once the search has run", async () => {
+    const obs = startSpan("retrieve", {
+      kind: SpanKind.RETRIEVER,
+      dataSourceId: "docs",
+      topK: 2,
+    });
+    obs.setRetrievedDocuments([
+      { id: "doc-1", score: 0.91 },
+      { id: "doc-2", score: 0.4 },
+    ]);
+    obs.end();
+    await client.flush();
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(JSON.parse(attrs["gen_ai.retrieval.documents"] as string)).toEqual([
+      { id: "doc-1", score: 0.91 },
+      { id: "doc-2", score: 0.4 },
+    ]);
+    // The request half stays alongside the result half.
+    expect(attrs["gen_ai.data_source.id"]).toBe("docs");
+    expect(attrs["gen_ai.retrieval.top_k"]).toBe(2);
+  });
+
   it("carries gen_ai.data_source.id when a data source is given", async () => {
     startSpan("retrieve", { kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" }).end();
     await startAsCurrentSpan(

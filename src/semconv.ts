@@ -69,6 +69,22 @@ export const GEN_AI_TOOL_NAME = "gen_ai.tool.name";
  */
 export const GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id";
 /**
+ * How many documents the retriever was ASKED for, the conventions' own framing
+ * ("also known as k, limit, or max_num_results"). Identity: a property of the
+ * request, known before the search runs, so it rides pending snapshots.
+ */
+export const GEN_AI_RETRIEVAL_TOP_K = "gen_ai.retrieval.top_k";
+/**
+ * What the retriever RETURNED: a JSON array of objects each carrying an
+ * optional `id` and an optional `score`. Identifiers and relevance, never
+ * document text, which is why the conventions do not mark it sensitive and
+ * why it is absent from CONTENT_ATTRIBUTES: it survives `captureContent:
+ * false` the way token counts do. Retrieved text belongs in `output.value`,
+ * where masking applies. Metadata rather than identity, since it cannot be
+ * known while the span is still open, so it never reaches a snapshot.
+ */
+export const GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents";
+/**
  * The request's tool/function definitions, serialized verbatim (provider
  * shapes differ; the backend reads names and sizes from either). Content,
  * not identity — listed in CONTENT_ATTRIBUTES below.
@@ -316,6 +332,10 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   // The retrieval target is identity in the same sense the tool name is: a
   // still-running retrieval must be attributable to the index it is hitting.
   GEN_AI_DATA_SOURCE_ID,
+  // Equally a property of the request, so equally knowable at start. Its
+  // counterpart GEN_AI_RETRIEVAL_DOCUMENTS is deliberately absent: what came
+  // back cannot be known while the span is open.
+  GEN_AI_RETRIEVAL_TOP_K,
   // Protocol identity, not content: a still-running MCP call must be
   // distinguishable from a local tool in the live view — the one place
   // setting the marker at creation pays off.
