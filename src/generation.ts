@@ -6,12 +6,14 @@ import {
   GEN_AI_INPUT_MESSAGES,
   GEN_AI_OPERATION_NAME,
   GEN_AI_OUTPUT_MESSAGES,
+  GEN_AI_OUTPUT_TYPE,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
   GEN_AI_REQUEST_PREFIX,
   GEN_AI_REQUEST_REASONING_LEVEL,
   GEN_AI_REQUEST_STREAM,
   GEN_AI_RESPONSE_FINISH_REASONS,
+  GEN_AI_RESPONSE_ID,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
   GEN_AI_TOOL_DEFINITIONS,
@@ -62,6 +64,17 @@ export interface GenerationOptions {
    * creation and, for the scoped variant, on every span opened inside it.
    */
   userId?: string;
+  /**
+   * The output modality requested of the model (`gen_ai.output.type`) —
+   * `"text"`, `"json"`, `"image"` or `"speech"` per the conventions, which
+   * make it Conditionally Required when the request asks for a specific
+   * output format. An option rather than a setter because it is a property of
+   * the REQUEST: known before the call, so it is set at span creation and
+   * reaches pending snapshots. The string is recorded verbatim, not validated
+   * against the four members: the enum is open, and a provider's own spelling
+   * is still what the caller asked for.
+   */
+  outputType?: string;
   /**
    * Operation name (`gen_ai.operation.name`); default `"chat"`. Set it for
    * `text_completion`, `embeddings` or `generate_content` calls, as the
@@ -163,6 +176,19 @@ export class Generation extends Observation {
   }
 
   /**
+   * The provider's identifier for this completion (`gen_ai.response.id`) —
+   * OpenAI's `id`, Anthropic's `id`, and so on. A post-call setter and not a
+   * creation option for the reason `setModel` is one: the value arrives WITH
+   * the response, so no span can carry it at creation and no pending snapshot
+   * can either. Recorded verbatim; it is an opaque provider string, and it is
+   * not content, so it survives `captureContent: false`.
+   */
+  setResponseId(id: string): this {
+    this.span.setAttribute(GEN_AI_RESPONSE_ID, id);
+    return this;
+  }
+
+  /**
    * Token usage (`gen_ai.usage.*`). Pass provider-reported values as-is;
    * never pre-add anything. Per the GenAI conventions, `inputTokens` is the
    * total including cached tokens (the cache counts are subsets of it).
@@ -253,6 +279,9 @@ function attributesFor(options: GenerationOptions): Record<string, string> {
   if (options.operation !== undefined) attributes[GEN_AI_OPERATION_NAME] = options.operation;
   if (options.model !== undefined) attributes[GEN_AI_REQUEST_MODEL] = options.model;
   if (options.provider !== undefined) attributes[GEN_AI_PROVIDER_NAME] = options.provider;
+  // Identity: a property of the request, so it belongs with the model and the
+  // operation rather than with the post-call setters.
+  if (options.outputType !== undefined) attributes[GEN_AI_OUTPUT_TYPE] = options.outputType;
   // Identity at creation so it lands even without UserSpanProcessor installed.
   if (options.userId !== undefined) attributes[USER_ID] = options.userId;
   return attributes;

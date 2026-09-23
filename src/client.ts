@@ -13,7 +13,7 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
 import { type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
@@ -290,6 +290,15 @@ export function init(options: InitOptions = {}): RiusClient {
       [GEN_AI_AGENT_NAME]: config.agentName,
       "telemetry.distro.name": "glassflow-rius",
       "telemetry.distro.version": SDK_VERSION,
+      // Spread rather than assigned so an unresolved version leaves the key
+      // OFF the resource entirely. `resourceFromAttributes` keeps an explicit
+      // `undefined` as a raw attribute, and there is no placeholder to fall
+      // back on by design: `service.name`'s `unknown_service` is the standing
+      // argument against inventing one, since every unversioned process would
+      // then claim the same fake version.
+      ...(config.serviceVersion === undefined
+        ? {}
+        : { [ATTR_SERVICE_VERSION]: config.serviceVersion }),
     }),
     // Always ParentBased, with no AlwaysOn shortcut at rate 1. They are not
     // equivalent: ParentBased honours a remote UNSAMPLED parent and drops,

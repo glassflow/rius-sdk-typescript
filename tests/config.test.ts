@@ -162,3 +162,62 @@ describe("resolveConfig", () => {
     expect(resolveConfig({}, { RIUS_PARTIAL_SPANS_DELAY: "abc" }).partialSpansDelayMs).toBe(0);
   });
 });
+
+describe("serviceVersion", () => {
+  it("is absent when nothing supplies one: there is no placeholder", () => {
+    // The lesson of service.name's `unknown_service`: a fake default merges
+    // every unversioned process into one bucket, which is worse than absence.
+    expect(resolveConfig({}, {}).serviceVersion).toBeUndefined();
+  });
+
+  it("prefers the explicit option over both environment tiers", () => {
+    const c = resolveConfig(
+      { serviceVersion: "1.2.3" },
+      { RIUS_SERVICE_VERSION: "9.9.9", OTEL_RESOURCE_ATTRIBUTES: "service.version=0.0.1" },
+    );
+    expect(c.serviceVersion).toBe("1.2.3");
+  });
+
+  it("reads RIUS_SERVICE_VERSION next, matching the RIUS_SERVICE_NAME precedent", () => {
+    const c = resolveConfig(
+      {},
+      { RIUS_SERVICE_VERSION: "9.9.9", OTEL_RESOURCE_ATTRIBUTES: "service.version=0.0.1" },
+    );
+    expect(c.serviceVersion).toBe("9.9.9");
+  });
+
+  it("falls back to OTEL_RESOURCE_ATTRIBUTES last", () => {
+    // The JS SDK never merges that variable into an explicitly-built
+    // resource, so this tier exists only because config.ts reads it by hand.
+    const c = resolveConfig(
+      {},
+      { OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=prod,service.version=0.0.1" },
+    );
+    expect(c.serviceVersion).toBe("0.0.1");
+  });
+
+  it("percent-decodes an OTel value and tolerates surrounding whitespace", () => {
+    const c = resolveConfig({}, { OTEL_RESOURCE_ATTRIBUTES: " service.version = 1.0.0%2Bbuild5 " });
+    expect(c.serviceVersion).toBe("1.0.0+build5");
+  });
+
+  it("ignores an unrelated or malformed OTEL_RESOURCE_ATTRIBUTES rather than throwing", () => {
+    expect(resolveConfig({}, { OTEL_RESOURCE_ATTRIBUTES: "junk" }).serviceVersion).toBeUndefined();
+    expect(
+      resolveConfig({}, { OTEL_RESOURCE_ATTRIBUTES: "service.versioned=1" }).serviceVersion,
+    ).toBeUndefined();
+    // An invalid escape decodes to nothing valid; the raw value is kept
+    // rather than crashing the process at init().
+    expect(
+      resolveConfig({}, { OTEL_RESOURCE_ATTRIBUTES: "service.version=%zz" }).serviceVersion,
+    ).toBe("%zz");
+  });
+
+  it("treats an empty value as unset at every tier", () => {
+    expect(resolveConfig({ serviceVersion: "" }, {}).serviceVersion).toBeUndefined();
+    expect(resolveConfig({}, { RIUS_SERVICE_VERSION: "" }).serviceVersion).toBeUndefined();
+    expect(
+      resolveConfig({}, { OTEL_RESOURCE_ATTRIBUTES: "service.version=" }).serviceVersion,
+    ).toBeUndefined();
+  });
+});

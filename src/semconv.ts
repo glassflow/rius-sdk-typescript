@@ -41,6 +41,28 @@ export const GEN_AI_REQUEST_MODEL = "gen_ai.request.model";
 export const GEN_AI_REQUEST_REASONING_LEVEL = "gen_ai.request.reasoning.level";
 export const GEN_AI_RESPONSE_MODEL = "gen_ai.response.model";
 /**
+ * The provider's identifier for the completion (`chatcmpl-123` and the like),
+ * Recommended on an inference span. METADATA, not identity: it arrives with
+ * the response, so it cannot be known when the span is created and never
+ * rides a pending snapshot. Not content either — an opaque provider id
+ * carries nothing the model was shown — so it survives
+ * `captureContent: false` and is absent from CONTENT_ATTRIBUTES.
+ */
+export const GEN_AI_RESPONSE_ID = "gen_ai.response.id";
+/**
+ * The output modality the client ASKED the model for: the conventions define
+ * `text`, `json`, `image` and `speech`, and mark it Conditionally Required
+ * "when applicable and if the request includes an output format". A property
+ * of the REQUEST, so IDENTITY: known before the call is made, set at span
+ * creation, and allowlisted onto pending snapshots below — the key does not
+ * live under `gen_ai.request.`, so PENDING_IDENTITY_PREFIXES does not cover
+ * it and it needs its own entry. Not content: a modality is not what was
+ * said. The caller's string is recorded verbatim rather than checked against
+ * the four members; the registry's enum is open, and a value we do not
+ * recognise is still what the caller requested.
+ */
+export const GEN_AI_OUTPUT_TYPE = "gen_ai.output.type";
+/**
  * Streaming, per the GenAI inference-span conventions: `gen_ai.request.stream`
  * (boolean, Conditionally Required when streaming) and
  * `gen_ai.response.time_to_first_chunk` (double, seconds, "measured from
@@ -61,6 +83,26 @@ export const GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages";
 export const GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages";
 export const GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons";
 export const GEN_AI_TOOL_NAME = "gen_ai.tool.name";
+/**
+ * The identifier of the model's tool-call message this execution answers,
+ * Recommended "if available" on an execute-tool span. It is what joins a tool
+ * span back to the assistant turn that asked for it. IDENTITY: the caller has
+ * it before the tool runs, so it is set at span creation and rides pending
+ * snapshots — a still-running tool must be joinable to its call. Not content:
+ * an opaque provider id, unlike `gen_ai.tool.call.arguments`, which IS
+ * content and is listed below. Never derived: only the caller knows it.
+ */
+export const GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id";
+/**
+ * What kind of tool ran — the conventions' own examples are `function` (the
+ * client executes the logic), `extension` (the agent calls an external API)
+ * and `datastore` (a retrieval-style lookup). Recommended "if available", and
+ * sampling-relevant, which is why it is IDENTITY here: set at creation so it
+ * reaches pending snapshots and any future sampler. Not content. Recorded
+ * verbatim, like the output type: the value set is open and a caller's own
+ * vocabulary is still the truth about their tool.
+ */
+export const GEN_AI_TOOL_TYPE = "gen_ai.tool.type";
 /**
  * The index, collection or knowledge base a RETRIEVER span searched. Identity,
  * set at span creation so pending snapshots carry it and so it can compose the
@@ -402,6 +444,16 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_TOOL_NAME,
+  // The two other halves of a tool call's identity, both caller-supplied at
+  // creation: which model tool-call this execution answers, and what kind of
+  // tool it is. A tool that hangs is exactly the span a live view needs to
+  // show attached to its call, so both must survive the snapshot.
+  GEN_AI_TOOL_CALL_ID,
+  GEN_AI_TOOL_TYPE,
+  // A property of the request, like the model parameters the prefix rule
+  // covers — but spelled outside `gen_ai.request.`, so it needs its own
+  // entry here or it would be silently dropped from every snapshot.
+  GEN_AI_OUTPUT_TYPE,
   // The retrieval target is identity in the same sense the tool name is: a
   // still-running retrieval must be attributable to the index it is hitting.
   GEN_AI_DATA_SOURCE_ID,

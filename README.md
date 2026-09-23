@@ -177,7 +177,13 @@ from, so an unnamed CHAIN span is called `chain`.
 enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, AGENT, LLM). A TOOL
 span also carries `gen_ai.tool.name`, set to the span name unless you pass
 `toolName` (and unset if you pass neither), which both the span helpers and `observe` accept for the case
-where the span name is not the bare tool name. A RETRIEVER span carries
+where the span name is not the bare tool name. It also takes `toolCallId`
+(`gen_ai.tool.call.id`, the id of the model tool-call this execution answers)
+and `toolType` (`gen_ai.tool.type`: `function`, `extension`, `datastore`).
+Both are yours to pass or omit, never derived, and neither changes the span
+name. The MCP wrapper sets neither on purpose: a tool call id belongs to the
+model's message, not to the protocol exchange, and the wrapper never sees it.
+A RETRIEVER span carries
 `gen_ai.data_source.id` when you pass `dataSourceId`, naming the index or
 collection it searched, and `gen_ai.retrieval.top_k` when you pass `topK`.
 Each kind also
@@ -248,6 +254,13 @@ Each `modelParameters` entry is recorded as `gen_ai.request.<key>`, so use the
 provider's own parameter names. `setFinishReasons` accepts one reason or a
 list.
 
+Two more conventions keys sit on either side of the call. `outputType`
+(`gen_ai.output.type`: `text`, `json`, `image` or `speech`) is an option,
+because the output modality is something the request asks for and so is known
+before the span starts. `setResponseId` (`gen_ai.response.id`) is a setter
+alongside `setModel`, because the provider's id for the completion only exists
+once the completion does.
+
 The name is optional here as well: `startAsCurrentGeneration({ model:
 "gpt-4o" }, fn)` names the span `chat gpt-4o`, and an `operation` override
 names it after that operation instead (`embeddings text-embedding-3-small`).
@@ -316,6 +329,7 @@ variables, then the defaults below.
 | `endpoint`        | `RIUS_ENDPOINT`          | `https://ingest.eu.console.rius-glassflow.com` |
 | `apiKey`           | `RIUS_API_KEY`           | none                                          |
 | `serviceName`      | `RIUS_SERVICE_NAME`      | `unknown_service`                             |
+| `serviceVersion`   | `RIUS_SERVICE_VERSION`   | none (also read from `service.version` in `OTEL_RESOURCE_ATTRIBUTES`; left off the resource when unset, never defaulted) |
 | `disabled`         | `RIUS_DISABLED`          | `false`                                       |
 | `sampleRate`       | `RIUS_SAMPLE_RATE`       | `1.0`                                         |
 | `captureContent`   | `RIUS_CAPTURE_CONTENT`   | `true`                                        |
@@ -328,6 +342,15 @@ variables, then the defaults below.
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 
 Traces are posted to `<endpoint>/v1/traces`.
+
+`serviceVersion` is stamped on the resource as `service.version`, so the
+console can tell one build of an agent from another. It has no default on
+purpose: an invented version would put every unversioned process under the
+same wrong number, the way `unknown_service` does for unnamed ones, so the
+key is simply absent until you supply one. This SDK builds its resource
+explicitly, which in OpenTelemetry for JavaScript means the OTel environment
+is not merged into it, so `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is
+read here by hand as the last tier after the option and `RIUS_SERVICE_VERSION`.
 
 `captureContent` controls whether input/output content (prompts,
 completions, tool arguments) is attached to spans. It defaults to
