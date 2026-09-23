@@ -94,11 +94,12 @@ export const GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents";
  */
 export const GEN_AI_AGENT_NAME = "gen_ai.agent.name";
 /**
- * The agent's stable identifier, where the caller has one. Adopted alongside
- * the name rather than deferred: the conventions define it, it costs one
- * optional argument, and a name is not an identity — two deployments of the
- * same agent share a name, and a renamed agent keeps its id. Never invented;
- * unlike the name there is no configured default to fall back to.
+ * The identifier of a HOSTED agent resource, not of an agent in general: the
+ * conventions give an AWS Bedrock agent ARN and a GCP Agent Registry id as the
+ * examples, and say it is NOT RECOMMENDED to record in-memory agent instance
+ * ids here, because those are transient. So an in-process agent leaves it
+ * unset and there is no configured default to fall back to — a name is the
+ * only identity such an agent has.
  */
 export const GEN_AI_AGENT_ID = "gen_ai.agent.id";
 /**

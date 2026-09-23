@@ -27,7 +27,10 @@ export interface ObserveOptions {
    * taken from the wrapped function's name. Ignored on every other kind.
    */
   agentName?: string;
-  /** The invoked agent's stable identifier (`gen_ai.agent.id`), if any. */
+  /**
+   * The invoked agent's identifier (`gen_ai.agent.id`). For a HOSTED agent
+   * resource such as a Bedrock agent ARN; an in-process agent leaves it unset.
+   */
   agentId?: string;
   captureInput?: boolean;
   captureOutput?: boolean;

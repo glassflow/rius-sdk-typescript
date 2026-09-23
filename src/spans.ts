@@ -59,8 +59,10 @@ export interface SpanOptions {
    */
   topK?: number;
   /**
-   * The agent an AGENT span invokes, set as `gen_ai.agent.name`, which the
-   * conventions make Conditionally Required on an invoke-agent span. Unset,
+   * The agent an AGENT span INVOKES, set as `gen_ai.agent.name`. That is what
+   * the key means on an invoke-agent span, where the conventions make it
+   * Conditionally Required; on an execute-tool span the same key means the
+   * agent DOING the call, which is why this is scoped to AGENT here. Unset,
    * it falls back to the agent name `init()` was given. It is never taken
    * from the span name, unlike the tool name: that fallback exists only
    * because a tool's name and its span name were historically one string,
@@ -70,9 +72,10 @@ export interface SpanOptions {
    */
   agentName?: string;
   /**
-   * The invoked agent's stable identifier, set as `gen_ai.agent.id`. Never
-   * invented: unlike the name there is no configured default, because a name
-   * is not an identity. Ignored on every other kind.
+   * The invoked agent's identifier, set as `gen_ai.agent.id`. This key is for
+   * a HOSTED agent resource, such as a Bedrock agent ARN; the conventions
+   * advise against recording a transient in-memory instance id there, so an
+   * in-process agent leaves it unset. Ignored on every other kind.
    */
   agentId?: string;
   /**
