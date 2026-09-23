@@ -1,4 +1,5 @@
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
+import { ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 
 /**
  * Wire-visible instrumentation scope name. "rius" since the vendor keys were
@@ -144,6 +145,20 @@ export const GEN_AI_AGENT_NAME = "gen_ai.agent.name";
  * only identity such an agent has.
  */
 export const GEN_AI_AGENT_ID = "gen_ai.agent.id";
+
+/**
+ * The deployment's build version, an OTel RESOURCE attribute rather than a
+ * GenAI one. Re-exported as an alias of OpenTelemetry's own constant rather
+ * than restated as a literal: the value is theirs to define, and aliasing
+ * keeps us pinned to it. Exported at all so the parity fixture can police it,
+ * since the Python SDK names the same key in its semconv.
+ *
+ * Not to be confused with the two agent versions. This is which BUILD is
+ * running; `rius.main_agent.version` is which version of the agent DEFINITION
+ * the process runs, and `gen_ai.agent.version` is the version of an agent a
+ * span invoked.
+ */
+export const SERVICE_VERSION = ATTR_SERVICE_VERSION;
 /**
  * The request's tool/function definitions, serialized verbatim (provider
  * shapes differ; the backend reads names and sizes from either). Content,
