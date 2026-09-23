@@ -1,5 +1,10 @@
 export const DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com";
-const DEFAULT_SERVICE_NAME = "unknown_service";
+/**
+ * What `service.name` AND `agentName` both resolve to when nothing was
+ * configured. Exported so the span helpers can tell "the caller named their
+ * agent" from "the caller named nothing", which read identically otherwise.
+ */
+export const DEFAULT_SERVICE_NAME = "unknown_service";
 
 // The backend expresses staleness as multiples of the interval, so the clamp
 // bounds are part of the heartbeat wire contract.
