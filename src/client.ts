@@ -14,6 +14,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { setConfiguredAgentName } from "./agent.js";
 import { type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
@@ -173,6 +174,7 @@ export class RiusClient {
       if (globalClient === this) {
         globalClient = undefined;
         setGlobalRouting(undefined);
+        setConfiguredAgentName(undefined);
         // All three globals provider.register() claimed, not just the tracer:
         // leaving context and propagation registered makes the next init()'s
         // register() log duplicate-registration diag errors.
@@ -352,6 +354,8 @@ export function init(options: InitOptions = {}): RiusClient {
 
   globalClient = createClient({ provider, processors, health, ready, teardown, heartbeat });
   setGlobalRouting(routing);
+  // AGENT spans fall back to this when the caller names no agent.
+  setConfiguredAgentName(config.agentName);
   return globalClient;
 }
 

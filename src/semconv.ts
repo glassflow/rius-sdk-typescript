@@ -94,6 +94,15 @@ export const GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents";
  */
 export const GEN_AI_AGENT_NAME = "gen_ai.agent.name";
 /**
+ * The identifier of a HOSTED agent resource, not of an agent in general: the
+ * conventions give an AWS Bedrock agent ARN and a GCP Agent Registry id as the
+ * examples, and say it is NOT RECOMMENDED to record in-memory agent instance
+ * ids here, because those are transient. So an in-process agent leaves it
+ * unset and there is no configured default to fall back to — a name is the
+ * only identity such an agent has.
+ */
+export const GEN_AI_AGENT_ID = "gen_ai.agent.id";
+/**
  * The request's tool/function definitions, serialized verbatim (provider
  * shapes differ; the backend reads names and sizes from either). Content,
  * not identity — listed in CONTENT_ATTRIBUTES below.
@@ -347,6 +356,12 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   // counterpart GEN_AI_RETRIEVAL_DOCUMENTS is deliberately absent: what came
   // back cannot be known while the span is open.
   GEN_AI_RETRIEVAL_TOP_K,
+  // Which agent a span invokes is chosen before the work starts, so a
+  // still-running agent is attributable in the live view. Distinct from the
+  // RESOURCE key of the same name, which says which PROCESS is running; these
+  // say which agent that process invoked here.
+  GEN_AI_AGENT_NAME,
+  GEN_AI_AGENT_ID,
   // Protocol identity, not content: a still-running MCP call must be
   // distinguishable from a local tool in the live view — the one place
   // setting the marker at creation pays off.
