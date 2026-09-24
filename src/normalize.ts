@@ -464,17 +464,26 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Why the model stopped. The source is a SCALAR and the canonical key is an
   // array (one entry per generation), so wrap rather than copy.
   //
+  // Known limit: the source only ever holds ONE generation's reason. The
+  // OpenInference OpenAI instrumentation reads choices[0].finish_reason on a
+  // completed response, and whichever choice finished last on a stream. With
+  // n > 1 the array therefore has one entry, not n: a request whose choices
+  // finish ["stop", "length", "stop"] records ["stop"], and nothing on the span
+  // says the list is short. Accepted rather than skipped: n > 1 is rare in
+  // agent code, and the first reason is still the most useful single fact.
+  //
   // The VALUE is passed through untouched, deliberately. The registry defines
   // this key as a free-form string array with no enum, and says
-  // instrumentations report whatever the provider supplied. OpenInference's
-  // own converter lowercases and folds tool_calls/function_call into
-  // tool_call; following it would replace the string OpenAI actually returned
-  // with one neither the provider nor the conventions use, while leaving
-  // Anthropic's end_turn and tool_use alone — so it would cost fidelity and
-  // unify nothing. Grouping "stop" with "end_turn" is a question for a reader
-  // who still has both, not for the SDK that would destroy one of them. The
-  // native path (Generation.setFinishReasons) records verbatim too, so both
-  // paths agree.
+  // instrumentations report whatever the provider supplied. The JS
+  // instrumentations already do: they emit the provider's value verbatim.
+  // OpenInference's PYTHON conversion layer is what lowercases and folds
+  // tool_calls/function_call into tool_call; following it would replace the
+  // string OpenAI actually returned with one neither the provider nor the
+  // conventions use, while leaving Anthropic's end_turn and tool_use alone, so
+  // it would cost fidelity and unify nothing. Grouping "stop" with "end_turn"
+  // is a question for a reader who still has both, not for the SDK that would
+  // destroy one of them. The native path (Generation.setFinishReasons) records
+  // verbatim too, so both paths agree.
   { source: "llm.finish_reason", target: GEN_AI_RESPONSE_FINISH_REASONS, convert: wrapInList },
   // Usage. toInt rather than copy: a count under a canonical key must be a
   // count, and a converter that yields nothing is how a wrongly-shaped value
