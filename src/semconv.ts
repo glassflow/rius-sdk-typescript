@@ -73,6 +73,22 @@ export const GEN_AI_OUTPUT_TYPE = "gen_ai.output.type";
  */
 export const GEN_AI_REQUEST_STREAM = "gen_ai.request.stream";
 export const GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK = "gen_ai.response.time_to_first_chunk";
+/**
+ * The model sampling parameters, the `gen_ai.request.*` family the conventions
+ * define. This SDK's own API takes no sampling arguments, so nothing native
+ * emits these: they are produced only by normalization, which promotes them
+ * out of a third-party request bag. They go on the wire all the same, and the
+ * wire's keys live in one place.
+ */
+export const GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature";
+export const GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p";
+export const GEN_AI_REQUEST_TOP_K = "gen_ai.request.top_k";
+export const GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens";
+export const GEN_AI_REQUEST_FREQUENCY_PENALTY = "gen_ai.request.frequency_penalty";
+export const GEN_AI_REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty";
+export const GEN_AI_REQUEST_SEED = "gen_ai.request.seed";
+export const GEN_AI_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences";
+export const GEN_AI_REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count";
 export const GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens";
 export const GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens";
 export const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens";
@@ -309,6 +325,62 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.AGENT]: "invoke_agent",
   [SpanKind.RETRIEVER]: "retrieval",
 };
+
+/**
+ * The inverse, for spans that speak only the conventions. A GenAI-native
+ * instrumentation sets `gen_ai.operation.name` and has never heard of
+ * `openinference.span.kind`, and the contract requires both keys on every
+ * span, so the derivation has to run in both directions.
+ *
+ * NOT a mechanical inversion of the map above, and it cannot be generated
+ * from it, for two reasons:
+ * - Several operations share one kind. `text_completion` and
+ *   `generate_content` are LLM calls the same way `chat` is, and
+ *   `create_agent` is an AGENT span just as `invoke_agent` is, so the mapping
+ *   is many-to-one and only the chat / invoke_agent entries round-trip.
+ * - CHAIN has no operation of its own, but two operations land on it.
+ *   `invoke_workflow` and `plan` are real GenAI operations with no taxonomy
+ *   value, CHAIN is the honest home for both, and this direction is the only
+ *   one that can say so.
+ *
+ * A test asserts the round-trip where an operation exists, not equality of
+ * the two maps: asserting inverses would force one of those four extra
+ * operations to be dropped. Mirrors the console's deriveSpanKind.
+ */
+const KIND_BY_OPERATION: Record<string, SpanKind> = {
+  chat: SpanKind.LLM,
+  text_completion: SpanKind.LLM,
+  generate_content: SpanKind.LLM,
+  execute_tool: SpanKind.TOOL,
+  embeddings: SpanKind.EMBEDDING,
+  invoke_agent: SpanKind.AGENT,
+  create_agent: SpanKind.AGENT,
+  retrieval: SpanKind.RETRIEVER,
+  invoke_workflow: SpanKind.CHAIN,
+  plan: SpanKind.CHAIN,
+};
+
+/**
+ * The `gen_ai.operation.name` a taxonomy value implies, or `undefined` when
+ * it has none.
+ *
+ * Takes the raw attribute string rather than the enum, because the caller is
+ * normalizing a third-party span where the value is whatever the
+ * instrumentation wrote — OpenInference's own taxonomy has RERANKER,
+ * GUARDRAIL, EVALUATOR and PROMPT, none of which we model. An unrecognised
+ * value yields `undefined` rather than throwing: a span carrying a kind we do
+ * not know is not a reason to lose the span.
+ */
+export function operationForKind(kind: string): string | undefined {
+  // hasOwn, not a bare lookup: the value comes from another producer's span,
+  // and "constructor" would otherwise resolve through the prototype.
+  return Object.hasOwn(OPERATION_BY_KIND, kind) ? OPERATION_BY_KIND[kind as SpanKind] : undefined;
+}
+
+/** The taxonomy value a `gen_ai.operation.name` implies, or `undefined`. */
+export function kindForOperation(operation: string): string | undefined {
+  return Object.hasOwn(KIND_BY_OPERATION, operation) ? KIND_BY_OPERATION[operation] : undefined;
+}
 
 /**
  * SpanKind (our taxonomy ATTRIBUTE) -> the OpenTelemetry SpanKind FIELD, set

@@ -1,10 +1,39 @@
-import type { AttributeValue, Attributes, Context } from "@opentelemetry/api";
-import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
-  GEN_AI_INPUT_MESSAGES,
+  type AttributeValue,
+  type Attributes,
+  type Context,
+  SpanStatusCode,
+} from "@opentelemetry/api";
+import type { ReadableSpan, Span, SpanProcessor, TimedEvent } from "@opentelemetry/sdk-trace-base";
+import {
+  ERROR_TYPE,
+  GEN_AI_FIRST_TOKEN_EVENT,
+  GEN_AI_OPERATION_NAME,
+  GEN_AI_PROVIDER_NAME,
+  GEN_AI_REQUEST_CHOICE_COUNT,
+  GEN_AI_REQUEST_FREQUENCY_PENALTY,
+  GEN_AI_REQUEST_MAX_TOKENS,
   GEN_AI_REQUEST_MODEL,
+  GEN_AI_REQUEST_PRESENCE_PENALTY,
+  GEN_AI_REQUEST_SEED,
+  GEN_AI_REQUEST_STOP_SEQUENCES,
+  GEN_AI_REQUEST_STREAM,
+  GEN_AI_REQUEST_TEMPERATURE,
+  GEN_AI_REQUEST_TOP_K,
+  GEN_AI_REQUEST_TOP_P,
+  GEN_AI_RESPONSE_MODEL,
+  GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+  GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
+  GEN_AI_USAGE_OUTPUT_TOKENS,
+  GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+  LLM_INVOCATION_PARAMETERS,
+  OPENINFERENCE_SPAN_KIND,
+  kindForOperation,
+  operationForKind,
 } from "./semconv.js";
+import { toAttributeValue } from "./serde.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -38,17 +67,59 @@ import {
 export type Converter = (values: readonly AttributeValue[]) => AttributeValue | undefined;
 
 /**
+ * Everything a span should carry IN PLACE OF an expanding rule's source: the
+ * canonical keys the source's contents produced, and optionally the source
+ * key itself holding whatever nothing claimed.
+ */
+export type Expansion = Record<string, AttributeValue | undefined>;
+
+/** Turns one source value into the whole set of keys that replaces it. */
+export type Expander = (raw: AttributeValue | undefined) => Expansion;
+
+/**
  * One mapping. `identity` marks a rule whose source is knowable at span START
  * (a model name, a tool name) and which therefore also runs in `onStart`, so
  * pending snapshots — built from an allowlist of CANONICAL identity keys —
  * see the canonical spelling rather than the dialect.
  */
-export interface NormalizationRule {
+export interface MappingRule {
   /** Source key, or several for a converter that combines them (see `sum`). */
   readonly source: string | readonly string[];
   readonly target: string;
   readonly convert: Converter;
   readonly identity?: boolean;
+}
+
+/**
+ * One source key that fans out over SEVERAL canonical keys, for a source that
+ * is a bag rather than a value.
+ *
+ * A {@link MappingRule} cannot express it: it has one target, and the generic
+ * delete would take the whole bag away for the sake of one member.
+ *
+ * `expand` receives the raw source value and returns EVERYTHING the span
+ * should carry in its place. That may include THE SOURCE KEY ITSELF, which is
+ * the single exemption from both native-wins and delete-the-source: a rule
+ * rewriting its own input is not competing with an instrumentation that
+ * already speaks the convention.
+ *
+ * That exemption is not a nicety here. This SDK sets
+ * `openinference.span.kind` on every span it emits, so the taxonomy rules
+ * match all of them; without the exemption the generic delete would strip
+ * that key from every native span, which is data loss rather than a
+ * normalization quirk.
+ */
+export interface ExpandingRule {
+  readonly source: string;
+  readonly expand: Expander;
+  readonly identity?: boolean;
+}
+
+/** A rule of either shape. Both expose `source`. */
+export type NormalizationRule = MappingRule | ExpandingRule;
+
+function isExpanding(rule: NormalizationRule): rule is ExpandingRule {
+  return "expand" in rule;
 }
 
 // --- Converters ---
@@ -133,26 +204,312 @@ export const sum: Converter = (values) => {
 
 // --- The table ---
 
+// --- OpenInference (openai, anthropic, langchain, llama-index, litellm) ---
+//
+// Source spellings were read from the instrumentors installed at the pinned
+// peer versions, not from memory. Note that each instrumentor NESTS its own
+// copy of @arizeai/openinference-semantic-conventions: the hoisted 2.7.0 has
+// no llm.request.model_name / llm.response.model_name, while the 2.8.0 nested
+// under the anthropic and openai instrumentations does, and that is the one
+// they compile against. Read the nested copy or a rule looks dead when it is
+// not.
+
 /**
- * The rules `init()` applies. EMPTY on purpose, and it must stay empty until a
- * real table lands.
+ * Provider spellings the GenAI registry writes differently from the source.
  *
- * Normalization is always on and has no opt-out, so anything listed here is a
- * live production rule the moment it is merged — and every rule DELETES its
- * source key, so a rule that maps the wrong thing destroys the original beyond
- * recovery. That trade is justified only by a mapping that is correct and
- * total; it is never justified by an example. A half-migrated key is worse
- * than an unmigrated one: the canonical name tells the sink and the console
- * that the value is conventional, and they have no way to find out otherwise.
+ * Two dialects feed `gen_ai.provider.name` and both carry values the registry
+ * renamed. The pairs come from the registry itself: its `GenAiSystemValues`
+ * members carry "Deprecated: Replaced by X" docstrings, and
+ * `GenAiProviderNameValues` spells xAI `x_ai` and Mistral `mistral_ai`
+ * against OpenInference's `xai` / `mistralai`.
  *
- * So the example rules that prove this machinery live in the tests, injected
- * through the constructor, and nothing speculative rides the wire. The real
- * per-instrumentor tables (OpenInference, Vercel, OpenLLMetry) are their own
- * tickets. Those tables must stay aligned with the Python SDK's, which ships
- * an equally empty default today; RIUS-933 is where that alignment gets
- * enforced rather than merely intended.
+ * Only renames of the SAME provider are listed. OpenInference's `azure`,
+ * `aws` and `google` are deliberately NOT translated: each covers several
+ * registry values (`azure.ai.openai` vs `azure.ai.inference`, `aws.bedrock`
+ * vs the rest of AWS, three `gcp.*`), so a translation would be a guess. They
+ * pass through verbatim, which is allowed — the attribute's values are
+ * "well-known", not closed, and the langchain instrumentation already
+ * forwards any `ls_provider` string it is handed.
  */
-export const NORMALIZATION_RULES: readonly NormalizationRule[] = [];
+export const PROVIDER_NAME_ALIASES: Readonly<Record<string, string>> = {
+  // OpenInference enum values
+  mistralai: "mistral_ai",
+  xai: "x_ai",
+  // legacy gen_ai.system values
+  vertex_ai: "gcp.vertex_ai",
+  gemini: "gcp.gemini",
+  "az.ai.inference": "azure.ai.inference",
+  "az.ai.openai": "azure.ai.openai",
+};
+
+/** The provider, under the registry's spelling where it differs. */
+export const providerName: Converter = (values) => {
+  const value = values[0];
+  if (typeof value !== "string") return undefined;
+  const key = value.trim().toLowerCase();
+  return Object.hasOwn(PROVIDER_NAME_ALIASES, key) ? PROVIDER_NAME_ALIASES[key] : value;
+};
+
+/** A double, or nothing. Booleans are not numbers here. */
+function asNumber(value: unknown): AttributeValue | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** An integer, or nothing. */
+function asCount(value: unknown): AttributeValue | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
+}
+
+/** A non-empty string, or nothing. */
+function asText(value: unknown): AttributeValue | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** A boolean, or nothing. */
+function asFlag(value: unknown): AttributeValue | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/** A string list. A lone stop string is the one-element list of itself. */
+function asTextList(value: unknown): AttributeValue | undefined {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return [...value];
+  return undefined;
+}
+
+/**
+ * Members of `llm.invocation_parameters` that a `gen_ai.request.*` key
+ * represents TOTALLY, in precedence order: the first spelling to produce a
+ * target keeps it. Everything else stays in the bag — see
+ * {@link invocationParameters} for why that is deliberate.
+ *
+ * The per-member guard is part of the contract, not defensive coding: a
+ * member whose value is the wrong shape is NOT promoted and stays where it
+ * was, so a canonical key never carries a value of the wrong type.
+ */
+export const INVOCATION_PARAMETER_MEMBERS: ReadonlyArray<
+  readonly [string, string, (value: unknown) => AttributeValue | undefined]
+> = [
+  // Every instrumentation but the anthropic one keeps `model` in the bag, and
+  // it is the literal request field — unlike llm.model_name, see the
+  // omissions below.
+  ["model", GEN_AI_REQUEST_MODEL, asText],
+  ["temperature", GEN_AI_REQUEST_TEMPERATURE, asNumber],
+  ["top_p", GEN_AI_REQUEST_TOP_P, asNumber],
+  ["top_k", GEN_AI_REQUEST_TOP_K, asCount],
+  ["max_tokens", GEN_AI_REQUEST_MAX_TOKENS, asCount],
+  // OpenAI's replacement for max_tokens on the reasoning models: "an upper
+  // bound for the number of tokens that can be generated for a completion",
+  // which is what gen_ai.request.max_tokens means. Listed second so a request
+  // carrying both keeps the one the provider would honour.
+  ["max_completion_tokens", GEN_AI_REQUEST_MAX_TOKENS, asCount],
+  ["frequency_penalty", GEN_AI_REQUEST_FREQUENCY_PENALTY, asNumber],
+  ["presence_penalty", GEN_AI_REQUEST_PRESENCE_PENALTY, asNumber],
+  ["seed", GEN_AI_REQUEST_SEED, asCount],
+  ["n", GEN_AI_REQUEST_CHOICE_COUNT, asCount],
+  ["stop", GEN_AI_REQUEST_STOP_SEQUENCES, asTextList],
+  ["stop_sequences", GEN_AI_REQUEST_STOP_SEQUENCES, asTextList],
+  ["stream", GEN_AI_REQUEST_STREAM, asFlag],
+];
+
+/**
+ * Promote the spec-defined members of the request bag; keep the rest.
+ *
+ * The leftover members go back under `llm.invocation_parameters`, and that is
+ * deliberate rather than a half-measure. The bag's membership is open and
+ * provider-defined: the litellm and langchain instrumentations leave the
+ * request's `tools` / `functions` arrays in it, which is why masking redacts
+ * those members THERE. Fanning unknown members out into keys of our own would
+ * move content out from under that redaction and past `captureContent: false`.
+ * So a member is promoted only when a canonical key represents it totally,
+ * and the bag survives to carry everything else.
+ *
+ * There is deliberately no `rius.request.<key>` catch-all: that namespace is
+ * filled natively and normalization was never meant to populate it.
+ *
+ * A member that produced a canonical key leaves the bag even when a native
+ * key beat it — at that point it is a duplicate, which is the same reason a
+ * mapped source key is deleted.
+ */
+export function invocationParameters(raw: AttributeValue | undefined): Expansion {
+  if (typeof raw !== "string") return { [LLM_INVOCATION_PARAMETERS]: raw };
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    // Unreadable is exactly when a pass-through is right: the caller's value
+    // is the only record of it.
+    return { [LLM_INVOCATION_PARAMETERS]: raw };
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return { [LLM_INVOCATION_PARAMETERS]: raw };
+  }
+
+  const leftover: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
+  const produced: Record<string, AttributeValue> = {};
+  for (const [member, target, convert] of INVOCATION_PARAMETER_MEMBERS) {
+    if (!Object.hasOwn(leftover, member) || produced[target] !== undefined) continue;
+    const value = convert(leftover[member]);
+    // Wrong shape for the canonical key; leave it where it was.
+    if (value === undefined) continue;
+    produced[target] = value;
+    delete leftover[member];
+  }
+  if (Object.keys(produced).length === 0) return { [LLM_INVOCATION_PARAMETERS]: raw }; // unchanged
+  const expansion: Expansion = { ...produced };
+  if (Object.keys(leftover).length > 0) {
+    expansion[LLM_INVOCATION_PARAMETERS] = toAttributeValue(leftover);
+  }
+  return expansion;
+}
+
+/** `openinference.span.kind` kept, plus the operation it implies. */
+export function taxonomyFromKind(raw: AttributeValue | undefined): Expansion {
+  if (typeof raw !== "string") return {};
+  const operation = operationForKind(raw);
+  const produced: Expansion = { [OPENINFERENCE_SPAN_KIND]: raw };
+  if (operation !== undefined) produced[GEN_AI_OPERATION_NAME] = operation;
+  return produced;
+}
+
+/** `gen_ai.operation.name` kept, plus the taxonomy value it implies. */
+export function taxonomyFromOperation(raw: AttributeValue | undefined): Expansion {
+  if (typeof raw !== "string") return {};
+  const kind = kindForOperation(raw);
+  const produced: Expansion = { [GEN_AI_OPERATION_NAME]: raw };
+  if (kind !== undefined) produced[OPENINFERENCE_SPAN_KIND] = kind;
+  return produced;
+}
+
+/**
+ * Both taxonomy keys on every span, whichever one the instrumentation speaks.
+ *
+ * These are expanding rules rather than plain ones for a reason that is
+ * load-bearing here: a plain rule DELETES its source, and this SDK sets
+ * `openinference.span.kind` on every span it emits, so a plain rule would
+ * strip that key from all of them. The two keys carry different information
+ * and the contract requires both, so neither may be consumed to produce the
+ * other. An expander returning its own source key is the shape that says
+ * "rewrite, do not consume".
+ *
+ * Both directions are needed: OpenInference instrumentations set only the
+ * kind, a GenAI-native one sets only the operation. A span carrying both is
+ * left alone by native-wins — an instrumentation that says LLM +
+ * text_completion is telling us something the maps cannot, and re-deriving
+ * would flatten it to chat.
+ *
+ * Identity, so a pending snapshot built at span start is classifiable.
+ */
+export const TAXONOMY_RULES: readonly NormalizationRule[] = [
+  { source: OPENINFERENCE_SPAN_KIND, expand: taxonomyFromKind, identity: true },
+  { source: GEN_AI_OPERATION_NAME, expand: taxonomyFromOperation, identity: true },
+];
+
+/**
+ * The OpenInference model-call and usage families.
+ *
+ * ORDER MATTERS where two sources share a target: the first rule to produce
+ * one keeps it. Provider, then the request model, then the response model,
+ * then the five usage rules, then the request bag LAST so the dedicated model
+ * rules beat its `model` member.
+ *
+ * DELIBERATE OMISSIONS — mappings that are not TOTAL, left unmapped so the
+ * source rides through under its own name:
+ *
+ * - `llm.model_name`. Its meaning varies by instrumentation and, in langchain,
+ *   within one: the openai one sets it from the RESPONSE object, langchain
+ *   prefers the response's llm_output and falls back to request metadata, the
+ *   anthropic one writes the request model then overwrites it with the
+ *   response model. Neither gen_ai.request.model nor gen_ai.response.model
+ *   can hold all of that, and guessing would put a response model on a
+ *   request key for a call that never got a response. The request model is
+ *   recovered from the request bag's `model` member instead, which is
+ *   unambiguous.
+ * - `llm.system`. NOT the provider: OpenInference emits both, and for Azure
+ *   OpenAI they differ (llm.provider = azure, llm.system = openai).
+ * - `llm.finish_reason`. The instrumentations normalize finish-reason VALUES
+ *   (folding tool_calls and function_call into tool_call) while the native
+ *   path records them verbatim, so the two would disagree on one canonical
+ *   key. The vocabulary question is its own ticket.
+ * - `llm.token_count.total`. No canonical key: the conventions record input
+ *   and output and leave the sum to the reader.
+ * - `llm.token_count.prompt_details.cache_input` ("input tokens in the prompt
+ *   that were cached"). It overlaps cache_read and cache_write without saying
+ *   how, so neither canonical cache key can hold it.
+ * - `llm.token_count.*_details.audio`. No canonical key.
+ * - `llm.cost.*`. Cost deliberately stays off the wire; the backend prices
+ *   from the token counts.
+ * - A SUM rule for the input tokens. Every bundled instrumentation already
+ *   reports llm.token_count.prompt INCLUSIVE of the cache counts, so summing
+ *   again would double-count every cached token. Pinned by a test.
+ */
+export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
+  // Provider. One rule, two spellings, first present wins: llm.provider is
+  // OpenInference's and the more specific (azure/aws/google rather than the
+  // product), gen_ai.system is the deprecated GenAI key, which is mapped here
+  // and never emitted. That is why gen_ai.system is spelled inline rather
+  // than in semconv.ts: that module is the set of keys we EMIT.
+  {
+    source: ["llm.provider", "gen_ai.system"],
+    target: GEN_AI_PROVIDER_NAME,
+    convert: providerName,
+    identity: true,
+  },
+  // Model. Only the anthropic instrumentation emits this unambiguous pair;
+  // see the omission note on llm.model_name.
+  {
+    source: "llm.request.model_name",
+    target: GEN_AI_REQUEST_MODEL,
+    convert: copy,
+    identity: true,
+  },
+  { source: "llm.response.model_name", target: GEN_AI_RESPONSE_MODEL, convert: copy },
+  // Usage. toInt rather than copy: a count under a canonical key must be a
+  // count, and a converter that yields nothing is how a wrongly-shaped value
+  // stays off the wire.
+  { source: "llm.token_count.prompt", target: GEN_AI_USAGE_INPUT_TOKENS, convert: toInt },
+  { source: "llm.token_count.completion", target: GEN_AI_USAGE_OUTPUT_TOKENS, convert: toInt },
+  {
+    source: "llm.token_count.prompt_details.cache_read",
+    target: GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "llm.token_count.prompt_details.cache_write",
+    target: GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "llm.token_count.completion_details.reasoning",
+    target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    convert: toInt,
+  },
+  // The request bag, last: the dedicated model rules above take precedence
+  // over its `model` member. Identity, because what it promotes is.
+  { source: LLM_INVOCATION_PARAMETERS, expand: invocationParameters, identity: true },
+];
+
+/**
+ * The rules `init()` applies. Live in every process: normalization is always
+ * on and has no opt-out, so anything listed here is a production rule the
+ * moment it is merged — and a mapping rule DELETES its source key, so a rule
+ * that maps the wrong thing destroys the original beyond recovery. That trade
+ * is justified only by a mapping that is correct and TOTAL for its source; it
+ * is never justified by an example. A half-migrated key is worse than an
+ * unmigrated one, because the canonical name tells the sink and the console
+ * that the value is conventional and they have no way to find out otherwise.
+ * The omissions, with their reasons, are listed at OPENINFERENCE_RULES.
+ *
+ * Taxonomy first: it is the only family whose rules are pure additions, and
+ * putting it ahead of the mapping rules keeps the order easy to read.
+ *
+ * Kept byte-identical to the Python SDK's table, including rule ORDER, so the
+ * same input produces the same canonical output in both.
+ */
+export const NORMALIZATION_RULES: readonly NormalizationRule[] = [
+  ...TAXONOMY_RULES,
+  ...OPENINFERENCE_RULES,
+];
 
 /** A rule's source keys, always as a list. */
 function sourceKeys(rule: NormalizationRule): readonly string[] {
@@ -194,12 +551,36 @@ function sourcePrefixes(rules: readonly NormalizationRule[]): readonly string[] 
 function applyRules(
   attributes: Record<string, AttributeValue | undefined>,
   rules: readonly NormalizationRule[],
-): string[] {
+): { mapped: string[]; rewritten: string[] } {
   const mapped: string[] = [];
+  const rewritten: string[] = [];
   for (const rule of rules) {
     const keys = sourceKeys(rule);
     const present = keys.filter((key) => attributes[key] !== undefined);
     if (present.length === 0) continue;
+
+    if (isExpanding(rule)) {
+      let expansion: Expansion;
+      try {
+        expansion = rule.expand(attributes[rule.source]);
+      } catch {
+        // Fail safe: one bad expander must not cost the other rules or the
+        // span.
+        continue;
+      }
+      for (const [key, value] of Object.entries(expansion)) {
+        if (value === undefined) continue;
+        const ownSource = key === rule.source;
+        // Native wins everywhere EXCEPT the rule's own source, which it is
+        // rewriting rather than competing for.
+        if (!ownSource && attributes[key] !== undefined) continue;
+        attributes[key] = value;
+        if (ownSource) rewritten.push(key);
+      }
+      // The source is deleted only when the expansion did not keep it.
+      if (expansion[rule.source] === undefined) mapped.push(rule.source);
+      continue;
+    }
 
     if (attributes[rule.target] !== undefined) {
       mapped.push(...present); // native wins; the dialect still goes
@@ -210,8 +591,135 @@ function applyRules(
     attributes[rule.target] = value;
     mapped.push(...present);
   }
-  return mapped;
+  return { mapped, rewritten };
 }
+
+// --- Two passes the rule table cannot express ---
+//
+// Not everything a dialect says is an attribute, and not every canonical key
+// has a single source attribute. Both of these read the span rather than one
+// key, so they run beside the table rather than in it.
+
+/**
+ * The name the OpenInference instrumentations give the first streamed chunk.
+ *
+ * Confirmed in `openinference-instrumentation-openai` 0.1.52 for PYTHON,
+ * `openinference/instrumentation/openai/_stream.py::_Stream._process_chunk`:
+ * on the first iteration it calls `add_event("First Token Stream Event")`
+ * with no attributes and no explicit timestamp, so the SDK stamps the moment
+ * the chunk arrived. That is the whole signal — the instrumentations set no
+ * streaming attribute and no time-to-first-chunk of their own.
+ *
+ * NO TYPESCRIPT INSTRUMENTATION EMITS IT TODAY. At the pinned peer versions
+ * (`@arizeai/openinference-instrumentation-openai` 4.2.1, `-anthropic` 0.2.1,
+ * `-langchain` 4.0.17) the string appears nowhere in the packages, and
+ * `addEvent` is called only by openinference-core's span wrapper. The mapping
+ * is carried anyway so the two SDKs' tables stay identical, and it costs a
+ * span with no events nothing. A guard test pins the gap: if it fails,
+ * upstream has ADDED the event and this rule has just gone live — which is
+ * good news, not a regression.
+ */
+export const OPENINFERENCE_FIRST_TOKEN_EVENT = "First Token Stream Event";
+
+/**
+ * Map the OpenInference first-token event onto the canonical shape: the
+ * `gen_ai.first_token` event, `gen_ai.request.stream`, and
+ * `gen_ai.response.time_to_first_chunk` derived from the span's start.
+ *
+ * Returns the canonical attributes to add; the events are renamed in place,
+ * the same seam masking already uses for events. This cannot go through the
+ * rule table: the table maps attribute keys and the source here is an event.
+ *
+ * Native wins, as for attributes: a span already carrying a
+ * `gen_ai.first_token` event keeps it and the source is dropped rather than
+ * kept alongside, where it would double-count as a second first-token marker.
+ * Canonical attributes already present are never overwritten.
+ *
+ * `gen_ai.request.stream` is INFERRED from the event's presence, so a stream
+ * that errors or yields nothing before the first chunk is not marked as
+ * streaming even though the request did stream. The native path has exactly
+ * the same limitation — `recordFirstToken` is the only thing that sets the
+ * flag there — so this is a known boundary rather than a defect introduced
+ * here.
+ *
+ * Unit: `gen_ai.response.time_to_first_chunk` is SECONDS, as a float, which
+ * is what the native path emits and what the conventions specify.
+ */
+export function normalizeFirstTokenEvent(span: ReadableSpan): Record<string, AttributeValue> {
+  const events = span.events;
+  if (events === undefined || events.length === 0) return {};
+  if (!events.some((event) => event.name === OPENINFERENCE_FIRST_TOKEN_EVENT)) return {};
+
+  const attributes = span.attributes ?? {};
+  let canonicalSeen = events.some((event) => event.name === GEN_AI_FIRST_TOKEN_EVENT);
+  let firstTokenTime: TimedEvent["time"] | undefined;
+  const rebuilt: TimedEvent[] = [];
+  for (const event of events) {
+    if (event.name !== OPENINFERENCE_FIRST_TOKEN_EVENT) {
+      rebuilt.push(event);
+      continue;
+    }
+    firstTokenTime ??= event.time;
+    // A duplicate marker; the canonical one is authoritative.
+    if (canonicalSeen) continue;
+    canonicalSeen = true;
+    rebuilt.push({ ...event, name: GEN_AI_FIRST_TOKEN_EVENT });
+  }
+  // Order is preserved: the rename keeps each event where it was.
+  (span.events as TimedEvent[]).splice(0, events.length, ...rebuilt);
+
+  const added: Record<string, AttributeValue> = {};
+  // A first chunk arriving is what proves the request streamed — the same
+  // inference recordFirstToken makes.
+  if (attributes[GEN_AI_REQUEST_STREAM] === undefined) added[GEN_AI_REQUEST_STREAM] = true;
+  if (attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] === undefined && firstTokenTime) {
+    const elapsedNanos = hrTimeToNanos(firstTokenTime) - hrTimeToNanos(span.startTime);
+    added[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] = Math.max(elapsedNanos, 0) / 1e9;
+  }
+  return added;
+}
+
+/** An OTel `HrTime` ([seconds, nanos]) as a single nanosecond count. */
+function hrTimeToNanos(time: TimedEvent["time"]): number {
+  return time[0] * 1e9 + time[1];
+}
+
+/**
+ * `error.type` from the span's exception event.
+ *
+ * A failed auto-instrumented span carries an `exception` event with
+ * `exception.type` and an ERROR status, but no `error.type` attribute. The
+ * conventions make `error.type` Conditionally Required on a failed GenAI
+ * span, so those failures are invisible to any grouping on that key.
+ *
+ * Deliberately NOT part of the OpenInference table: the shape is common to
+ * every auto-instrumented source, not to one dialect.
+ *
+ * Four cases, all of them pinned by tests:
+ * - ERROR status, an exception event, no `error.type` -> set it, spelled
+ *   exactly as the event spells it so one span never carries two spellings.
+ * - ERROR status, NO exception event -> emit nothing. An error with no
+ *   exception is not classifiable, and guessing a value would be worse than
+ *   leaving it unset.
+ * - An exception event but a non-ERROR status -> leave the span alone. An
+ *   exception that was recorded and handled is not a failure.
+ * - `error.type` already present -> never overwritten, like every other
+ *   canonical key.
+ */
+export function errorTypeFromExceptionEvent(span: ReadableSpan): Record<string, AttributeValue> {
+  if (span.status?.code !== SpanStatusCode.ERROR) return {};
+  if (span.attributes?.[ERROR_TYPE] !== undefined) return {};
+  for (const event of span.events ?? []) {
+    if (event.name !== EXCEPTION_EVENT_NAME) continue;
+    const type = event.attributes?.[EXCEPTION_TYPE];
+    if (typeof type === "string" && type !== "") return { [ERROR_TYPE]: type };
+  }
+  return {};
+}
+
+/** The OTel exception event and the attribute naming the exception's class. */
+const EXCEPTION_EVENT_NAME = "exception";
+const EXCEPTION_TYPE = "exception.type";
 
 /**
  * Rewrites third-party attribute dialects to the conventions, in place, on
@@ -265,6 +773,16 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     this.normalize(attributes, this.rules, (key, value) => {
       attributes[key] = value;
     });
+    // After the table, and only at end: neither source exists at span start.
+    // The event is added mid-stream, and the status is not ERROR until the
+    // failure happens. setDefault semantics — a key the table produced read
+    // the span's own data and wins over anything inferred here.
+    for (const [key, value] of Object.entries({
+      ...normalizeFirstTokenEvent(span),
+      ...errorTypeFromExceptionEvent(span),
+    })) {
+      if (attributes[key] === undefined) attributes[key] = value;
+    }
   }
 
   private normalize(
@@ -280,9 +798,14 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     if (!keys.some((key) => this.prefixes.some((prefix) => key.startsWith(prefix)))) return;
 
     const staged: Record<string, AttributeValue | undefined> = { ...bag };
-    const mapped = applyRules(staged, rules);
+    const { mapped, rewritten } = applyRules(staged, rules);
+    const rewrote = new Set(rewritten);
     for (const key of Object.keys(staged)) {
-      if (bag[key] === undefined && staged[key] !== undefined) {
+      if (staged[key] === undefined) continue;
+      // A key an expanding rule rewrote is written even though it was already
+      // there: that is the rule replacing its own input, not overwriting a
+      // native key.
+      if (bag[key] === undefined || (rewrote.has(key) && bag[key] !== staged[key])) {
         write(key, staged[key] as AttributeValue);
       }
     }
