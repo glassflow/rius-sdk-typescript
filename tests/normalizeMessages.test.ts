@@ -13,9 +13,10 @@ import fixture from "./fixtures/openinference_messages.json" with { type: "json"
  *
  * `tests/fixtures/openinference_messages.json` is the Python SDK's file,
  * copied byte for byte (biome is told not to reformat it), so both SDKs are
- * held to the same exact strings. Every case marked `sink_identical` also
- * matches the sink's `reassembleMessages`; the others are multimodal, which
- * the sink does not reassemble yet.
+ * held to the same exact strings. Every case marked `sink_identical` (all of
+ * them, today) also matches the sink's `reassembleMessages`, which runs the
+ * same file as a contract test. The Anthropic cases are shapes read from the
+ * openinference-instrumentation-anthropic code, Python and JS.
  */
 
 interface Case {

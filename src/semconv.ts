@@ -623,7 +623,10 @@ export const LLM_TOOL_CALL_PREFIX = "tool_call.";
 export const LLM_TOOL_CALL_ID = "id";
 export const LLM_TOOL_CALL_FUNCTION_NAME = "function.name";
 export const LLM_TOOL_CALL_FUNCTION_ARGUMENTS = "function.arguments";
-/** A message's multimodal items: `message.contents.<k>.message_content.<field>`. */
+/**
+ * A message's multimodal items: `message.contents.<k>.message_content.<field>`,
+ * plus `message.contents.<k>.tool_call.<field>` on a tool_use item.
+ */
 export const LLM_MESSAGE_CONTENTS_PREFIX = "message.contents.";
 export const LLM_MESSAGE_CONTENT_PREFIX = "message_content.";
 

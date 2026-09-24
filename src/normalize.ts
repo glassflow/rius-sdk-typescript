@@ -825,20 +825,56 @@ function fieldRecord(): Record<string, string> {
 }
 
 /**
- * One multimodal contents item as a message part. A text item, and nothing
- * more, is a text part. Anything else (an image, a text item carrying an id or
- * a signature, an item without a type) becomes a text part holding the item
- * serialized. The item is its flattened fields by name, sorted, so no field is
- * lost and both SDKs order it the same way.
+ * One multimodal contents item as a message part, or undefined for no part.
+ *
+ * - A text item, and nothing more, is a text part. This is how the Anthropic
+ *   instrumentors write every text block, replies and block-list system
+ *   prompts alike, never as `message.content`.
+ * - A `tool_use` item that repeats a tool call the message already carries
+ *   adds no part. The Anthropic instrumentors write each tool_use block twice,
+ *   under `message.tool_calls.J` and as a contents item, so the call is
+ *   already a `tool_call` part. It must hold nothing but the call's fields,
+ *   each equal to one tool call's; otherwise it is not provably a copy.
+ * - Anything else (an image, a reasoning block, a text item carrying an id or
+ *   a signature, an item without a type) becomes a text part holding the item
+ *   serialized. The item is its fields by name (`message_content.` cut,
+ *   `tool_call.` kept), sorted, so no field is lost and every producer orders
+ *   it the same way.
  */
-function contentPart(item: Record<string, string>): Record<string, unknown> {
+function contentPart(
+  item: Record<string, string>,
+  toolCalls: Map<bigint, Record<string, string>>,
+): Record<string, unknown> | undefined {
   const names = Object.keys(item).sort(byCodePoint);
   if (names.length === 2 && item.type === "text" && Object.hasOwn(item, "text")) {
     return { type: "text", content: item.text };
   }
+  if (item.type === "tool_use" && repeatsToolCall(item, toolCalls)) return undefined;
   const sorted = fieldRecord();
   for (const name of names) sorted[name] = item[name];
   return { type: "text", content: toAttributeValue(sorted) };
+}
+
+/**
+ * The fields a tool_use contents item may carry to count as a copy of a tool
+ * call, each with the tool-call field it must equal.
+ */
+const TOOL_USE_ITEM_FIELDS: ReadonlyMap<string, string> = new Map(
+  TOOL_CALL_FIELDS.map(([field]) => [`${LLM_TOOL_CALL_PREFIX}${field}`, field]),
+);
+
+function repeatsToolCall(
+  item: Record<string, string>,
+  toolCalls: Map<bigint, Record<string, string>>,
+): boolean {
+  const fields = Object.keys(item).filter((name) => name !== "type");
+  if (!fields.every((name) => TOOL_USE_ITEM_FIELDS.has(name))) return false;
+  return [...toolCalls.values()].some((call) =>
+    fields.every((name) => {
+      const field = TOOL_USE_ITEM_FIELDS.get(name) as string;
+      return (Object.hasOwn(call, field) ? call[field] : "") === item[name];
+    }),
+  );
 }
 
 /**
@@ -857,7 +893,10 @@ function encodeMessage(message: FlatMessage): Record<string, unknown> {
         : { type: "text", content: message.content },
     );
   }
-  for (const item of byIndex(message.contents)) parts.push(contentPart(item));
+  for (const item of byIndex(message.contents)) {
+    const part = contentPart(item, message.toolCalls);
+    if (part !== undefined) parts.push(part);
+  }
   for (const call of byIndex(message.toolCalls)) {
     const part: Record<string, unknown> = { type: "tool_call" };
     for (const [field, name] of TOOL_CALL_FIELDS) {
@@ -896,6 +935,10 @@ function reassembleFamily(
       const sub = cutIndexed(field.slice(LLM_MESSAGE_CONTENTS_PREFIX.length));
       if (sub?.[1].startsWith(LLM_MESSAGE_CONTENT_PREFIX)) {
         item = [sub[0], sub[1].slice(LLM_MESSAGE_CONTENT_PREFIX.length)];
+      } else if (sub?.[1].startsWith(LLM_TOOL_CALL_PREFIX)) {
+        // A tool_use item's call fields sit beside message_content.type
+        // rather than under it; they are the item's too, prefix kept.
+        item = [sub[0], sub[1]];
       }
     }
     if (
@@ -955,10 +998,14 @@ function reassembleFamily(
  * like every other JSON attribute, and every key it consumed is deleted.
  *
  * The output is BYTE-IDENTICAL to the sink's `reassembleMessages` for the same
- * input, apart from two stated differences: the sink does not reassemble
- * multimodal contents yet, and it does not cap the attribute. That is why this
- * does not reuse the generation helpers' message normalization, which would
- * default a missing role and write `null` for a missing tool-call field.
+ * input; the one known difference is that the sink does not cap the attribute.
+ * That is why this does not reuse the generation helpers' message
+ * normalization, which would default a missing role and write `null` for a
+ * missing tool-call field.
+ *
+ * The multi-part `contents` form is not optional: the Anthropic instrumentors
+ * write EVERY text block there, never in `message.content`, so without it an
+ * Anthropic reply or a block-list system prompt arrives with empty parts.
  *
  * Native wins: a family whose canonical key is already present is left
  * entirely as it came, flattened keys included, as the sink leaves it. Nothing
