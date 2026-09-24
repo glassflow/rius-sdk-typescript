@@ -377,6 +377,14 @@ export const MCP_PROTOCOL_VERSION = "mcp.protocol.version";
 export const ERROR_TYPE = "error.type";
 export const ERROR_TYPE_TOOL_ERROR = "tool_error";
 /**
+ * The OTel exception event, as `recordException()` writes it, and its attribute
+ * naming the exception's class. Read, never emitted by us directly: an
+ * auto-instrumented failure carries these but no `error.type`, so normalization
+ * derives `error.type` from `EXCEPTION_TYPE` (see normalize.ts).
+ */
+export const EXCEPTION_EVENT = "exception";
+export const EXCEPTION_TYPE = "exception.type";
+/**
  * Interim-round marker for a tools/call that is asking for input. NOT an OTel
  * semconv attribute, unlike the two above: the key borrows the mcp SDK's own
  * `mcp.*` spelling for its result-type field, and no convention defines it.

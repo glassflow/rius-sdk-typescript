@@ -6,6 +6,7 @@ import {
   CONTENT_ATTRIBUTES,
   CONTENT_ATTRIBUTE_PREFIXES,
   CONTENT_ATTRIBUTE_SUFFIXES,
+  EXCEPTION_EVENT,
   INVOCATION_PARAMETERS_CONTENT_MEMBERS,
   LLM_INVOCATION_PARAMETERS,
 } from "./semconv.js";
@@ -56,9 +57,6 @@ function redactInvocationParameters(value: unknown): string | undefined {
   return JSON.stringify(bag);
 }
 
-/** OTel's name for the event `recordException` adds. */
-const EXCEPTION_EVENT_NAME = "exception";
-
 /**
  * The exception-event attributes that can carry user content. A provider error
  * routinely echoes the offending request back in its message, and a stacktrace
@@ -107,7 +105,7 @@ export class MaskingSpanExporter implements SpanExporter {
       const attributes = event.attributes as Record<string, unknown> | undefined;
       this.sanitizeAttributes(attributes);
       if (this.opts.captureContent || attributes === undefined) continue;
-      if (event.name !== EXCEPTION_EVENT_NAME) continue;
+      if (event.name !== EXCEPTION_EVENT) continue;
       for (const key of EXCEPTION_CONTENT_KEYS) delete attributes[key];
     }
 

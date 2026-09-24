@@ -53,6 +53,8 @@
   "MCP_PROTOCOL_VERSION": "mcp.protocol.version",
   "ERROR_TYPE": "error.type",
   "ERROR_TYPE_TOOL_ERROR": "tool_error",
+  "EXCEPTION_EVENT": "exception",
+  "EXCEPTION_TYPE": "exception.type",
   "MCP_RESULT_TYPE": "mcp.result_type",
   "GEN_AI_REQUEST_PREFIX": "gen_ai.request.",
   "RIUS_REQUEST_PREFIX": "rius.request.",
