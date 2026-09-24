@@ -4,6 +4,7 @@ import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
+import { isContentKey } from "../src/masking.js";
 import { startAsCurrentSpan } from "../src/spans.js";
 
 let exporter: InMemorySpanExporter;
@@ -281,7 +282,7 @@ describe("generations", () => {
     ).toEqual(["length", "tool_calls"]);
   });
 
-  it("records model parameters under the gen_ai.request prefix", async () => {
+  it("records spec-defined model parameters under their gen_ai.request key", async () => {
     startGeneration("chat", {
       model: "m",
       modelParameters: { temperature: 0.2, max_tokens: 512, stop: "END" },
@@ -290,7 +291,9 @@ describe("generations", () => {
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.request.temperature"]).toBe(0.2);
     expect(span.attributes["gen_ai.request.max_tokens"]).toBe(512);
-    expect(span.attributes["gen_ai.request.stop"]).toBe("END");
+    // OpenAI's `stop` is a recognised spelling of gen_ai.request.stop_sequences.
+    expect(span.attributes["gen_ai.request.stop_sequences"]).toBe("END");
+    expect(span.attributes["gen_ai.request.stop"]).toBeUndefined();
     // The request model keeps its own attribute, not a parameter-derived one.
     expect(span.attributes["gen_ai.request.model"]).toBe("m");
   });
@@ -625,5 +628,125 @@ describe("the completion id and the requested output type", () => {
     startGeneration({ model: "gpt-4o", outputType: "image" }).end();
     await client.flush();
     expect(exporter.getFinishedSpans()[0].name).toBe("chat gpt-4o");
+  });
+});
+
+describe("model parameter normalization", () => {
+  async function params(parameters: Record<string, unknown>) {
+    startGeneration("chat", { modelParameters: parameters }).end();
+    await client.flush();
+    return exporter.getFinishedSpans()[0].attributes;
+  }
+
+  it("puts a spec parameter under gen_ai.request", async () => {
+    expect((await params({ temperature: 0.7 }))["gen_ai.request.temperature"]).toBe(0.7);
+  });
+
+  it("puts an unrecognised parameter under rius.request, never gen_ai.request", async () => {
+    // Our own namespace: OTel's naming guidance forbids extending a
+    // semantic-convention namespace with application keys, because the
+    // convention is free to define that exact key later.
+    const attributes = await params({ myCustomKnob: 3 });
+    expect(attributes["rius.request.myCustomKnob"]).toBe(3);
+    expect(attributes["gen_ai.request.myCustomKnob"]).toBeUndefined();
+  });
+
+  it("records a provider spelling under the canonical name only", async () => {
+    // One key per parameter: emitting both would make every consumer
+    // de-duplicate, and a convention exists so there is one place to look.
+    const attributes = await params({ max_completion_tokens: 256 });
+    expect(attributes["gen_ai.request.max_tokens"]).toBe(256);
+    expect(attributes["gen_ai.request.max_completion_tokens"]).toBeUndefined();
+    expect(attributes["rius.request.max_completion_tokens"]).toBeUndefined();
+  });
+
+  it("maps the camelCase spellings a TypeScript caller writes", async () => {
+    const attributes = await params({ maxTokens: 64, topP: 0.5, stopSequences: ["x"] });
+    expect(attributes["gen_ai.request.max_tokens"]).toBe(64);
+    expect(attributes["gen_ai.request.top_p"]).toBe(0.5);
+    expect(attributes["gen_ai.request.stop_sequences"]).toEqual(["x"]);
+    expect(attributes["gen_ai.request.maxTokens"]).toBeUndefined();
+  });
+
+  it("does not treat top_logprobs as top_k", async () => {
+    // The registry's note on gen_ai.request.top_k says OpenAI's top_logprobs
+    // MUST NOT be reported there: it shapes the response, not the sampling.
+    const attributes = await params({ top_logprobs: 5 });
+    expect(attributes["rius.request.top_logprobs"]).toBe(5);
+    expect(attributes["gen_ai.request.top_k"]).toBeUndefined();
+  });
+
+  it("JSON-encodes values OTel cannot store rather than dropping them", async () => {
+    // A response_format the model was actually sent is worth keeping, even
+    // as a string; unencoded, OTel would discard the attribute outright.
+    const attributes = await params({
+      response_format: { type: "json_object" },
+      mixed: [1, "a"],
+      // Booleans are not numbers: [true, 1] is not a homogeneous array.
+      flagAndCount: [true, 1],
+    });
+    expect(attributes["rius.request.response_format"]).toBe('{"type":"json_object"}');
+    expect(attributes["rius.request.mixed"]).toBe('[1,"a"]');
+    expect(attributes["rius.request.flagAndCount"]).toBe("[true,1]");
+  });
+
+  it("skips null and undefined, which mean not set", async () => {
+    const attributes = await params({ temperature: null, seed: undefined });
+    expect(attributes["gen_ai.request.temperature"]).toBeUndefined();
+    expect(attributes["gen_ai.request.seed"]).toBeUndefined();
+  });
+
+  it("leaves an unrecognised key untouched apart from the prefix", async () => {
+    expect((await params({ "Weird.Key-1": "x" }))["rius.request.Weird.Key-1"]).toBe("x");
+  });
+
+  it("resolves nothing through the prototype chain", async () => {
+    // A plain-object lookup would find Object.prototype.constructor and
+    // treat the caller's key as recognised.
+    const attributes = await params({ constructor: 1, toString: 2 });
+    expect(attributes["rius.request.constructor"]).toBe(1);
+    expect(attributes["rius.request.toString"]).toBe(2);
+  });
+
+  it("lets the explicit model option beat a model parameter", async () => {
+    // The caller who passed both meant the explicit one, and the span name
+    // is composed from it.
+    startGeneration({ model: "gpt-4o", modelParameters: { model: "other" } }).end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.request.model"]).toBe("gpt-4o");
+    expect(span.name).toBe("chat gpt-4o");
+  });
+
+  it("lets the explicit reasoningLevel option beat a reasoning_effort parameter", async () => {
+    startGeneration("chat", {
+      reasoningLevel: "high",
+      modelParameters: { reasoning_effort: "low" },
+    }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["gen_ai.request.reasoning.level"]).toBe(
+      "high",
+    );
+  });
+
+  it("names a generation from a model passed only as a parameter", async () => {
+    // It is gen_ai.request.model by then, which is what the name reads.
+    startGeneration({ modelParameters: { model: "gpt-4o" } }).end();
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].name).toBe("chat gpt-4o");
+  });
+
+  it("puts a tools parameter on a key masking recognises as content", async () => {
+    const attributes = await params({ tools: [{ name: "get_weather" }] });
+    expect(attributes["rius.request.tools"]).toBeDefined();
+    expect(isContentKey("rius.request.tools")).toBe(true);
+  });
+
+  it("applies the same mapping in the scoped form", async () => {
+    await startAsCurrentGeneration("chat", { modelParameters: { topK: 3, knob: 1 } }, () => {});
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0].attributes;
+    expect(attributes["gen_ai.request.top_k"]).toBe(3);
+    expect(attributes["rius.request.knob"]).toBe(1);
   });
 });

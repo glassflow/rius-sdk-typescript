@@ -256,9 +256,16 @@ await startAsCurrentGeneration(
 );
 ```
 
-Each `modelParameters` entry is recorded as `gen_ai.request.<key>`, so use the
-provider's own parameter names. `setFinishReasons` accepts one reason or a
-list.
+`modelParameters` are recorded when the span opens, so they also show up on
+the live (pending) view of a call that is still running. A parameter the
+GenAI conventions define is recorded under its canonical `gen_ai.request.*`
+key, and the provider spellings for it are recognised too:
+`max_completion_tokens`, `maxOutputTokens` and `maxTokens` all become
+`gen_ai.request.max_tokens`, `stop` becomes `gen_ai.request.stop_sequences`,
+and `n` becomes `gen_ai.request.choice.count`. Any other parameter is recorded
+under `rius.request.<key>` with its key unchanged. Tool definitions passed as a
+parameter (`tools`, `functions`) are treated as content and are dropped under
+`captureContent: false`. `setFinishReasons` accepts one reason or a list.
 
 Two more conventions keys sit on either side of the call. `outputType`
 (`gen_ai.output.type`: `text`, `json`, `image` or `speech`) is an option,

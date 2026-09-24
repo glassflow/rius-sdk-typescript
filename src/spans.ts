@@ -1,4 +1,9 @@
-import { type SpanKind as OtelSpanKind, type Span, SpanStatusCode } from "@opentelemetry/api";
+import {
+  type Attributes,
+  type SpanKind as OtelSpanKind,
+  type Span,
+  SpanStatusCode,
+} from "@opentelemetry/api";
 import { executingAgentName, resolveAgentName, withAgentScope } from "./agent.js";
 import { getTracer } from "./client.js";
 import {
@@ -19,7 +24,7 @@ import {
   kindAttributes,
   otelSpanKind,
 } from "./semconv.js";
-import { errorType, toAttributeValue } from "./serde.js";
+import { attributeValue, errorType, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";
 
 /** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
@@ -177,20 +182,8 @@ export class Observation {
    * an empty string.
    */
   setAttribute(key: string, value: unknown): this {
-    if (value === undefined || value === null) return this;
-    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
-      this.span.setAttribute(key, value as string[]);
-      return this;
-    }
-    if (Array.isArray(value) && value.every((v) => typeof v === "number")) {
-      this.span.setAttribute(key, value as number[]);
-      return this;
-    }
-    if (Array.isArray(value) && value.every((v) => typeof v === "boolean")) {
-      this.span.setAttribute(key, value as boolean[]);
-      return this;
-    }
-    this.span.setAttribute(key, toAttributeValue(value));
+    const coerced = attributeValue(value);
+    if (coerced !== undefined) this.span.setAttribute(key, coerced);
     return this;
   }
 
@@ -472,9 +465,9 @@ export function startAsCurrentSpan<T>(
  */
 export function runActive<H extends Observation, T>(
   name: string,
-  // Widened from string-only for gen_ai.retrieval.top_k, the first numeric
-  // identity attribute set at creation. OTel accepts either.
-  attributes: Record<string, string | number>,
+  // Any OTel value: a generation's request parameters are set at creation,
+  // and they are numbers, booleans and string arrays as often as strings.
+  attributes: Attributes,
   userId: string | undefined,
   makeHandle: (span: Span) => H,
   fn: (handle: H) => Promise<T> | T,

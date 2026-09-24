@@ -1,0 +1,387 @@
+{
+  "cases": [
+    {
+      "name": "recognised spelling model",
+      "model_parameters": {
+        "model": "gpt-4o"
+      }
+    },
+    {
+      "name": "recognised spelling max_tokens",
+      "model_parameters": {
+        "max_tokens": 256
+      }
+    },
+    {
+      "name": "recognised spelling maxTokens",
+      "model_parameters": {
+        "maxTokens": 256
+      }
+    },
+    {
+      "name": "recognised spelling max_completion_tokens",
+      "model_parameters": {
+        "max_completion_tokens": 256
+      }
+    },
+    {
+      "name": "recognised spelling maxCompletionTokens",
+      "model_parameters": {
+        "maxCompletionTokens": 256
+      }
+    },
+    {
+      "name": "recognised spelling max_output_tokens",
+      "model_parameters": {
+        "max_output_tokens": 256
+      }
+    },
+    {
+      "name": "recognised spelling maxOutputTokens",
+      "model_parameters": {
+        "maxOutputTokens": 256
+      }
+    },
+    {
+      "name": "recognised spelling choice.count",
+      "model_parameters": {
+        "choice.count": 2
+      }
+    },
+    {
+      "name": "recognised spelling n",
+      "model_parameters": {
+        "n": 2
+      }
+    },
+    {
+      "name": "recognised spelling candidate_count",
+      "model_parameters": {
+        "candidate_count": 2
+      }
+    },
+    {
+      "name": "recognised spelling candidateCount",
+      "model_parameters": {
+        "candidateCount": 2
+      }
+    },
+    {
+      "name": "recognised spelling num_generations",
+      "model_parameters": {
+        "num_generations": 2
+      }
+    },
+    {
+      "name": "recognised spelling temperature",
+      "model_parameters": {
+        "temperature": 0.7
+      }
+    },
+    {
+      "name": "recognised spelling top_p",
+      "model_parameters": {
+        "top_p": 0.9
+      }
+    },
+    {
+      "name": "recognised spelling topP",
+      "model_parameters": {
+        "topP": 0.9
+      }
+    },
+    {
+      "name": "recognised spelling p",
+      "model_parameters": {
+        "p": 0.9
+      }
+    },
+    {
+      "name": "recognised spelling top_k",
+      "model_parameters": {
+        "top_k": 40
+      }
+    },
+    {
+      "name": "recognised spelling topK",
+      "model_parameters": {
+        "topK": 40
+      }
+    },
+    {
+      "name": "recognised spelling k",
+      "model_parameters": {
+        "k": 40
+      }
+    },
+    {
+      "name": "recognised spelling stop_sequences",
+      "model_parameters": {
+        "stop_sequences": ["\n\n", "END"]
+      }
+    },
+    {
+      "name": "recognised spelling stopSequences",
+      "model_parameters": {
+        "stopSequences": ["\n\n", "END"]
+      }
+    },
+    {
+      "name": "recognised spelling stop",
+      "model_parameters": {
+        "stop": ["\n\n", "END"]
+      }
+    },
+    {
+      "name": "recognised spelling frequency_penalty",
+      "model_parameters": {
+        "frequency_penalty": 0.5
+      }
+    },
+    {
+      "name": "recognised spelling frequencyPenalty",
+      "model_parameters": {
+        "frequencyPenalty": 0.5
+      }
+    },
+    {
+      "name": "recognised spelling presence_penalty",
+      "model_parameters": {
+        "presence_penalty": -0.5
+      }
+    },
+    {
+      "name": "recognised spelling presencePenalty",
+      "model_parameters": {
+        "presencePenalty": -0.5
+      }
+    },
+    {
+      "name": "recognised spelling encoding_formats",
+      "model_parameters": {
+        "encoding_formats": ["float", "base64"]
+      }
+    },
+    {
+      "name": "recognised spelling encoding_format",
+      "model_parameters": {
+        "encoding_format": ["float", "base64"]
+      }
+    },
+    {
+      "name": "recognised spelling encodingFormat",
+      "model_parameters": {
+        "encodingFormat": ["float", "base64"]
+      }
+    },
+    {
+      "name": "recognised spelling embedding_types",
+      "model_parameters": {
+        "embedding_types": ["float", "base64"]
+      }
+    },
+    {
+      "name": "recognised spelling seed",
+      "model_parameters": {
+        "seed": 42
+      }
+    },
+    {
+      "name": "recognised spelling stream",
+      "model_parameters": {
+        "stream": true
+      }
+    },
+    {
+      "name": "recognised spelling reasoning.level",
+      "model_parameters": {
+        "reasoning.level": "high"
+      }
+    },
+    {
+      "name": "recognised spelling reasoning_level",
+      "model_parameters": {
+        "reasoning_level": "high"
+      }
+    },
+    {
+      "name": "recognised spelling reasoning_effort",
+      "model_parameters": {
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "name": "recognised spelling reasoningEffort",
+      "model_parameters": {
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "name": "recognised spelling previous_response.id",
+      "model_parameters": {
+        "previous_response.id": "resp_123"
+      }
+    },
+    {
+      "name": "recognised spelling previous_response_id",
+      "model_parameters": {
+        "previous_response_id": "resp_123"
+      }
+    },
+    {
+      "name": "recognised spelling previousResponseId",
+      "model_parameters": {
+        "previousResponseId": "resp_123"
+      }
+    },
+    {
+      "name": "recognised spelling previous_interaction_id",
+      "model_parameters": {
+        "previous_interaction_id": "resp_123"
+      }
+    },
+    {
+      "name": "recognised spelling stream_cursor",
+      "model_parameters": {
+        "stream_cursor": "evt_9"
+      }
+    },
+    {
+      "name": "recognised spelling starting_after",
+      "model_parameters": {
+        "starting_after": "evt_9"
+      }
+    },
+    {
+      "name": "recognised spelling last_event_id",
+      "model_parameters": {
+        "last_event_id": "evt_9"
+      }
+    },
+    {
+      "name": "unrecognised parameter goes to rius.request",
+      "model_parameters": {
+        "my_custom_knob": 3
+      }
+    },
+    {
+      "name": "top_logprobs is not top_k",
+      "model_parameters": {
+        "top_logprobs": 5
+      }
+    },
+    {
+      "name": "key untouched apart from the prefix",
+      "model_parameters": {
+        "Weird.Key-1": "x"
+      }
+    },
+    {
+      "name": "lone stop string is not wrapped",
+      "model_parameters": {
+        "stop": "END"
+      }
+    },
+    {
+      "name": "null is not set",
+      "model_parameters": {
+        "temperature": null,
+        "seed": null,
+        "custom": null
+      }
+    },
+    {
+      "name": "string list stays a list",
+      "model_parameters": {
+        "logit_bias_keys": ["a", "b"]
+      }
+    },
+    {
+      "name": "bool list stays a list",
+      "model_parameters": {
+        "flags": [true, false]
+      }
+    },
+    {
+      "name": "empty list stays a list",
+      "model_parameters": {
+        "empty": []
+      }
+    },
+    {
+      "name": "bool is not a number in a list",
+      "model_parameters": {
+        "mixed_bool_int": [true, 1]
+      },
+      "json_encoded": ["rius.request.mixed_bool_int"]
+    },
+    {
+      "name": "heterogeneous list is JSON-encoded",
+      "model_parameters": {
+        "mixed": [1, "a"]
+      },
+      "json_encoded": ["rius.request.mixed"]
+    },
+    {
+      "name": "nested object is JSON-encoded",
+      "model_parameters": {
+        "response_format": {
+          "type": "json_object"
+        }
+      },
+      "json_encoded": ["rius.request.response_format"]
+    },
+    {
+      "name": "nested list is JSON-encoded",
+      "model_parameters": {
+        "stop": [["a"], ["b"]]
+      },
+      "json_encoded": ["gen_ai.request.stop_sequences"]
+    },
+    {
+      "name": "tool definitions land on their own key",
+      "model_parameters": {
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "SECRET"
+          }
+        ],
+        "functions": [
+          {
+            "name": "f"
+          }
+        ]
+      },
+      "json_encoded": ["rius.request.tools", "rius.request.functions"]
+    },
+    {
+      "name": "two spellings of one parameter: the later one wins",
+      "model_parameters": {
+        "max_tokens": 100,
+        "max_completion_tokens": 200
+      }
+    },
+    {
+      "name": "prototype-chain names are caller parameters",
+      "model_parameters": {
+        "constructor": 1,
+        "toString": 2,
+        "hasOwnProperty": 3
+      }
+    },
+    {
+      "name": "a realistic mixed request",
+      "model_parameters": {
+        "model": "gpt-4o",
+        "maxTokens": 512,
+        "topP": 0.95,
+        "n": 1,
+        "stop": ["\n"],
+        "reasoning_effort": "low",
+        "user": "u-1",
+        "tool_choice": "auto"
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import type { AttributeValue } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import { contextSizes } from "./contextSizes.js";
 import { type Message, normalizeMessages } from "./messages.js";
@@ -9,7 +10,6 @@ import {
   GEN_AI_OUTPUT_TYPE,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
-  GEN_AI_REQUEST_PREFIX,
   GEN_AI_REQUEST_REASONING_LEVEL,
   GEN_AI_REQUEST_STREAM,
   GEN_AI_RESPONSE_FINISH_REASONS,
@@ -28,8 +28,9 @@ import {
   composeSpanName,
   kindAttributes,
   otelSpanKind,
+  requestAttributeKey,
 } from "./semconv.js";
-import { toAttributeValue } from "./serde.js";
+import { attributeValue, toAttributeValue } from "./serde.js";
 import { Observation, runActive, splitScopedArgs } from "./spans.js";
 
 /**
@@ -41,17 +42,26 @@ export interface GenerationOptions {
   provider?: string;
   input?: unknown;
   /**
-   * Request parameters, each recorded as `gen_ai.request.<key>` — for example
-   * `{ temperature: 0.2, max_tokens: 512 }`. Keys are passed through verbatim,
-   * so use the provider's own parameter names.
+   * Request parameters, for example `{ temperature: 0.2, max_tokens: 512 }`,
+   * recorded at span creation so they ride pending snapshots.
+   *
+   * A parameter the GenAI conventions define, under its canonical name or a
+   * recognised provider spelling (OpenAI's `max_completion_tokens`, Google's
+   * `maxOutputTokens`, a camelCase `topP`), is recorded under its canonical
+   * `gen_ai.request.*` key and only that one. Everything else is recorded
+   * under `rius.request.<key>`, this SDK's own namespace, with the key
+   * otherwise untouched. Values that are not scalars or homogeneous scalar
+   * arrays are JSON-encoded; `null` and `undefined` mean "not set" and are
+   * skipped. The `model` and `reasoningLevel` options win over a parameter
+   * that maps to the same key.
    */
   modelParameters?: Record<string, unknown>;
   /**
    * Requested reasoning/thinking effort level
    * (`gen_ai.request.reasoning.level`), e.g. OpenAI's `reasoning.effort`
-   * values. Provider-defined string, recorded verbatim. A first-class option
-   * because the `modelParameters` pass-through would spell the key
-   * `gen_ai.request.reasoning_level`, which is not the convention's name.
+   * values. Provider-defined string, recorded verbatim. Passing
+   * `reasoning_effort` through `modelParameters` lands on the same key; this
+   * option wins when both are given.
    */
   reasoningLevel?: string;
   /**
@@ -274,9 +284,42 @@ export class Generation extends Observation {
   }
 }
 
-function attributesFor(options: GenerationOptions): Record<string, string> {
-  const attributes: Record<string, string> = { ...kindAttributes(SpanKind.LLM) };
+/**
+ * Caller request parameters, keyed as they are recorded: spec-defined ones
+ * (including recognised provider spellings) under their canonical
+ * `gen_ai.request.*` key, everything else under `rius.request.<key>` with the
+ * key otherwise untouched. `null` and `undefined` are "not set" and skipped.
+ * Two spellings of one parameter collapse onto one key, and the later one in
+ * the caller's object wins, as it does in the Python SDK.
+ */
+function requestAttributes(
+  modelParameters: Record<string, unknown> | undefined,
+): Record<string, AttributeValue> {
+  const attributes: Record<string, AttributeValue> = {};
+  for (const [key, value] of Object.entries(modelParameters ?? {})) {
+    const coerced = attributeValue(value);
+    if (coerced !== undefined) attributes[requestAttributeKey(key)] = coerced;
+  }
+  return attributes;
+}
+
+/**
+ * Identity attributes for an LLM span at CREATION. Pending snapshots are
+ * built at onStart from these, so anything set later is invisible to them.
+ */
+function attributesFor(options: GenerationOptions): Record<string, AttributeValue> {
+  const attributes: Record<string, AttributeValue> = { ...kindAttributes(SpanKind.LLM) };
   if (options.operation !== undefined) attributes[GEN_AI_OPERATION_NAME] = options.operation;
+  // The request parameters go in FIRST so the dedicated options below win a
+  // collision: someone who passes both `model: "gpt-4o"` and
+  // `modelParameters: { model }` meant the explicit one, and the span name is
+  // composed from it. Here rather than after the span exists because the
+  // request is known before the call runs, and a live view of a stuck call
+  // has to say how it was asked to run.
+  Object.assign(attributes, requestAttributes(options.modelParameters));
+  if (options.reasoningLevel !== undefined) {
+    attributes[GEN_AI_REQUEST_REASONING_LEVEL] = options.reasoningLevel;
+  }
   if (options.model !== undefined) attributes[GEN_AI_REQUEST_MODEL] = options.model;
   if (options.provider !== undefined) attributes[GEN_AI_PROVIDER_NAME] = options.provider;
   // Identity: a property of the request, so it belongs with the model and the
@@ -288,14 +331,8 @@ function attributesFor(options: GenerationOptions): Record<string, string> {
 }
 
 function configure(generation: Generation, options: GenerationOptions): Generation {
-  // After creation rather than in attributesFor: request parameters are not
-  // identity attributes, and the key set is caller-supplied and open-ended.
-  for (const [key, value] of Object.entries(options.modelParameters ?? {})) {
-    generation.setAttribute(`${GEN_AI_REQUEST_PREFIX}${key}`, value);
-  }
-  if (options.reasoningLevel !== undefined) {
-    generation.setAttribute(GEN_AI_REQUEST_REASONING_LEVEL, options.reasoningLevel);
-  }
+  // Content, set after creation: it must never ride a pending snapshot. The
+  // request parameters are already on the span from attributesFor.
   if (options.tools !== undefined) generation.setToolDefinitions(options.tools);
   if (options.input !== undefined) generation.setInput(options.input);
   return generation;
@@ -309,7 +346,7 @@ function configure(generation: Generation, options: GenerationOptions): Generati
  * response one: the response model is not known when the span is named, and
  * a pending snapshot must carry the same name as the final span.
  */
-function resolveName(name: string | undefined, attributes: Record<string, string>): string {
+function resolveName(name: string | undefined, attributes: Record<string, AttributeValue>): string {
   return name ?? composeSpanName(SpanKind.LLM, attributes);
 }
 
