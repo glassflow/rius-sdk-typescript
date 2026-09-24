@@ -14,7 +14,10 @@
       "formatter": { "enabled": false }
     },
     {
-      "include": ["tests/fixtures/context_sizes_*.json"],
+      "include": [
+        "tests/fixtures/context_sizes_*.json",
+        "tests/fixtures/openinference_messages.json"
+      ],
       "formatter": { "enabled": false }
     }
   ]
