@@ -1,15 +1,19 @@
 # CLAUDE.md — rius-sdk-typescript
 
-Conventions for the GlassFlow instrumentation SDK (TypeScript). Follow these;
-they override generic defaults. The Python SDK (`rius-sdk-python`) is the
-reference implementation this SDK keeps parity with.
+Conventions for the Rius instrumentation SDK (TypeScript). Follow these; they
+override generic defaults. The Python SDK (`rius-sdk-python`) is the reference
+implementation this SDK keeps parity with.
 
 ## What this is
 
+The TypeScript SDK for **Rius**, GlassFlow's agent observability product. Rius
+is the product; GlassFlow is the company, which is why the npm scope and org
+names say `glassflow`.
+
 A public, OpenTelemetry-native tracing SDK for AI agents / LLM applications. It
 emits **OpenTelemetry GenAI (`gen_ai.*`) traces over OTLP/HTTP** to the managed
-GlassFlow platform (or any OTLP-compatible backend). GlassFlow is
-**managed-only** — there is no self-host, so config targets the managed endpoint.
+Rius platform (or any OTLP-compatible backend). Rius is **managed-only** — there
+is no self-host, so config targets the managed endpoint.
 
 - Package: `@glassflow-ai/rius` (npm), ESM-first with a CJS build (`dist/`)
 - Node `>=18`; CI tests Node 18, 20, 22 and 24
@@ -40,8 +44,12 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
 
 ## OpenTelemetry conventions
 
-- **Convention-native** wire format — emit established conventions directly,
-  never a bespoke `glassflow.*` namespace. Every span carries BOTH
+- **Convention-native** wire format — emit established conventions directly.
+  Only a fact no convention names gets a Rius key, under the product's own
+  `rius.*` namespace (e.g. `rius.request.<key>` for a model parameter the
+  conventions don't define, `rius.span.pending`), never inside a convention's
+  namespace such as `gen_ai.*`, and never `glassflow.*`. Check the GenAI
+  conventions before adding one. Every span carries BOTH
   `openinference.span.kind` and `gen_ai.operation.name` where the kind maps.
 - LLM/generation spans are fully `gen_ai`-native; generic/tool/retriever spans
   use `input.value` / `output.value`.
