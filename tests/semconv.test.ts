@@ -13,15 +13,7 @@ describe("semconv", () => {
     // Constants Python has that this SDK deliberately does not implement.
     // Declared explicitly: a NEW unported constant must fail here so a human
     // decides whether to port it, rather than being skipped silently.
-    const PYTHON_ONLY = new Set<string>([
-      // Python splits caller-supplied model parameters two ways: a name the
-      // conventions define goes to its gen_ai.request.* key, everything else
-      // to rius.request.<key> verbatim. This SDK still puts every one of them
-      // under gen_ai.request.* , so the prefix has nothing to name here yet.
-      // Adding the constant before the behaviour would claim a namespace no
-      // span carries.
-      "RIUS_REQUEST_PREFIX",
-    ]);
+    const PYTHON_ONLY = new Set<string>([]);
 
     for (const [name, value] of Object.entries(fixture as Record<string, string>)) {
       const ours = (semconv as Record<string, unknown>)[name];
@@ -108,8 +100,13 @@ describe("semconv", () => {
     }
   });
 
-  it("only allows the gen_ai.request. prefix onto a pending snapshot", () => {
-    expect(semconv.PENDING_IDENTITY_PREFIXES).toEqual([semconv.GEN_AI_REQUEST_PREFIX]);
+  it("allows exactly the two request namespaces onto a pending snapshot", () => {
+    // Request parameters are chosen before the call runs, so a live view of a
+    // still-running generation must show them, under either namespace.
+    expect(semconv.PENDING_IDENTITY_PREFIXES).toEqual([
+      semconv.GEN_AI_REQUEST_PREFIX,
+      semconv.RIUS_REQUEST_PREFIX,
+    ]);
     for (const prefix of semconv.PENDING_IDENTITY_PREFIXES) {
       expect(prefix.endsWith(".")).toBe(true);
     }
@@ -363,5 +360,79 @@ describe("conformance keys added for the GenAI registry sweep", () => {
         [semconv.GEN_AI_OUTPUT_TYPE]: "json",
       }),
     ).toBe("chat gpt-4o");
+  });
+});
+
+describe("request-parameter namespaces", () => {
+  /**
+   * gen_ai.request.* and rius.request.* move together. Neither is content
+   * today; if one is ever added to the content allowlist this fails, which
+   * makes the other's absence the explicit decision it has to be.
+   */
+  it("ties the two namespaces for masking", () => {
+    const namespaceIsContent = (prefix: string) =>
+      semconv.CONTENT_ATTRIBUTE_PREFIXES.includes(prefix) ||
+      semconv.CONTENT_ATTRIBUTES.has(prefix.slice(0, -1));
+    const genAi = namespaceIsContent(semconv.GEN_AI_REQUEST_PREFIX);
+    const rius = namespaceIsContent(semconv.RIUS_REQUEST_PREFIX);
+    expect(genAi, "neither namespace may join the content allowlist alone").toBe(rius);
+    expect(genAi, "today neither namespace is content").toBe(false);
+  });
+
+  /**
+   * Every normalisation target must be an attribute the GenAI registry
+   * defines. Pinned to open-telemetry/semantic-conventions-genai at commit
+   * 8ffdf568e1b4391a99adb081db16e8102e36918e (2026-09-22),
+   * model/gen-ai/registry.yaml, which defines exactly these 15; the repo cuts
+   * no releases, so a commit is the only citable pin. A future addition has
+   * to be a deliberate edit here.
+   */
+  it("maps recognised parameters only onto spec-defined keys", () => {
+    const specDefined = new Set([
+      "gen_ai.request.model",
+      "gen_ai.request.max_tokens",
+      "gen_ai.request.choice.count",
+      "gen_ai.request.temperature",
+      "gen_ai.request.top_p",
+      "gen_ai.request.top_k",
+      "gen_ai.request.stop_sequences",
+      "gen_ai.request.frequency_penalty",
+      "gen_ai.request.presence_penalty",
+      "gen_ai.request.encoding_formats",
+      "gen_ai.request.seed",
+      "gen_ai.request.stream",
+      "gen_ai.request.reasoning.level",
+      "gen_ai.request.previous_response.id",
+      "gen_ai.request.stream_cursor",
+    ]);
+    const targets = new Set(Object.values(semconv.GEN_AI_REQUEST_PARAMETERS));
+    for (const target of targets) expect(specDefined.has(target), target).toBe(true);
+    // Every canonical key is reachable under its own bare spelling.
+    for (const target of targets) {
+      const tail = target.slice(semconv.GEN_AI_REQUEST_PREFIX.length);
+      expect(semconv.GEN_AI_REQUEST_PARAMETERS[tail], tail).toBe(target);
+    }
+  });
+
+  it("keys a parameter by its canonical name, else under rius.request verbatim", () => {
+    expect(semconv.requestAttributeKey("max_completion_tokens")).toBe("gen_ai.request.max_tokens");
+    expect(semconv.requestAttributeKey("top_logprobs")).toBe("rius.request.top_logprobs");
+    expect(semconv.requestAttributeKey("constructor")).toBe("rius.request.constructor");
+    expect(semconv.requestAttributeKey("__proto__")).toBe("rius.request.__proto__");
+  });
+
+  /**
+   * The named exception to "request parameters export in clear". The member
+   * list is the one llm.invocation_parameters redaction uses, so the routes
+   * to the same tool definitions cannot drift apart, and it applies to both
+   * namespaces because a caller passing `tools` can reach either.
+   */
+  it("treats the tool-definition members as content in both request namespaces", () => {
+    for (const member of semconv.INVOCATION_PARAMETERS_CONTENT_MEMBERS) {
+      expect(semconv.CONTENT_ATTRIBUTES.has(`${semconv.GEN_AI_REQUEST_PREFIX}${member}`)).toBe(
+        true,
+      );
+      expect(semconv.CONTENT_ATTRIBUTES.has(`${semconv.RIUS_REQUEST_PREFIX}${member}`)).toBe(true);
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
+import { type Attributes, SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 
 /**
@@ -75,10 +75,9 @@ export const GEN_AI_REQUEST_STREAM = "gen_ai.request.stream";
 export const GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK = "gen_ai.response.time_to_first_chunk";
 /**
  * The model sampling parameters, the `gen_ai.request.*` family the conventions
- * define. This SDK's own API takes no sampling arguments, so nothing native
- * emits these: they are produced only by normalization, which promotes them
- * out of a third-party request bag. They go on the wire all the same, and the
- * wire's keys live in one place.
+ * define. Two routes produce them: a generation's `modelParameters`, through
+ * {@link GEN_AI_REQUEST_PARAMETERS}, and normalization, which promotes them
+ * out of a third-party request bag.
  */
 export const GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature";
 export const GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p";
@@ -244,6 +243,122 @@ export const RIUS_MAIN_AGENT_DESCRIPTION = "rius.main_agent.description";
 export const RIUS_MAIN_AGENT_VERSION = "rius.main_agent.version";
 export const GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions";
 export const GEN_AI_REQUEST_PREFIX = "gen_ai.request.";
+/**
+ * Where a request parameter the GenAI registry does NOT define goes. Our own
+ * namespace rather than `gen_ai.request.<key>`, per OTel's naming guidance: an
+ * existing semantic-convention namespace must not be used as a prefix for
+ * application-specific attributes, because the convention is free to define
+ * that exact key later and mean something else. The GenAI conventions offer
+ * no catch-all of their own, so we own one.
+ *
+ * Masking: `rius.request.*` follows `gen_ai.request.*` exactly. Neither is in
+ * CONTENT_ATTRIBUTES wholesale, so both export in clear. The TIE is the rule,
+ * not the current value: if request parameters ever become maskable, both
+ * namespaces change together, and neither may join the content allowlist
+ * alone. A semconv test pins it.
+ */
+export const RIUS_REQUEST_PREFIX = "rius.request.";
+
+/**
+ * Request parameters the GenAI conventions define, mapped from every spelling
+ * we recognise to the canonical attribute key. Verified against
+ * open-telemetry/semantic-conventions-genai at commit
+ * 8ffdf568e1b4391a99adb081db16e8102e36918e (2026-09-22),
+ * model/gen-ai/registry.yaml; the repo cuts no releases, so a commit is the
+ * only citable pin. Each canonical key appears under its own bare spelling
+ * plus the provider spellings that mean the SAME parameter; anything absent
+ * here is a caller parameter and goes to {@link RIUS_REQUEST_PREFIX} verbatim.
+ *
+ * A provider spelling normalises to ONE key, the canonical one: the provider
+ * spelling is not also emitted. Two keys for one parameter would make every
+ * consumer de-duplicate, and the point of a convention is that there is one
+ * place to look.
+ *
+ * Kept identical to the Python SDK's table of the same name; a parity fixture
+ * runs every spelling through both.
+ */
+export const GEN_AI_REQUEST_PARAMETERS: Readonly<Record<string, string>> = {
+  // model: the request's model; also settable via the `model` option.
+  model: GEN_AI_REQUEST_MODEL,
+  // max_tokens: OpenAI Chat Completions `max_tokens`, its successor
+  // `max_completion_tokens`, the Responses API's `max_output_tokens`, and
+  // Google's `maxOutputTokens`.
+  max_tokens: GEN_AI_REQUEST_MAX_TOKENS,
+  maxTokens: GEN_AI_REQUEST_MAX_TOKENS,
+  max_completion_tokens: GEN_AI_REQUEST_MAX_TOKENS,
+  maxCompletionTokens: GEN_AI_REQUEST_MAX_TOKENS,
+  max_output_tokens: GEN_AI_REQUEST_MAX_TOKENS,
+  maxOutputTokens: GEN_AI_REQUEST_MAX_TOKENS,
+  // choice.count: "the target number of candidate completions to return":
+  // OpenAI `n`, Google `candidateCount`, Cohere `num_generations`.
+  "choice.count": GEN_AI_REQUEST_CHOICE_COUNT,
+  n: GEN_AI_REQUEST_CHOICE_COUNT,
+  candidate_count: GEN_AI_REQUEST_CHOICE_COUNT,
+  candidateCount: GEN_AI_REQUEST_CHOICE_COUNT,
+  num_generations: GEN_AI_REQUEST_CHOICE_COUNT,
+  temperature: GEN_AI_REQUEST_TEMPERATURE,
+  // top_p: Google `topP`, Cohere `p`.
+  top_p: GEN_AI_REQUEST_TOP_P,
+  topP: GEN_AI_REQUEST_TOP_P,
+  p: GEN_AI_REQUEST_TOP_P,
+  // top_k: the registry's own note names Anthropic `top_k`, Cohere `k` and
+  // Google `topK`, and says OpenAI's `top_logprobs` MUST NOT be reported here
+  // (it shapes the response, not the sampling). So top_logprobs is
+  // deliberately absent and lands in rius.request.*.
+  top_k: GEN_AI_REQUEST_TOP_K,
+  topK: GEN_AI_REQUEST_TOP_K,
+  k: GEN_AI_REQUEST_TOP_K,
+  // stop_sequences: OpenAI `stop`, Google `stopSequences`.
+  stop_sequences: GEN_AI_REQUEST_STOP_SEQUENCES,
+  stopSequences: GEN_AI_REQUEST_STOP_SEQUENCES,
+  stop: GEN_AI_REQUEST_STOP_SEQUENCES,
+  frequency_penalty: GEN_AI_REQUEST_FREQUENCY_PENALTY,
+  frequencyPenalty: GEN_AI_REQUEST_FREQUENCY_PENALTY,
+  presence_penalty: GEN_AI_REQUEST_PRESENCE_PENALTY,
+  presencePenalty: GEN_AI_REQUEST_PRESENCE_PENALTY,
+  // encoding_formats: plural in the registry; OpenAI's embeddings endpoint
+  // sends the singular `encoding_format`, and the registry's note says some
+  // systems call these "embedding types" (Cohere `embedding_types`).
+  encoding_formats: "gen_ai.request.encoding_formats",
+  encoding_format: "gen_ai.request.encoding_formats",
+  encodingFormat: "gen_ai.request.encoding_formats",
+  embedding_types: "gen_ai.request.encoding_formats",
+  seed: GEN_AI_REQUEST_SEED,
+  stream: GEN_AI_REQUEST_STREAM,
+  // reasoning.level: "the exact string value sent to the provider"; OpenAI
+  // sends it as `reasoning_effort`.
+  "reasoning.level": GEN_AI_REQUEST_REASONING_LEVEL,
+  reasoning_level: GEN_AI_REQUEST_REASONING_LEVEL,
+  reasoning_effort: GEN_AI_REQUEST_REASONING_LEVEL,
+  reasoningEffort: GEN_AI_REQUEST_REASONING_LEVEL,
+  // previous_response.id: the registry names OpenAI's `previous_response_id`
+  // and Google's `previous_interaction_id`.
+  "previous_response.id": "gen_ai.request.previous_response.id",
+  previous_response_id: "gen_ai.request.previous_response.id",
+  previousResponseId: "gen_ai.request.previous_response.id",
+  previous_interaction_id: "gen_ai.request.previous_response.id",
+  // stream_cursor: the registry names OpenAI's `starting_after` and Google's
+  // `last_event_id`.
+  stream_cursor: "gen_ai.request.stream_cursor",
+  starting_after: "gen_ai.request.stream_cursor",
+  last_event_id: "gen_ai.request.stream_cursor",
+};
+
+/**
+ * The attribute key one caller-supplied request parameter is recorded under.
+ *
+ * A parameter the GenAI conventions define, under its canonical name or a
+ * recognised provider spelling, normalises to its canonical
+ * `gen_ai.request.*` key. Everything else keeps its key verbatim under
+ * `rius.request.`. An own-property lookup, so `constructor` or `__proto__`
+ * is a caller parameter like any other rather than a match found on the
+ * prototype chain.
+ */
+export function requestAttributeKey(parameter: string): string {
+  return Object.hasOwn(GEN_AI_REQUEST_PARAMETERS, parameter)
+    ? GEN_AI_REQUEST_PARAMETERS[parameter]
+    : `${RIUS_REQUEST_PREFIX}${parameter}`;
+}
 /**
  * OTel MCP semantic conventions (semantic-conventions-genai, Development
  * stability). `mcp.method.name` is the REQUIRED attribute of an MCP client span
@@ -474,16 +589,33 @@ export const CHAIN_SPAN_NAME = "chain";
  * fallen back to the configured one). It only READS them, so the rendered
  * name never contaminates the attribute it was built from.
  */
-export function composeSpanName(
-  kind: SpanKind,
-  attributes: Record<string, string | number | boolean>,
-): string {
+export function composeSpanName(kind: SpanKind, attributes: Attributes): string {
   const operation = attributes[GEN_AI_OPERATION_NAME];
   if (typeof operation !== "string") return CHAIN_SPAN_NAME;
   const targetKey = NAME_TARGET_BY_KIND[kind];
   const target = targetKey === undefined ? undefined : attributes[targetKey];
   return typeof target === "string" && target !== "" ? `${operation} ${target}` : operation;
 }
+
+// The request-parameters bag OpenInference instrumentations emit. Not wholly
+// content — sampling parameters are identity — but the litellm (Python) and
+// langchain instrumentations embed the request's tools/functions arrays
+// inside it, so masking redacts those members and keeps the rest (masking.ts).
+export const LLM_INVOCATION_PARAMETERS = "llm.invocation_parameters";
+/**
+ * Parameter names that carry TOOL DEFINITIONS rather than a sampling knob.
+ * Named once and consumed by every route to the same definitions, so the
+ * routes cannot drift apart:
+ *   - as JSON members of LLM_INVOCATION_PARAMETERS, redacted member by member
+ *     (masking.ts), and
+ *   - as `gen_ai.request.<member>` and `rius.request.<member>`, when a caller
+ *     passes `tools` through `modelParameters` and it reaches either
+ *     namespace (derived into CONTENT_ATTRIBUTES below).
+ * Tool definitions are content in the same sense messages are (see
+ * GEN_AI_TOOL_DEFINITIONS), and which route they arrived by cannot be what
+ * decides whether they are protected.
+ */
+export const INVOCATION_PARAMETERS_CONTENT_MEMBERS: readonly string[] = ["tools", "functions"];
 
 /** Attribute keys carrying user content: masked or stripped at export. */
 export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
@@ -547,15 +679,18 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "ai.documents",
   "ai.schema",
   "ai.schema.description",
+  // The NAMED EXCEPTION to the rule that request parameters export in clear.
+  // That rule is right for scalar knobs (temperature, top_p, seed), but a
+  // parameter bag is not typed: a caller passing modelParameters: { tools }
+  // would otherwise export proprietary prompt engineering verbatim with
+  // captureContent: false explicitly set, while the very same array is
+  // stripped when it arrives as gen_ai.tool.definitions or inside
+  // llm.invocation_parameters. Per KEY, not per namespace: both namespaces
+  // stay non-content wholesale, which is what keeps their tie intact.
+  ...[GEN_AI_REQUEST_PREFIX, RIUS_REQUEST_PREFIX].flatMap((prefix) =>
+    INVOCATION_PARAMETERS_CONTENT_MEMBERS.map((member) => `${prefix}${member}`),
+  ),
 ]);
-
-// The request-parameters bag OpenInference instrumentations emit. Not wholly
-// content — sampling parameters are identity — but the litellm (Python) and
-// langchain instrumentations embed the request's tools/functions arrays
-// inside it, so masking redacts those members and keeps the rest (masking.ts).
-export const LLM_INVOCATION_PARAMETERS = "llm.invocation_parameters";
-/** JSON members of LLM_INVOCATION_PARAMETERS that carry tool definitions. */
-export const INVOCATION_PARAMETERS_CONTENT_MEMBERS: readonly string[] = ["tools", "functions"];
 
 export const CONTENT_ATTRIBUTE_PREFIXES: readonly string[] = [
   "llm.input_messages.",
@@ -636,5 +771,14 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
   WORKSPACE_ROUTE,
 ]);
 
-// gen_ai.request.* (model, temperature, ...) is identity, not content.
-export const PENDING_IDENTITY_PREFIXES: readonly string[] = [GEN_AI_REQUEST_PREFIX];
+// gen_ai.request.* (model, temperature, ...) is identity, not content, and so
+// is rius.request.* (the caller parameters the conventions do not define):
+// both are chosen before the call runs, so a live view of a still-running
+// generation must already show them. The two namespaces are deliberately
+// treated alike here as well as in CONTENT_ATTRIBUTES. The tool-definition
+// members ride a snapshot by prefix too, and are stripped from it at export
+// like every other content key.
+export const PENDING_IDENTITY_PREFIXES: readonly string[] = [
+  GEN_AI_REQUEST_PREFIX,
+  RIUS_REQUEST_PREFIX,
+];

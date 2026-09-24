@@ -1,0 +1,187 @@
+{
+  "recognised spelling model": {
+    "gen_ai.request.model": "gpt-4o"
+  },
+  "recognised spelling max_tokens": {
+    "gen_ai.request.max_tokens": 256
+  },
+  "recognised spelling maxTokens": {
+    "gen_ai.request.max_tokens": 256
+  },
+  "recognised spelling max_completion_tokens": {
+    "gen_ai.request.max_tokens": 256
+  },
+  "recognised spelling maxCompletionTokens": {
+    "gen_ai.request.max_tokens": 256
+  },
+  "recognised spelling max_output_tokens": {
+    "gen_ai.request.max_tokens": 256
+  },
+  "recognised spelling maxOutputTokens": {
+    "gen_ai.request.max_tokens": 256
+  },
+  "recognised spelling choice.count": {
+    "gen_ai.request.choice.count": 2
+  },
+  "recognised spelling n": {
+    "gen_ai.request.choice.count": 2
+  },
+  "recognised spelling candidate_count": {
+    "gen_ai.request.choice.count": 2
+  },
+  "recognised spelling candidateCount": {
+    "gen_ai.request.choice.count": 2
+  },
+  "recognised spelling num_generations": {
+    "gen_ai.request.choice.count": 2
+  },
+  "recognised spelling temperature": {
+    "gen_ai.request.temperature": 0.7
+  },
+  "recognised spelling top_p": {
+    "gen_ai.request.top_p": 0.9
+  },
+  "recognised spelling topP": {
+    "gen_ai.request.top_p": 0.9
+  },
+  "recognised spelling p": {
+    "gen_ai.request.top_p": 0.9
+  },
+  "recognised spelling top_k": {
+    "gen_ai.request.top_k": 40
+  },
+  "recognised spelling topK": {
+    "gen_ai.request.top_k": 40
+  },
+  "recognised spelling k": {
+    "gen_ai.request.top_k": 40
+  },
+  "recognised spelling stop_sequences": {
+    "gen_ai.request.stop_sequences": ["\n\n", "END"]
+  },
+  "recognised spelling stopSequences": {
+    "gen_ai.request.stop_sequences": ["\n\n", "END"]
+  },
+  "recognised spelling stop": {
+    "gen_ai.request.stop_sequences": ["\n\n", "END"]
+  },
+  "recognised spelling frequency_penalty": {
+    "gen_ai.request.frequency_penalty": 0.5
+  },
+  "recognised spelling frequencyPenalty": {
+    "gen_ai.request.frequency_penalty": 0.5
+  },
+  "recognised spelling presence_penalty": {
+    "gen_ai.request.presence_penalty": -0.5
+  },
+  "recognised spelling presencePenalty": {
+    "gen_ai.request.presence_penalty": -0.5
+  },
+  "recognised spelling encoding_formats": {
+    "gen_ai.request.encoding_formats": ["float", "base64"]
+  },
+  "recognised spelling encoding_format": {
+    "gen_ai.request.encoding_formats": ["float", "base64"]
+  },
+  "recognised spelling encodingFormat": {
+    "gen_ai.request.encoding_formats": ["float", "base64"]
+  },
+  "recognised spelling embedding_types": {
+    "gen_ai.request.encoding_formats": ["float", "base64"]
+  },
+  "recognised spelling seed": {
+    "gen_ai.request.seed": 42
+  },
+  "recognised spelling stream": {
+    "gen_ai.request.stream": true
+  },
+  "recognised spelling reasoning.level": {
+    "gen_ai.request.reasoning.level": "high"
+  },
+  "recognised spelling reasoning_level": {
+    "gen_ai.request.reasoning.level": "high"
+  },
+  "recognised spelling reasoning_effort": {
+    "gen_ai.request.reasoning.level": "high"
+  },
+  "recognised spelling reasoningEffort": {
+    "gen_ai.request.reasoning.level": "high"
+  },
+  "recognised spelling previous_response.id": {
+    "gen_ai.request.previous_response.id": "resp_123"
+  },
+  "recognised spelling previous_response_id": {
+    "gen_ai.request.previous_response.id": "resp_123"
+  },
+  "recognised spelling previousResponseId": {
+    "gen_ai.request.previous_response.id": "resp_123"
+  },
+  "recognised spelling previous_interaction_id": {
+    "gen_ai.request.previous_response.id": "resp_123"
+  },
+  "recognised spelling stream_cursor": {
+    "gen_ai.request.stream_cursor": "evt_9"
+  },
+  "recognised spelling starting_after": {
+    "gen_ai.request.stream_cursor": "evt_9"
+  },
+  "recognised spelling last_event_id": {
+    "gen_ai.request.stream_cursor": "evt_9"
+  },
+  "unrecognised parameter goes to rius.request": {
+    "rius.request.my_custom_knob": 3
+  },
+  "top_logprobs is not top_k": {
+    "rius.request.top_logprobs": 5
+  },
+  "key untouched apart from the prefix": {
+    "rius.request.Weird.Key-1": "x"
+  },
+  "lone stop string is not wrapped": {
+    "gen_ai.request.stop_sequences": "END"
+  },
+  "null is not set": {},
+  "string list stays a list": {
+    "rius.request.logit_bias_keys": ["a", "b"]
+  },
+  "bool list stays a list": {
+    "rius.request.flags": [true, false]
+  },
+  "empty list stays a list": {
+    "rius.request.empty": []
+  },
+  "bool is not a number in a list": {
+    "rius.request.mixed_bool_int": "[true, 1]"
+  },
+  "heterogeneous list is JSON-encoded": {
+    "rius.request.mixed": "[1, \"a\"]"
+  },
+  "nested object is JSON-encoded": {
+    "rius.request.response_format": "{\"type\": \"json_object\"}"
+  },
+  "nested list is JSON-encoded": {
+    "gen_ai.request.stop_sequences": "[[\"a\"], [\"b\"]]"
+  },
+  "tool definitions land on their own key": {
+    "rius.request.tools": "[{\"name\": \"get_weather\", \"description\": \"SECRET\"}]",
+    "rius.request.functions": "[{\"name\": \"f\"}]"
+  },
+  "two spellings of one parameter: the later one wins": {
+    "gen_ai.request.max_tokens": 200
+  },
+  "prototype-chain names are caller parameters": {
+    "rius.request.constructor": 1,
+    "rius.request.toString": 2,
+    "rius.request.hasOwnProperty": 3
+  },
+  "a realistic mixed request": {
+    "gen_ai.request.model": "gpt-4o",
+    "gen_ai.request.max_tokens": 512,
+    "gen_ai.request.top_p": 0.95,
+    "gen_ai.request.choice.count": 1,
+    "gen_ai.request.stop_sequences": ["\n"],
+    "gen_ai.request.reasoning.level": "low",
+    "rius.request.user": "u-1",
+    "rius.request.tool_choice": "auto"
+  }
+}

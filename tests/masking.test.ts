@@ -463,3 +463,54 @@ describe("metadata.* mirrors from the Vercel transform", () => {
     expect(out["metadata.gen_ai.tool.name"]).toBe("get_weather");
   });
 });
+
+describe("request-parameter namespaces", () => {
+  const tools = '[{"description":"SECRET"}]';
+
+  it("keeps both namespaces under captureContent: false", () => {
+    // Request parameters are not content: a caller parameter in rius.request
+    // survives exactly as a spec one in gen_ai.request does.
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [span({ "gen_ai.request.temperature": 0.7, "rius.request.my_custom_knob": 3 })],
+      () => {},
+    );
+    expect(inner.seen[0].attributes["gen_ai.request.temperature"]).toBe(0.7);
+    expect(inner.seen[0].attributes["rius.request.my_custom_knob"]).toBe(3);
+  });
+
+  it("strips tool definitions from both namespaces under captureContent: false", () => {
+    // Three routes reach the same definitions (gen_ai.tool.definitions, the
+    // tools member of llm.invocation_parameters, and a `tools` model
+    // parameter), and they must not disagree about whether they are protected.
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: false }).export(
+      [
+        span({
+          "rius.request.tools": tools,
+          "rius.request.functions": tools,
+          "gen_ai.request.tools": tools,
+          "gen_ai.request.functions": tools,
+          // The scalar knobs around them are identity and must survive.
+          "gen_ai.request.temperature": 0.7,
+          "rius.request.my_custom_knob": 3,
+        }),
+      ],
+      () => {},
+    );
+    expect(inner.seen[0].attributes).toEqual({
+      "gen_ai.request.temperature": 0.7,
+      "rius.request.my_custom_knob": 3,
+    });
+  });
+
+  it("masks tool definitions in a request namespace and leaves the knobs alone", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: true, mask: () => "***" }).export(
+      [span({ "rius.request.tools": tools, "gen_ai.request.temperature": 0.7 })],
+      () => {},
+    );
+    expect(inner.seen[0].attributes["rius.request.tools"]).toBe("***");
+    expect(inner.seen[0].attributes["gen_ai.request.temperature"]).toBe(0.7);
+  });
+});

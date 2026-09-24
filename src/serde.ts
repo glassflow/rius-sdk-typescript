@@ -1,3 +1,5 @@
+import type { AttributeValue } from "@opentelemetry/api";
+
 /**
  * Serialized payload cap, in characters, shared with the Python SDK so a
  * payload lands the same size whichever SDK produced it. Applies to every
@@ -78,6 +80,28 @@ export function toAttributeValue(value: unknown): string | number | boolean {
   } catch {
     return "[unserializable]";
   }
+}
+
+/**
+ * A value OTel will store as it is, else its bounded JSON encoding; `undefined`
+ * for `null` / `undefined`, which mean "not set" rather than an empty string.
+ *
+ * OTel accepts a scalar or a HOMOGENEOUS scalar array and nothing else.
+ * Anything else (a nested `response_format` object, a heterogeneous list like
+ * `[1, "a"]`, a tool-choice object) is JSON-encoded rather than dropped: the
+ * value really was sent, and a string is a worse answer than a typed scalar
+ * but a much better one than silence. Unencoded, OTel would discard the
+ * attribute with a warning and it would never reach the span. Booleans and
+ * numbers are separate element types, so `[true, 1]` is encoded too.
+ */
+export function attributeValue(value: unknown): AttributeValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) {
+    if (value.every((v) => typeof v === "string")) return value as string[];
+    if (value.every((v) => typeof v === "number")) return value as number[];
+    if (value.every((v) => typeof v === "boolean")) return value as boolean[];
+  }
+  return toAttributeValue(value);
 }
 
 /**
