@@ -94,8 +94,6 @@ describe("canonical request keys carry only the shape they define", () => {
     // flag
     ["stream", "yes", "yes"],
     ["stream", 1, 1],
-    // not finite, so not a number
-    ["temperature", Number.NaN, Number.NaN],
   ] as const)(
     "puts %s=%j under rius.request when it fails the key's guard",
     (spelling, value, recorded) => {
@@ -104,6 +102,14 @@ describe("canonical request keys carry only the shape they define", () => {
       expect(attributes[`rius.request.${spelling}`]).toEqual(recorded);
     },
   );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY])("does not treat %s as a number", (value) => {
+    // Not a value a model is sent; the Python SDK's guard rejects it too.
+    const attributes = params({ temperature: value, max_tokens: value });
+    expect(attributes["gen_ai.request.temperature"]).toBeUndefined();
+    expect(attributes["gen_ai.request.max_tokens"]).toBeUndefined();
+    expect(attributes["rius.request.temperature"]).toEqual(value);
+  });
 
   it("records a count as an integer, as the normalizer does", () => {
     expect(params({ max_tokens: 256.9 })["gen_ai.request.max_tokens"]).toBe(256);
