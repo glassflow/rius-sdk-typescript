@@ -277,9 +277,83 @@
       }
     },
     {
-      "name": "lone stop string is not wrapped",
+      "name": "lone stop string is wrapped into a list",
       "model_parameters": {
         "stop": "END"
+      }
+    },
+    {
+      "name": "lone encoding_format string is wrapped into a list",
+      "model_parameters": {
+        "encoding_format": "float"
+      }
+    },
+    {
+      "name": "numeric string on a double key goes to rius.request",
+      "model_parameters": {
+        "temperature": "0.2"
+      }
+    },
+    {
+      "name": "bool on a double key goes to rius.request",
+      "model_parameters": {
+        "top_p": true
+      }
+    },
+    {
+      "name": "numeric string on an int key goes to rius.request",
+      "model_parameters": {
+        "seed": "7",
+        "n": "2",
+        "top_k": "40"
+      }
+    },
+    {
+      "name": "object on an int key is JSON-encoded under rius.request",
+      "model_parameters": {
+        "max_tokens": {
+          "limit": 5
+        }
+      },
+      "json_encoded": ["rius.request.max_tokens"]
+    },
+    {
+      "name": "list on a double key goes to rius.request",
+      "model_parameters": {
+        "frequency_penalty": [0.1]
+      }
+    },
+    {
+      "name": "empty string on a string key goes to rius.request",
+      "model_parameters": {
+        "model": ""
+      }
+    },
+    {
+      "name": "number on a string key goes to rius.request",
+      "model_parameters": {
+        "reasoning_effort": 3,
+        "previous_response_id": 7,
+        "starting_after": 9
+      }
+    },
+    {
+      "name": "non-string list on a string-array key goes to rius.request",
+      "model_parameters": {
+        "stop_sequences": [1, 2],
+        "encoding_formats": [true]
+      }
+    },
+    {
+      "name": "non-bool on the stream flag goes to rius.request",
+      "model_parameters": {
+        "stream": "yes"
+      }
+    },
+    {
+      "name": "integer-valued double on an int key becomes an int",
+      "model_parameters": {
+        "max_tokens": 256.0
       }
     },
     {
@@ -332,11 +406,11 @@
       "json_encoded": ["rius.request.response_format"]
     },
     {
-      "name": "nested list is JSON-encoded",
+      "name": "nested list on stop fails its guard and is JSON-encoded under rius.request",
       "model_parameters": {
         "stop": [["a"], ["b"]]
       },
-      "json_encoded": ["gen_ai.request.stop_sequences"]
+      "json_encoded": ["rius.request.stop"]
     },
     {
       "name": "tool definitions land on their own key",
@@ -356,10 +430,32 @@
       "json_encoded": ["rius.request.tools", "rius.request.functions"]
     },
     {
-      "name": "two spellings of one parameter: the later one wins",
+      "name": "two spellings of one parameter: the first one wins",
       "model_parameters": {
         "max_tokens": 100,
         "max_completion_tokens": 200
+      }
+    },
+    {
+      "name": "two spellings in the reverse order: the table decides, not the caller",
+      "model_parameters": {
+        "max_output_tokens": 300,
+        "max_completion_tokens": 200,
+        "maxTokens": 1
+      }
+    },
+    {
+      "name": "a first spelling that fails its guard leaves the key to the next",
+      "model_parameters": {
+        "max_tokens": "100",
+        "max_output_tokens": 200
+      }
+    },
+    {
+      "name": "stop and stop_sequences together: stop wins, as in the invocation-parameters rule",
+      "model_parameters": {
+        "stop_sequences": ["B"],
+        "stop": "A"
       }
     },
     {
