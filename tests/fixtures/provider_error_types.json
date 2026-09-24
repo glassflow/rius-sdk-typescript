@@ -1,0 +1,141 @@
+{
+  "description": "error.type (and exception.type) for provider SDK errors, as each Rius SDK spells it. `status` is the HTTP status the provider SDK maps to the class; null means the error is raised without a response. `python` is what rius-sdk-python records for the same failure (module-qualified class, the providers set __module__ to the package name). Where the provider SDKs themselves map a status to different classes, `divergence` says so; neither Rius SDK renames a provider's class.",
+  "cases": [
+    {
+      "package": "anthropic",
+      "status": 400,
+      "typescript": "anthropic.BadRequestError",
+      "python": "anthropic.BadRequestError"
+    },
+    {
+      "package": "anthropic",
+      "status": 401,
+      "typescript": "anthropic.AuthenticationError",
+      "python": "anthropic.AuthenticationError"
+    },
+    {
+      "package": "anthropic",
+      "status": 403,
+      "typescript": "anthropic.PermissionDeniedError",
+      "python": "anthropic.PermissionDeniedError"
+    },
+    {
+      "package": "anthropic",
+      "status": 404,
+      "typescript": "anthropic.NotFoundError",
+      "python": "anthropic.NotFoundError"
+    },
+    {
+      "package": "anthropic",
+      "status": 409,
+      "typescript": "anthropic.ConflictError",
+      "python": "anthropic.ConflictError"
+    },
+    {
+      "package": "anthropic",
+      "status": 413,
+      "typescript": "anthropic.APIError",
+      "python": "anthropic.RequestTooLargeError",
+      "divergence": "the JS SDK has no class for 413"
+    },
+    {
+      "package": "anthropic",
+      "status": 422,
+      "typescript": "anthropic.UnprocessableEntityError",
+      "python": "anthropic.UnprocessableEntityError"
+    },
+    {
+      "package": "anthropic",
+      "status": 429,
+      "typescript": "anthropic.RateLimitError",
+      "python": "anthropic.RateLimitError"
+    },
+    {
+      "package": "anthropic",
+      "status": 500,
+      "typescript": "anthropic.InternalServerError",
+      "python": "anthropic.InternalServerError"
+    },
+    {
+      "package": "anthropic",
+      "status": 529,
+      "typescript": "anthropic.InternalServerError",
+      "python": "anthropic.OverloadedError",
+      "divergence": "the JS SDK has no class for 529 (overloaded)"
+    },
+    {
+      "package": "anthropic",
+      "status": 418,
+      "typescript": "anthropic.APIError",
+      "python": "anthropic.APIStatusError",
+      "divergence": "an unmapped status is APIError in JS, APIStatusError in Python"
+    },
+    {
+      "package": "anthropic",
+      "status": null,
+      "typescript": "anthropic.APIConnectionError",
+      "python": "anthropic.APIConnectionError"
+    },
+    {
+      "package": "openai",
+      "status": 400,
+      "typescript": "openai.BadRequestError",
+      "python": "openai.BadRequestError"
+    },
+    {
+      "package": "openai",
+      "status": 401,
+      "typescript": "openai.AuthenticationError",
+      "python": "openai.AuthenticationError"
+    },
+    {
+      "package": "openai",
+      "status": 403,
+      "typescript": "openai.PermissionDeniedError",
+      "python": "openai.PermissionDeniedError"
+    },
+    {
+      "package": "openai",
+      "status": 404,
+      "typescript": "openai.NotFoundError",
+      "python": "openai.NotFoundError"
+    },
+    {
+      "package": "openai",
+      "status": 409,
+      "typescript": "openai.ConflictError",
+      "python": "openai.ConflictError"
+    },
+    {
+      "package": "openai",
+      "status": 422,
+      "typescript": "openai.UnprocessableEntityError",
+      "python": "openai.UnprocessableEntityError"
+    },
+    {
+      "package": "openai",
+      "status": 429,
+      "typescript": "openai.RateLimitError",
+      "python": "openai.RateLimitError"
+    },
+    {
+      "package": "openai",
+      "status": 500,
+      "typescript": "openai.InternalServerError",
+      "python": "openai.InternalServerError"
+    },
+    {
+      "package": "openai",
+      "status": 418,
+      "typescript": "openai.APIError",
+      "python": "openai.APIStatusError",
+      "divergence": "an unmapped status is APIError in JS, APIStatusError in Python"
+    },
+    {
+      "package": "openai",
+      "status": null,
+      "typescript": "openai.APIConnectionError",
+      "python": "openai.APIConnectionError"
+    }
+  ]
+}
