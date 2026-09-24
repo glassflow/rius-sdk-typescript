@@ -5,7 +5,26 @@ import http from "node:http";
 // bound to our tracer, so a v7 app is traced with zero telemetry code.
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { init } from "../src/client.js";
+import { type RiusClient, init } from "../src/client.js";
+
+// init() hands back the existing client while one is active, so a client that
+// is never shut down silently becomes every later test's client. A test body
+// that fails part way through — a timeout in particular, which vitest cannot
+// abort — would otherwise leave one behind and take the rest of the file down
+// with it, each failure looking like its own bug.
+let live: RiusClient | undefined;
+
+/** init(), remembered so the teardown can release it if the test does not. */
+function initTracked(options: Parameters<typeof init>[0] = {}): RiusClient {
+  live = init(options);
+  return live;
+}
+
+afterEach(async () => {
+  const client = live;
+  live = undefined;
+  await client?.shutdown().catch(() => {});
+});
 
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
 // `ai` v7 and @ai-sdk/otel declare engines node>=22.
@@ -53,7 +72,7 @@ describeV7("the vercel-ai entry on ai v7", () => {
     const { createOpenAI } = await import("@ai-sdk/openai");
 
     const inner = new InMemorySpanExporter();
-    const client = init({ spanExporter: inner, heartbeatTransport: async () => {} });
+    const client = initTracked({ spanExporter: inner, heartbeatTransport: async () => {} });
     expect(await client.ready).toContain("vercel-ai");
     const stub = await stubServer(OPENAI_REPLY);
     try {
@@ -98,7 +117,7 @@ describeV7("the vercel-ai entry on ai v7", () => {
   });
 
   it("re-init replaces the registration instead of stacking a duplicate", async () => {
-    const first = init({
+    const first = initTracked({
       spanExporter: new InMemorySpanExporter(),
       heartbeatTransport: async () => {},
     });
@@ -106,7 +125,7 @@ describeV7("the vercel-ai entry on ai v7", () => {
     expect(integrations().length).toBe(1);
     await first.shutdown();
 
-    const second = init({
+    const second = initTracked({
       spanExporter: new InMemorySpanExporter(),
       heartbeatTransport: async () => {},
     });
@@ -196,7 +215,11 @@ describeV7("the privacy boundary on the ai v7 path", () => {
     const { generateText, tool, jsonSchema, stepCountIs } = await import("ai");
     const { createOpenAI } = await import("@ai-sdk/openai");
     const inner = new InMemorySpanExporter();
-    const client = init({ spanExporter: inner, heartbeatTransport: async () => {}, ...options });
+    const client = initTracked({
+      spanExporter: inner,
+      heartbeatTransport: async () => {},
+      ...options,
+    });
     expect(await client.ready).toContain("vercel-ai");
     const stub = await toolCallingStub(
       JSON.stringify({ city: `${SENTINEL} city` }),

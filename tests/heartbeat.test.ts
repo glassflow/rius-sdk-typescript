@@ -312,8 +312,11 @@ describe("default HTTP transport", () => {
       });
       sender.start();
       // Real setInterval/setTimeout here (fake timers are not active in this
-      // describe block); give the in-flight request a turn to complete.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // describe block), so the request completes on the wall clock. Poll for
+      // it rather than sleeping a fixed span: the suite runs one worker per
+      // core, and under contention a round trip that normally takes a
+      // millisecond can take far longer than any sleep worth hard-coding.
+      await vi.waitFor(() => expect(received.method).toBeDefined(), { timeout: 10_000 });
       await sender.stop();
 
       expect(received.method).toBe("POST");
@@ -339,8 +342,8 @@ describe("default HTTP transport", () => {
         tracker: fakeTracker([]),
       });
       sender.start();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(warn).toHaveBeenCalledTimes(1);
+      // Polled, not slept: see the note on the round trip above.
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1), { timeout: 10_000 });
       warn.mockRestore();
       await sender.stop();
     } finally {
