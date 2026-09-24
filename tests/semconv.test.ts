@@ -13,7 +13,15 @@ describe("semconv", () => {
     // Constants Python has that this SDK deliberately does not implement.
     // Declared explicitly: a NEW unported constant must fail here so a human
     // decides whether to port it, rather than being skipped silently.
-    const PYTHON_ONLY = new Set<string>();
+    const PYTHON_ONLY = new Set<string>([
+      // Python splits caller-supplied model parameters two ways: a name the
+      // conventions define goes to its gen_ai.request.* key, everything else
+      // to rius.request.<key> verbatim. This SDK still puts every one of them
+      // under gen_ai.request.* , so the prefix has nothing to name here yet.
+      // Adding the constant before the behaviour would claim a namespace no
+      // span carries.
+      "RIUS_REQUEST_PREFIX",
+    ]);
 
     for (const [name, value] of Object.entries(fixture as Record<string, string>)) {
       const ours = (semconv as Record<string, unknown>)[name];

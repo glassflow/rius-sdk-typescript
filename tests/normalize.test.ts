@@ -178,8 +178,23 @@ class Capture implements SpanExporter {
 }
 
 describe("the shipped table", () => {
-  it("is empty, so nothing speculative rides the wire", () => {
-    expect(NORMALIZATION_RULES).toEqual([]);
+  it("is the taxonomy rules followed by the OpenInference ones, in that order", () => {
+    // Order is contract, not taste: two sources may target one key and the
+    // first to produce it wins, so the Python SDK and the sink list these in
+    // the same sequence. A reorder here is a wire change.
+    expect(NORMALIZATION_RULES.map((rule) => rule.source)).toEqual([
+      "openinference.span.kind",
+      "gen_ai.operation.name",
+      ["llm.provider", "gen_ai.system"],
+      "llm.request.model_name",
+      "llm.response.model_name",
+      "llm.token_count.prompt",
+      "llm.token_count.completion",
+      "llm.token_count.prompt_details.cache_read",
+      "llm.token_count.prompt_details.cache_write",
+      "llm.token_count.completion_details.reasoning",
+      "llm.invocation_parameters",
+    ]);
   });
 
   it("short-circuits both hooks when the table is empty", () => {
@@ -194,10 +209,10 @@ describe("the shipped table", () => {
 describe("ordering against masking", () => {
   const VERCEL_PROMPT = { "ai.prompt": '{"messages":[{"role":"user"}]}' };
   /**
-   * A test fixture, NOT a shipped rule: the shipped table is empty on purpose
-   * (see normalize.ts). It exists here because a CONTENT source is what makes
-   * the ordering contract observable, and this is the shape the Vercel ticket
-   * will have to map for real.
+   * A test fixture, NOT a shipped rule: the shipped table maps no content key
+   * yet (see normalize.ts). It exists here because a CONTENT source is what
+   * makes the ordering contract observable, and this is the shape the Vercel
+   * ticket will have to map for real.
    */
   const CONTENT_RULES: readonly NormalizationRule[] = [
     { source: "ai.prompt", target: "gen_ai.input.messages", convert: jsonMember("messages") },
