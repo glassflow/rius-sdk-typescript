@@ -7,6 +7,8 @@ import {
 import type { ReadableSpan, Span, SpanProcessor, TimedEvent } from "@opentelemetry/sdk-trace-base";
 import {
   ERROR_TYPE,
+  EXCEPTION_EVENT,
+  EXCEPTION_TYPE,
   GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
@@ -710,16 +712,12 @@ export function errorTypeFromExceptionEvent(span: ReadableSpan): Record<string, 
   if (span.status?.code !== SpanStatusCode.ERROR) return {};
   if (span.attributes?.[ERROR_TYPE] !== undefined) return {};
   for (const event of span.events ?? []) {
-    if (event.name !== EXCEPTION_EVENT_NAME) continue;
+    if (event.name !== EXCEPTION_EVENT) continue;
     const type = event.attributes?.[EXCEPTION_TYPE];
     if (typeof type === "string" && type !== "") return { [ERROR_TYPE]: type };
   }
   return {};
 }
-
-/** The OTel exception event and the attribute naming the exception's class. */
-const EXCEPTION_EVENT_NAME = "exception";
-const EXCEPTION_TYPE = "exception.type";
 
 /**
  * Rewrites third-party attribute dialects to the conventions, in place, on
