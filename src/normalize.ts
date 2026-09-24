@@ -21,6 +21,7 @@ import {
   GEN_AI_REQUEST_TEMPERATURE,
   GEN_AI_REQUEST_TOP_K,
   GEN_AI_REQUEST_TOP_P,
+  GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -410,8 +411,8 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  *
  * ORDER MATTERS where two sources share a target: the first rule to produce
  * one keeps it. Provider, then the request model, then the response model,
- * then the five usage rules, then the request bag LAST so the dedicated model
- * rules beat its `model` member.
+ * then the finish reason, then the five usage rules, then the request bag
+ * LAST so the dedicated model rules beat its `model` member.
  *
  * DELIBERATE OMISSIONS — mappings that are not TOTAL, left unmapped so the
  * source rides through under its own name:
@@ -427,10 +428,6 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  *   unambiguous.
  * - `llm.system`. NOT the provider: OpenInference emits both, and for Azure
  *   OpenAI they differ (llm.provider = azure, llm.system = openai).
- * - `llm.finish_reason`. The instrumentations normalize finish-reason VALUES
- *   (folding tool_calls and function_call into tool_call) while the native
- *   path records them verbatim, so the two would disagree on one canonical
- *   key. The vocabulary question is its own ticket.
  * - `llm.token_count.total`. No canonical key: the conventions record input
  *   and output and leave the sum to the reader.
  * - `llm.token_count.prompt_details.cache_input` ("input tokens in the prompt
@@ -464,6 +461,21 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     identity: true,
   },
   { source: "llm.response.model_name", target: GEN_AI_RESPONSE_MODEL, convert: copy },
+  // Why the model stopped. The source is a SCALAR and the canonical key is an
+  // array (one entry per generation), so wrap rather than copy.
+  //
+  // The VALUE is passed through untouched, deliberately. The registry defines
+  // this key as a free-form string array with no enum, and says
+  // instrumentations report whatever the provider supplied. OpenInference's
+  // own converter lowercases and folds tool_calls/function_call into
+  // tool_call; following it would replace the string OpenAI actually returned
+  // with one neither the provider nor the conventions use, while leaving
+  // Anthropic's end_turn and tool_use alone — so it would cost fidelity and
+  // unify nothing. Grouping "stop" with "end_turn" is a question for a reader
+  // who still has both, not for the SDK that would destroy one of them. The
+  // native path (Generation.setFinishReasons) records verbatim too, so both
+  // paths agree.
+  { source: "llm.finish_reason", target: GEN_AI_RESPONSE_FINISH_REASONS, convert: wrapInList },
   // Usage. toInt rather than copy: a count under a canonical key must be a
   // count, and a converter that yields nothing is how a wrongly-shaped value
   // stays off the wire.

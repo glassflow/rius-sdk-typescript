@@ -73,6 +73,7 @@ describe("a whole openai chat span", () => {
         "llm.token_count.prompt": 1_024,
         "llm.token_count.completion": 96,
         "llm.token_count.total": 1_120,
+        "llm.finish_reason": "stop",
         "llm.token_count.prompt_details.cache_read": 512,
         "llm.token_count.completion_details.reasoning": 64,
         "llm.invocation_parameters": JSON.stringify({
@@ -88,6 +89,7 @@ describe("a whole openai chat span", () => {
       "openinference.span.kind": "LLM",
       "gen_ai.operation.name": "chat",
       "gen_ai.provider.name": "openai",
+      "gen_ai.response.finish_reasons": ["stop"],
       "gen_ai.usage.input_tokens": 1_024,
       "gen_ai.usage.output_tokens": 96,
       "gen_ai.usage.cache_read.input_tokens": 512,
@@ -328,6 +330,56 @@ describe("the invocation-parameter bag", () => {
     const afterStart = { ...attributes };
     processor.onEnd(endedSpan(attributes));
     expect(attributes).toEqual(afterStart);
+  });
+});
+
+describe("finish reasons: verbatim, by decision", () => {
+  it("wraps a scalar finish reason into a one-element array", () => {
+    // The source is a scalar and the canonical key is an array, one entry per
+    // generation.
+    expect(normalized({ "llm.finish_reason": "stop" })).toEqual({
+      "gen_ai.response.finish_reasons": ["stop"],
+    });
+  });
+
+  it("passes a list-valued finish reason through as a list", () => {
+    // An instrumentation that already reports one reason per choice must not
+    // be double-wrapped into [["stop", "length"]].
+    expect(normalized({ "llm.finish_reason": ["stop", "length"] })).toEqual({
+      "gen_ai.response.finish_reasons": ["stop", "length"],
+    });
+  });
+
+  /**
+   * The decision this rule exists to encode.
+   *
+   * The registry defines the key as a free-form string array with no enum, so
+   * there is no vocabulary to conform to. OpenInference's own converter
+   * lowercases and folds tool_calls/function_call into tool_call; we do not,
+   * because that would replace what OpenAI actually returned with a string
+   * neither the provider nor the conventions use, while leaving Anthropic's
+   * end_turn and tool_use untouched. Fidelity lost, nothing unified.
+   *
+   * If this test is ever changed to expect a folded value, the change belongs
+   * in the canonical-attribute contract first ("Finish-reason values:
+   * verbatim"), it has to bind the native path too, and the Python SDK has to
+   * change with it.
+   */
+  it.each(["tool_calls", "function_call", "tool_use", "end_turn", "STOP", "max_tokens"])(
+    "never rewrites the provider value %s",
+    (providerValue) => {
+      const out = normalized({ "llm.finish_reason": providerValue });
+      expect(out["gen_ai.response.finish_reasons"]).toEqual([providerValue]);
+    },
+  );
+
+  it("lets a native finish reason win, and still deletes the source", () => {
+    const out = normalized({
+      "llm.finish_reason": "stop",
+      "gen_ai.response.finish_reasons": ["length"],
+    });
+    expect(out["gen_ai.response.finish_reasons"]).toEqual(["length"]);
+    expect(out["llm.finish_reason"]).toBeUndefined();
   });
 });
 
