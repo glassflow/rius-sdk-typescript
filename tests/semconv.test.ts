@@ -421,11 +421,13 @@ describe("request-parameter namespaces", () => {
     expect(semconv.requestAttributeKey("__proto__")).toBe("rius.request.__proto__");
   });
 
+  it("classes the whole llm.invocation_parameters bag as content", () => {
+    expect(semconv.CONTENT_ATTRIBUTES.has(semconv.LLM_INVOCATION_PARAMETERS)).toBe(true);
+  });
+
   /**
-   * The named exception to "request parameters export in clear". The member
-   * list is the one llm.invocation_parameters redaction uses, so the routes
-   * to the same tool definitions cannot drift apart, and it applies to both
-   * namespaces because a caller passing `tools` can reach either.
+   * The named exception to "request parameters export in clear". It applies
+   * to both namespaces because a caller passing `tools` can reach either.
    */
   it("treats the tool-definition members as content in both request namespaces", () => {
     for (const member of semconv.INVOCATION_PARAMETERS_CONTENT_MEMBERS) {

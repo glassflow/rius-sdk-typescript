@@ -279,76 +279,78 @@ describe("wrapper tool-definition and Vercel ai.* coverage", () => {
   });
 });
 
-describe("llm.invocation_parameters redaction", () => {
-  // litellm and langchain embed the request tools/functions arrays INSIDE
-  // llm.invocation_parameters; the direct openai/anthropic instrumentors do
-  // not. The key mixes identity (sampling params) with content, so exactly
-  // the tools/functions members go, and the rest survives.
-  it("removes tools and functions members, keeps sampling params", () => {
+describe("llm.invocation_parameters is content", () => {
+  // The bag's membership is open and provider-defined: litellm and langchain
+  // embed the request tools array in it, and nothing stops a provider adding
+  // a system prompt or customer data beside it. A per-member blocklist is
+  // always one provider behind, so the whole bag is content. That costs
+  // nothing the caller can name: normalization runs before masking and has
+  // already lifted every member the rule table knows onto gen_ai.request.*
+  // (asserted through init() in pendingPipeline.test.ts). Same four cases as
+  // the Python SDK's test_masking.py.
+  const attrs = (exported: ReadableSpan) => exported.attributes as Record<string, unknown>;
+
+  it("drops the whole bag under captureContent: false", () => {
     const inner = new Capture();
     new MaskingSpanExporter(inner, { captureContent: false }).export(
       [
         span({
-          "llm.invocation_parameters":
-            '{"model":"gpt-test","temperature":0.2,"tools":[{"name":"secret_tool"}],"functions":[{"name":"legacy"}]}',
+          "llm.invocation_parameters": JSON.stringify({
+            tools: [{ name: "refund", description: "never above $500" }],
+            system: "Our margin floor is 12%.",
+            extra_body: { customer_tier: "enterprise-gold" },
+          }),
+          "gen_ai.request.model": "claude-sonnet-4",
         }),
       ],
       () => {},
     );
-    const kept = JSON.parse(
-      String((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]),
-    );
-    expect(kept).toEqual({ model: "gpt-test", temperature: 0.2 });
+    const attributes = attrs(inner.seen[0]);
+    expect(attributes["llm.invocation_parameters"]).toBeUndefined();
+    for (const secret of ["refund", "margin floor", "enterprise-gold"]) {
+      expect(JSON.stringify(attributes), secret).not.toContain(secret);
+    }
+    expect(attributes["gen_ai.request.model"]).toBe("claude-sonnet-4");
   });
 
-  it("leaves a tools-free payload byte-identical", () => {
+  it("survives untouched when content is captured and no mask is set", () => {
     const inner = new Capture();
-    new MaskingSpanExporter(inner, { captureContent: false }).export(
-      [span({ "llm.invocation_parameters": '{"temperature": 0.1}' })],
+    const raw = '{"tool_choice": "none", "tools": [{"name": "tool"}]}';
+    new MaskingSpanExporter(inner, { captureContent: true }).export(
+      [span({ "llm.invocation_parameters": raw })],
       () => {},
     );
-    expect((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]).toBe(
-      '{"temperature": 0.1}',
-    );
+    expect(attrs(inner.seen[0])["llm.invocation_parameters"]).toBe(raw);
   });
 
-  it("drops an unparseable payload whole (fail closed)", () => {
+  it("drops an unparseable payload under captureContent: false", () => {
+    // No longer a special case once the bag is a content key, but it is the
+    // input the partial-redaction path used to handle on its own, so it stays
+    // as the regression guard.
     const inner = new Capture();
     new MaskingSpanExporter(inner, { captureContent: false }).export(
       [span({ "llm.invocation_parameters": "not json {" })],
       () => {},
     );
-    expect(
-      (inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"],
-    ).toBeUndefined();
+    expect(attrs(inner.seen[0])["llm.invocation_parameters"]).toBeUndefined();
   });
 
-  it("redacts under a mask too: a mask declares content sensitive", () => {
+  it("reaches a mask whole, with its key", () => {
+    // Before, a mask only ever saw the bag with tools/functions already cut
+    // out, and was never called for it. Now it arrives like any content key,
+    // so a key-aware mask can act on it precisely.
+    const seen: Record<string, unknown> = {};
     const inner = new Capture();
-    new MaskingSpanExporter(inner, { captureContent: true, mask: () => "[masked]" }).export(
-      [
-        span({
-          "llm.invocation_parameters": '{"temperature":0.2,"tools":[{"name":"secret_tool"}]}',
-        }),
-      ],
-      () => {},
-    );
-    const kept = JSON.parse(
-      String((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]),
-    );
-    expect(kept).toEqual({ temperature: 0.2 });
-  });
-
-  it("does not touch the key when no sanitization is configured", () => {
-    const inner = new Capture();
-    const raw = '{"temperature":0.2,"tools":[{"name":"tool"}]}';
-    new MaskingSpanExporter(inner, { captureContent: true }).export(
-      [span({ "llm.invocation_parameters": raw })],
-      () => {},
-    );
-    expect((inner.seen[0].attributes as Record<string, unknown>)["llm.invocation_parameters"]).toBe(
-      raw,
-    );
+    new MaskingSpanExporter(inner, {
+      captureContent: true,
+      mask: (value, context) => {
+        const key = context?.key ?? "";
+        seen[key] = value;
+        return key === "llm.invocation_parameters" ? "[masked]" : value;
+      },
+    }).export([span({ "llm.invocation_parameters": '{"tool_choice": "auto"}' })], () => {});
+    expect(seen["llm.invocation_parameters"]).toBe('{"tool_choice": "auto"}');
+    expect(attrs(inner.seen[0])["llm.invocation_parameters"]).toBe("[masked]");
   });
 });
 
