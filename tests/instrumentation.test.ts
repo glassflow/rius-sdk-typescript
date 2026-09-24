@@ -6,14 +6,33 @@ import {
   SimpleSpanProcessor,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { describe, expect, it, vi } from "vitest";
-import { getTracer, init, spanProcessorSink } from "../src/client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { type RiusClient, getTracer, init, spanProcessorSink } from "../src/client.js";
 import {
   REGISTRY,
   type RegistryEntry,
   enableInstrumentations,
   isUnresolved,
 } from "../src/instrumentation.js";
+
+// init() hands back the existing client while one is active, so a client that
+// is never shut down silently becomes every later test's client. A test body
+// that fails part way through — a timeout in particular, which vitest cannot
+// abort — would otherwise leave one behind and take the rest of the file down
+// with it, each failure looking like its own bug.
+let live: RiusClient | undefined;
+
+/** init(), remembered so the teardown can release it if the test does not. */
+function initTracked(options: Parameters<typeof init>[0] = {}): RiusClient {
+  live = init(options);
+  return live;
+}
+
+afterEach(async () => {
+  const client = live;
+  live = undefined;
+  await client?.shutdown().catch(() => {});
+});
 
 /** Structural stand-in: registerInstrumentations only ever calls getTracer(). */
 const tracerProvider = { getTracer: () => undefined } as unknown as TracerProvider;
@@ -390,7 +409,7 @@ describeWithVercelPackage("the vercel-ai entry", () => {
 
 describe("init().ready", () => {
   it("resolves with the enabled integration names and never rejects", async () => {
-    const client = init({
+    const client = initTracked({
       spanExporter: new InMemorySpanExporter(),
       heartbeatTransport: async () => {},
     });
@@ -399,7 +418,7 @@ describe("init().ready", () => {
   });
 
   it("resolves rather than rejects whichever optional peers are installed", async () => {
-    const client = init({
+    const client = initTracked({
       spanExporter: new InMemorySpanExporter(),
       heartbeatTransport: async () => {},
     });
@@ -418,7 +437,7 @@ describe("init().ready", () => {
 
 describeWithVercelPackage("init() processor ordering", () => {
   it("gives the vercel-ai transform the span before the exporting processor", async () => {
-    const client = init({
+    const client = initTracked({
       spanExporter: new InMemorySpanExporter(),
       heartbeatTransport: async () => {},
     });
