@@ -16,20 +16,15 @@ import input from "./fixtures/model_parameters_input.json" with { type: "json" }
  * function over the input file. So a failure here means the two SDKs
  * disagree, and the Python side is the reference.
  *
- * Every value is compared byte for byte, with ONE declared exception: a case
- * lists the keys whose value is JSON-ENCODED (a nested object, a
- * heterogeneous list), and those are compared as parsed JSON. The two SDKs'
- * JSON encoders differ in whitespace (Python writes `", "` and `": "`), which
- * is true of every JSON-encoded attribute either SDK emits and is not
- * something this mapping introduced. What the exception still asserts is the
- * part that matters here: the same key, a string rather than a dropped value,
- * and the same content.
+ * Every value is compared byte for byte, JSON-encoded ones included (a
+ * nested object, a heterogeneous list): both SDKs write JSON-valued
+ * attributes in the one encoding every producer shares, compact and in raw
+ * UTF-8, so the same parameters are the same bytes whichever SDK encoded them.
  */
 
 interface Case {
   name: string;
   model_parameters: Record<string, unknown>;
-  json_encoded?: string[];
 }
 
 const expectedByName = expected as Record<string, Record<string, unknown>>;
@@ -71,14 +66,8 @@ describe("modelParameters parity fixture", () => {
       const actual = await requestAttributes(testCase.model_parameters);
       const want = expectedByName[testCase.name];
       expect(Object.keys(actual).sort()).toEqual(Object.keys(want).sort());
-      const encoded = new Set(testCase.json_encoded ?? []);
       for (const [key, value] of Object.entries(want)) {
-        if (encoded.has(key)) {
-          expect(typeof actual[key], `${key} is JSON-encoded, not dropped`).toBe("string");
-          expect(JSON.parse(actual[key] as string), key).toEqual(JSON.parse(value as string));
-        } else {
-          expect(actual[key], key).toEqual(value);
-        }
+        expect(actual[key], key).toEqual(value);
       }
     },
   );
