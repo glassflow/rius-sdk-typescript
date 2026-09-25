@@ -630,20 +630,16 @@ export const LLM_TOOL_CALL_FUNCTION_ARGUMENTS = "function.arguments";
 export const LLM_MESSAGE_CONTENTS_PREFIX = "message.contents.";
 export const LLM_MESSAGE_CONTENT_PREFIX = "message_content.";
 
-// The request-parameters bag OpenInference instrumentations emit. Not wholly
-// content — sampling parameters are identity — but the litellm (Python) and
-// langchain instrumentations embed the request's tools/functions arrays
-// inside it, so masking redacts those members and keeps the rest (masking.ts).
+// The request-parameters bag OpenInference instrumentations emit. Content,
+// whole: listed in CONTENT_ATTRIBUTES below, where the reason is written.
 export const LLM_INVOCATION_PARAMETERS = "llm.invocation_parameters";
 /**
  * Parameter names that carry TOOL DEFINITIONS rather than a sampling knob.
- * Named once and consumed by every route to the same definitions, so the
- * routes cannot drift apart:
- *   - as JSON members of LLM_INVOCATION_PARAMETERS, redacted member by member
- *     (masking.ts), and
- *   - as `gen_ai.request.<member>` and `rius.request.<member>`, when a caller
- *     passes `tools` through `modelParameters` and it reaches either
- *     namespace (derived into CONTENT_ATTRIBUTES below).
+ * Named once so the routes to the same definitions cannot drift apart: as
+ * `gen_ai.request.<member>` and `rius.request.<member>`, when a caller passes
+ * `tools` through `modelParameters` and it reaches either namespace (derived
+ * into CONTENT_ATTRIBUTES below). A third route, as JSON members of
+ * LLM_INVOCATION_PARAMETERS, is covered by the whole bag being content.
  * Tool definitions are content in the same sense messages are (see
  * GEN_AI_TOOL_DEFINITIONS), and which route they arrived by cannot be what
  * decides whether they are protected.
@@ -712,6 +708,17 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "ai.documents",
   "ai.schema",
   "ai.schema.description",
+  // The OpenInference request-parameters bag, whole. Its membership is open
+  // and provider-defined (litellm and langchain put the request's tools array
+  // in it, and providers are free to add anything else), so a per-member
+  // blocklist is always one provider behind. Treating the whole bag as
+  // content is only safe because normalization runs BEFORE masking and has
+  // already promoted every member the rule table recognises onto
+  // gen_ai.request.*, so what reaches masking is exactly the set nothing has
+  // classified. A knob that matters is recovered by teaching the rule table
+  // its name, which is a reviewed decision; the default is that unclassified
+  // request data does not leave a process that asked for no content.
+  LLM_INVOCATION_PARAMETERS,
   // The NAMED EXCEPTION to the rule that request parameters export in clear.
   // That rule is right for scalar knobs (temperature, top_p, seed), but a
   // parameter bag is not typed: a caller passing modelParameters: { tools }

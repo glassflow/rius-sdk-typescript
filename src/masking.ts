@@ -7,8 +7,6 @@ import {
   CONTENT_ATTRIBUTE_PREFIXES,
   CONTENT_ATTRIBUTE_SUFFIXES,
   EXCEPTION_EVENT,
-  INVOCATION_PARAMETERS_CONTENT_MEMBERS,
-  LLM_INVOCATION_PARAMETERS,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 
@@ -25,36 +23,6 @@ export function isContentKey(key: string): boolean {
   // sentinel test: metadata.gen_ai.system_instructions carried the system
   // prompt past captureContent: false.
   return key.startsWith(METADATA_PREFIX) && isContentKey(key.slice(METADATA_PREFIX.length));
-}
-
-/**
- * The tools/functions members removed, the rest kept; `undefined` = drop the
- * whole attribute.
- *
- * `llm.invocation_parameters` is not wholly content — sampling parameters are
- * identity — but the litellm and langchain instrumentations embed the
- * request's tool definitions inside it. Whenever sanitization runs (content
- * capture off, or a mask installed), those members must not leave the process.
- * An unparseable payload is dropped whole: it might hide tool definitions, and
- * unreadable is exactly when a pass-through is wrong.
- */
-function redactInvocationParameters(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  let parameters: unknown;
-  try {
-    parameters = JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-  if (parameters === null || typeof parameters !== "object" || Array.isArray(parameters)) {
-    return undefined;
-  }
-  const bag = parameters as Record<string, unknown>;
-  if (!INVOCATION_PARAMETERS_CONTENT_MEMBERS.some((member) => member in bag)) {
-    return value; // nothing sensitive; keep byte-identical
-  }
-  for (const member of INVOCATION_PARAMETERS_CONTENT_MEMBERS) delete bag[member];
-  return JSON.stringify(bag);
 }
 
 /**
@@ -145,14 +113,6 @@ export class MaskingSpanExporter implements SpanExporter {
   /** Strips or masks the content keys of one attribute bag, in place. */
   private sanitizeAttributes(attributes: Record<string, unknown> | undefined): void {
     if (attributes === undefined) return;
-    const sanitizing = !this.opts.captureContent || this.opts.mask !== undefined;
-    if (sanitizing && LLM_INVOCATION_PARAMETERS in attributes) {
-      // Partial redaction, not the strip/mask below: the key mixes identity
-      // (sampling params) with content (embedded tool definitions).
-      const redacted = redactInvocationParameters(attributes[LLM_INVOCATION_PARAMETERS]);
-      if (redacted === undefined) delete attributes[LLM_INVOCATION_PARAMETERS];
-      else attributes[LLM_INVOCATION_PARAMETERS] = redacted;
-    }
     for (const key of Object.keys(attributes)) {
       if (!isContentKey(key)) continue;
       if (!this.opts.captureContent) {
