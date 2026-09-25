@@ -31,6 +31,7 @@ import {
   GEN_AI_REQUEST_TOP_K,
   GEN_AI_REQUEST_TOP_P,
   GEN_AI_RESPONSE_FINISH_REASONS,
+  GEN_AI_RESPONSE_ID,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
   GEN_AI_TOOL_DEFINITIONS,
@@ -55,7 +56,9 @@ import {
   LLM_TOOL_CALL_ID,
   LLM_TOOL_CALL_PREFIX,
   OPENINFERENCE_SPAN_KIND,
+  OUTPUT_VALUE,
   RIUS_REQUEST_TOOL_CHOICE,
+  SpanKind,
   kindForOperation,
   operationForKind,
 } from "./semconv.js";
@@ -659,6 +662,16 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // The request bag, last: the dedicated model rules above take precedence
   // over its `model` member. Identity, because what it promotes is.
   { source: LLM_INVOCATION_PARAMETERS, expand: invocationParameters, identity: true },
+  // The embedding model: OpenInference's EMBEDDING spans name it here. A
+  // non-empty string only, like the tool name. LAST, as in the Python SDK, so
+  // it only fills the key when no LLM spelling above produced one. Identity,
+  // as the request model is, so a pending embedding span is classifiable.
+  {
+    source: "embedding.model_name",
+    target: GEN_AI_REQUEST_MODEL,
+    convert: textValue,
+    identity: true,
+  },
 ];
 
 /**
@@ -1390,6 +1403,77 @@ export function promoteSystemInstruction(
 }
 
 /**
+ * OpenInference's embedding vectors, `embedding.embeddings.N.embedding.vector`.
+ * A source spelling, inline for the reason the `llm.*` rule sources are.
+ */
+const EMBEDDING_VECTOR = /^embedding\.embeddings\.[0-9]+\.embedding\.vector$/;
+
+/**
+ * Drop OpenInference's embedding vectors, in place.
+ *
+ * A vector is the model's OUTPUT as a few thousand floats per input: nothing a
+ * trace can show or the backend reads, and by far the largest thing on the
+ * span (a 1536-dimension vector per input, as an attribute each). So it goes
+ * regardless of the capture setting. The matching `...embedding.text` keys
+ * stay: they are the inputs, content by suffix, masked under
+ * `captureContent: false` like every other content key. The index is ASCII
+ * digits only, with no sign and no bound, as in the Python SDK.
+ */
+export function dropEmbeddingVectors(attributes: Record<string, AttributeValue | undefined>): void {
+  const doomed = Object.keys(attributes).filter(
+    (key) => key.startsWith("embedding.") && EMBEDDING_VECTOR.test(key),
+  );
+  for (const key of doomed) delete attributes[key];
+}
+
+/**
+ * `gen_ai.response.id` from an LLM span's `output.value`, or nothing.
+ *
+ * The OpenInference instrumentations record the provider's whole response
+ * body as `output.value` and no id attribute, so the id that ties a span to
+ * the provider's own logs is only inside that payload. Taken when, and only
+ * when:
+ *
+ * - the span is an LLM span (`openinference.span.kind` is LLM, which the
+ *   taxonomy rules also derive from a GenAI operation name);
+ * - it has no native `gen_ai.response.id`;
+ * - `output.mime_type`, when present, is `application/json`. The JS
+ *   instrumentors write a stream's accumulated reply TEXT as `output.value`
+ *   (mime `text/plain`), and a JSON-mode reply may well be an object with an
+ *   `id` of the model's making, which must not pass for the response's;
+ * - `output.value` is a string whose FIRST character is `{`, checked before
+ *   parsing so a plain-text output costs no parse, that parses as a JSON
+ *   object with a non-empty string top-level `id`.
+ *
+ * `output.value` itself is never modified. End-only, since the output exists
+ * only then, and before masking, so the id (a reference, not content)
+ * survives `captureContent: false` while the payload it came from does not.
+ */
+export function responseIdFromOutput(
+  attributes: Readonly<Record<string, AttributeValue | undefined>>,
+): Record<string, AttributeValue> {
+  if (attributes[OPENINFERENCE_SPAN_KIND] !== SpanKind.LLM) return {};
+  if (attributes[GEN_AI_RESPONSE_ID] !== undefined) return {};
+  // Declared anything but JSON, the output is the model's own words: the JS
+  // instrumentors record a stream's accumulated reply as text/plain, and a
+  // JSON-mode reply's "id" is the model's, not the response's. Undeclared is
+  // taken, as the contract has it. A source spelling, inline.
+  const mime = attributes["output.mime_type"];
+  if (mime !== undefined && mime !== "application/json") return {};
+  const output = attributes[OUTPUT_VALUE];
+  if (typeof output !== "string" || !output.startsWith("{")) return {};
+  let payload: unknown;
+  try {
+    payload = JSON.parse(output);
+  } catch {
+    return {};
+  }
+  // Text starting with "{" that parses is always an object: no shape check.
+  const id = (payload as Record<string, unknown>).id;
+  return typeof id === "string" && id !== "" ? { [GEN_AI_RESPONSE_ID]: id } : {};
+}
+
+/**
  * Rewrites third-party attribute dialects to the conventions, in place, on
  * every span. Always on: there is no opt-out, because the canonical names are
  * the contract the rest of the pipeline and the backend are written against.
@@ -1451,6 +1535,7 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // After the table, on its output: the table has already taken the request
     // knobs out of the bag, so what this pass re-serializes is the remainder.
     normalizeToolDefinitions(attributes);
+    dropEmbeddingVectors(attributes);
     // After the table, and only at end: neither source exists at span start.
     // The event is added mid-stream, and the status is not ERROR until the
     // failure happens. setDefault semantics — a key the table produced read
@@ -1458,6 +1543,7 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     for (const [key, value] of Object.entries({
       ...normalizeFirstTokenEvent(span),
       ...errorTypeFromExceptionEvent(span),
+      ...responseIdFromOutput(attributes),
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }

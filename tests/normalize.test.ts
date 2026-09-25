@@ -198,6 +198,7 @@ describe("the shipped table", () => {
       "gen_ai.usage.cache_creation.input_tokens",
       "gen_ai.usage.details.reasoning_tokens",
       "llm.invocation_parameters",
+      "embedding.model_name",
     ]);
   });
 
