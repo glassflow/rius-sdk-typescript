@@ -1276,6 +1276,117 @@ export function normalizeToolDefinitions(
 }
 
 /**
+ * `value` (parsed JSON) as compact JSON with object keys sorted by code point
+ * at every depth, strings escaped as {@link compactJson} escapes them. That is
+ * byte for byte what the sink's Go encoder writes for a decoded
+ * `map[string]any` with HTML escaping off, whose keys Go always sorts, so the
+ * two producers agree on a block neither of them can type.
+ */
+function sortedCompactJson(value: unknown): string {
+  if (typeof value === "string") return jsonString(value);
+  if (Array.isArray(value)) return `[${value.map(sortedCompactJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const members = Object.keys(record)
+      .sort(byCodePoint)
+      .map((k) => `${jsonString(k)}:${sortedCompactJson(record[k])}`);
+    return `{${members.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * One element of a block-list system prompt as a message part: a text block's
+ * text, and nothing else of it (its `cache_control`, citations and so on are
+ * request plumbing, not what the model read), or any other block as its
+ * compact JSON, as an unknown contents item is carried in the reassembly.
+ */
+function systemPart(block: unknown): Record<string, unknown> {
+  if (block !== null && typeof block === "object" && !Array.isArray(block)) {
+    const record = block as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      return { type: "text", content: record.text };
+    }
+  }
+  return { type: "text", content: sortedCompactJson(block) };
+}
+
+/**
+ * Promote the request's `system` member out of `llm.invocation_parameters`
+ * into a system input message, in place; reports whether it changed anything.
+ *
+ * The OpenInference Anthropic instrumentation (JS) records the request body
+ * minus `messages` as the bag, so Anthropic's top-level `system` prompt stays
+ * in it and never becomes a message: context attribution then books nearly
+ * the whole prompt as unattributed. The Python instrumentor emits it as a
+ * message already, and the sink applies this same rule to foreign JS traffic.
+ *
+ * - Only when the span has no system-role input message: an instrumentation
+ *   that already wrote one wins, like every native key.
+ * - A non-empty string becomes `{"role":"system","parts":[{"type":"text",
+ *   "content":<string>}]}`; a non-empty list becomes ONE system message with a
+ *   part per element (see {@link systemPart}). Any other shape, an empty
+ *   string and an empty list included, is not something we can vouch is a
+ *   prompt, so the bag is left as it came.
+ * - Prepended to `gen_ai.input.messages`, created when absent. Messages that
+ *   are present but not a JSON array are a shape we cannot extend, so the
+ *   span is left alone.
+ * - `system` leaves the bag, and a bag left empty is dropped, as the
+ *   `tool_choice` promotion does.
+ *
+ * End-only and after the reassembly, which produces the messages it extends.
+ * Before masking, so under `captureContent: false` the system message is
+ * stripped with the rest of the messages.
+ */
+export function promoteSystemInstruction(
+  attributes: Record<string, AttributeValue | undefined>,
+): boolean {
+  const bag = attributes[LLM_INVOCATION_PARAMETERS];
+  if (typeof bag !== "string") return false;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(bag);
+  } catch {
+    return false;
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const members = payload as Record<string, unknown>;
+  if (!Object.hasOwn(members, "system")) return false;
+  const system = members.system;
+  let parts: Record<string, unknown>[];
+  if (typeof system === "string" && system !== "") {
+    parts = [{ type: "text", content: system }];
+  } else if (Array.isArray(system) && system.length > 0) {
+    parts = system.map(systemPart);
+  } else {
+    return false;
+  }
+
+  let messages: unknown[] = [];
+  const existing = attributes[GEN_AI_INPUT_MESSAGES];
+  if (existing !== undefined) {
+    if (typeof existing !== "string") return false;
+    try {
+      const parsed: unknown = JSON.parse(existing);
+      if (!Array.isArray(parsed)) return false;
+      messages = parsed;
+    } catch {
+      return false;
+    }
+  }
+  if (messages.some((m) => (m as { role?: unknown } | null)?.role === "system")) return false;
+
+  attributes[GEN_AI_INPUT_MESSAGES] = toAttributeValue([{ role: "system", parts }, ...messages]);
+  const leftover = Object.fromEntries(Object.entries(members).filter(([key]) => key !== "system"));
+  if (Object.keys(leftover).length > 0) {
+    attributes[LLM_INVOCATION_PARAMETERS] = toAttributeValue(leftover);
+  } else {
+    delete attributes[LLM_INVOCATION_PARAMETERS];
+  }
+  return true;
+}
+
+/**
  * Rewrites third-party attribute dialects to the conventions, in place, on
  * every span. Always on: there is no opt-out, because the canonical names are
  * the contract the rest of the pipeline and the backend are written against.
@@ -1352,6 +1463,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // a pending snapshot could carry them. The sources are an indexed family,
     // which the exact-key rule table cannot match.
     reassembleOpenInferenceMessages(attributes);
+    // After the reassembly, whose messages it extends; end-only for the same
+    // reason, since a system prompt is content.
+    promoteSystemInstruction(attributes);
   }
 
   private normalize(

@@ -504,10 +504,20 @@ describe("request parameters on a pending snapshot", () => {
 
     it("is unchanged with content captured (the sentinel test is live)", async () => {
       const { pending, final } = await runWithBag({});
-      // tools leaves the bag too: it is promoted to the tool-definitions key.
-      const { model: _model, temperature: _temperature, tools: _tools, ...leftover } = bag;
+      // tools leaves the bag too: it is promoted to the tool-definitions key,
+      // and system to a system input message.
+      const {
+        model: _model,
+        temperature: _temperature,
+        tools: _tools,
+        system: _system,
+        ...leftover
+      } = bag;
       expect(final.attributes["llm.invocation_parameters"]).toBe(JSON.stringify(leftover));
       expect(final.attributes["gen_ai.tool.definitions"]).toContain("refund");
+      expect(JSON.parse(final.attributes["gen_ai.input.messages"] as string)).toEqual([
+        { role: "system", parts: [{ type: "text", content: bag.system }] },
+      ]);
       expect(final.attributes["gen_ai.request.model"]).toBe("claude-sonnet-4");
       expect(final.attributes["gen_ai.request.temperature"]).toBe(0.2);
       // A snapshot never carries the bag: it is not on the identity allowlist.
