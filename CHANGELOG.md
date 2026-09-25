@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.0.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.8.0...v1.0.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* normalize modelParameters keys onto gen_ai.request.* and rius.request.* ([#85](https://github.com/glassflow/rius-sdk-typescript/issues/85))
+* name spans after their operation and target, per the conventions ([#72](https://github.com/glassflow/rius-sdk-typescript/issues/72))
+* map RETRIEVER to the retrieval operation and take a data source id ([#69](https://github.com/glassflow/rius-sdk-typescript/issues/69))
+* emit rius.span.pending and the rius tracer scope ([#67](https://github.com/glassflow/rius-sdk-typescript/issues/67))
+
+### Features
+
+* emit rius.context.sizes, a per-part byte breakdown of the context, on every generation span ([#65](https://github.com/glassflow/rius-sdk-typescript/issues/65)) ([5066d77](https://github.com/glassflow/rius-sdk-typescript/commit/5066d77c185d76cdf7bdc00392850ad80026b204))
+* emit rius.span.pending and the rius tracer scope ([#67](https://github.com/glassflow/rius-sdk-typescript/issues/67)) ([6cbd4fa](https://github.com/glassflow/rius-sdk-typescript/commit/6cbd4fa0c29d0630ed663be4c81ea28d38b5bf04))
+* map llm.finish_reason onto gen_ai.response.finish_reasons, verbatim ([#84](https://github.com/glassflow/rius-sdk-typescript/issues/84)) ([5aa533b](https://github.com/glassflow/rius-sdk-typescript/commit/5aa533b759875d2d2af1cb652e87b002c1913d34))
+* map OpenInference embeddings and the response id onto the canonical keys ([#100](https://github.com/glassflow/rius-sdk-typescript/issues/100)) ([337050c](https://github.com/glassflow/rius-sdk-typescript/commit/337050cfef27608fa1881ed73f67889356de5863))
+* map RETRIEVER to the retrieval operation and take a data source id ([#69](https://github.com/glassflow/rius-sdk-typescript/issues/69)) ([18d7404](https://github.com/glassflow/rius-sdk-typescript/commit/18d7404f9849cc65414505699fc476cef57ffdd3))
+* map the OpenInference model-call, usage and taxonomy keys onto the canonical wire ([#81](https://github.com/glassflow/rius-sdk-typescript/issues/81)) ([3d93ec6](https://github.com/glassflow/rius-sdk-typescript/commit/3d93ec6965d842a46e9ed86cfb54a56137977b3d))
+* map tool.name, the llm.tools definitions and two usage spellings onto the canonical wire ([#91](https://github.com/glassflow/rius-sdk-typescript/issues/91)) ([02211bb](https://github.com/glassflow/rius-sdk-typescript/commit/02211bb0c678a7bbf917fef46b99e18df79d91ae))
+* name spans after their operation and target, per the conventions ([#72](https://github.com/glassflow/rius-sdk-typescript/issues/72)) ([b1610c1](https://github.com/glassflow/rius-sdk-typescript/commit/b1610c128e00e0ad088f4cda12c9bd6f56220133))
+* name the agent an AGENT span invokes ([#71](https://github.com/glassflow/rius-sdk-typescript/issues/71)) ([13f30c3](https://github.com/glassflow/rius-sdk-typescript/commit/13f30c3225058edf81d28602a09faaca4fed368e))
+* name the agent executing a tool on execute-tool spans ([#75](https://github.com/glassflow/rius-sdk-typescript/issues/75)) ([e7c15d3](https://github.com/glassflow/rius-sdk-typescript/commit/e7c15d394403ec1cacfabdaf960e0173c9ef0574))
+* normalize modelParameters keys onto gen_ai.request.* and rius.request.* ([#85](https://github.com/glassflow/rius-sdk-typescript/issues/85)) ([d348a9f](https://github.com/glassflow/rius-sdk-typescript/commit/d348a9f83e3a3d55f9766fa22785094b757911ef))
+* normalize third-party attribute dialects to the conventions ([#76](https://github.com/glassflow/rius-sdk-typescript/issues/76)) ([6f45a0a](https://github.com/glassflow/rius-sdk-typescript/commit/6f45a0a4d1083783304bebe450c6e940c4a4a21a))
+* reassemble OpenInference's flattened messages, Anthropic's multi-part contents included ([#90](https://github.com/glassflow/rius-sdk-typescript/issues/90)) ([2a835db](https://github.com/glassflow/rius-sdk-typescript/commit/2a835db5a8c0a5cd145354fd0773a132bd60e050))
+* record the completion id, output type and tool-call identity, and stamp service.version ([#77](https://github.com/glassflow/rius-sdk-typescript/issues/77)) ([056437d](https://github.com/glassflow/rius-sdk-typescript/commit/056437d4db95a98ac3453ede9638d37fb2845abd))
+* take gen_ai.tool.name as an explicit argument on the span helpers ([#68](https://github.com/glassflow/rius-sdk-typescript/issues/68)) ([b664edb](https://github.com/glassflow/rius-sdk-typescript/commit/b664edb10266028bc903b94e4a648e17d371cf5a))
+* take the process agent identity into rius.main_agent.*, and version the agent at both scopes ([#79](https://github.com/glassflow/rius-sdk-typescript/issues/79)) ([e8c7886](https://github.com/glassflow/rius-sdk-typescript/commit/e8c788621246e2623ada3a0f321b6aebdafc35ac))
+
+
+### Bug Fixes
+
+* carry the Anthropic system prompt as a system input message ([#98](https://github.com/glassflow/rius-sdk-typescript/issues/98)) ([1b245c6](https://github.com/glassflow/rius-sdk-typescript/commit/1b245c640ad1891abcee985fc82a2ccc1a2be662))
+* end the OpenAI span when an auto-instrumented call rejects ([#99](https://github.com/glassflow/rius-sdk-typescript/issues/99)) ([a324fef](https://github.com/glassflow/rius-sdk-typescript/commit/a324fefadae4522f7284b832d7d0b979e302da83))
+* guard native modelParameters like the normalizer, and let the first spelling win ([#93](https://github.com/glassflow/rius-sdk-typescript/issues/93)) ([68b85d1](https://github.com/glassflow/rius-sdk-typescript/commit/68b85d19c7ae19817459321242539171c540817d))
+* keep tool_choice with content capture off by promoting it out of the request bag ([#94](https://github.com/glassflow/rius-sdk-typescript/issues/94)) ([8cc97c3](https://github.com/glassflow/rius-sdk-typescript/commit/8cc97c330380d826b59c21f8a448e0e38bc02eee))
+* leave U+2028/U+2029 raw in a promoted system block, as the sink writes them ([#101](https://github.com/glassflow/rius-sdk-typescript/issues/101)) ([552f4cc](https://github.com/glassflow/rius-sdk-typescript/commit/552f4cca6746970a1628b2bc3c6c7e3d7e102dc8))
+* name provider SDK errors by class in error.type and exception.type ([#92](https://github.com/glassflow/rius-sdk-typescript/issues/92)) ([11c6dea](https://github.com/glassflow/rius-sdk-typescript/commit/11c6dea00a0c54ad9903822d1de802b47147ccfc))
+* raise the span attribute limit so long agent calls keep their usage and output ([#95](https://github.com/glassflow/rius-sdk-typescript/issues/95)) ([2918a8b](https://github.com/glassflow/rius-sdk-typescript/commit/2918a8bbbc1fb4191d865f2f81e3efbce5ce95d4))
+* require the Anthropic instrumentor version that reports prompt-cache tokens ([#96](https://github.com/glassflow/rius-sdk-typescript/issues/96)) ([eb86f0f](https://github.com/glassflow/rius-sdk-typescript/commit/eb86f0f6a1710c083317d58c50e4eab18ed61c9a))
+* run the Vercel transform only on the AI SDK's own ai.* spans ([#97](https://github.com/glassflow/rius-sdk-typescript/issues/97)) ([fc0729f](https://github.com/glassflow/rius-sdk-typescript/commit/fc0729fdc898bfe4f4f80916db053dbccf86e2f8))
+* stamp gen_ai.agent.name on the resource ([#70](https://github.com/glassflow/rius-sdk-typescript/issues/70)) ([22f3423](https://github.com/glassflow/rius-sdk-typescript/commit/22f34235f30f6f65eb40d5c49f9acf254367945b))
+* treat the OpenInference request-parameter bag as content ([#87](https://github.com/glassflow/rius-sdk-typescript/issues/87)) ([6eccc66](https://github.com/glassflow/rius-sdk-typescript/commit/6eccc66699221cab4ff7636307d07b68e5aa2b22))
+* write U+2028/U+2029 raw in a promoted tool_choice, as the sink does ([#103](https://github.com/glassflow/rius-sdk-typescript/issues/103)) ([3178bc5](https://github.com/glassflow/rius-sdk-typescript/commit/3178bc53cdf5b74730e8efe768b24f9a5788470b))
+
 ## [0.8.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.7.0...v0.8.0) (2026-09-21)
 
 
