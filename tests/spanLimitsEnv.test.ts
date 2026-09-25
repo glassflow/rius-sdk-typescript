@@ -21,9 +21,12 @@ afterEach(async () => {
 });
 
 /** Ends one native span carrying `count` attributes; returns how many it kept. */
-async function keptOf(count: number): Promise<{ kept: number; dropped: number }> {
+async function keptOf(
+  count: number,
+  options: { captureContent?: boolean; workspaces?: Record<string, string> } = {},
+): Promise<{ kept: number; dropped: number }> {
   exporter = new InMemorySpanExporter();
-  client = init({ spanExporter: exporter, heartbeatTransport: async () => {} });
+  client = init({ spanExporter: exporter, heartbeatTransport: async () => {}, ...options });
   const span = getTracer().startSpan("wide");
   for (let i = 0; i < count; i++) span.setAttribute(`app.k${i}`, i);
   span.end();
@@ -73,5 +76,18 @@ describe("the span attribute count limit", () => {
     vi.stubEnv("OTEL_ATTRIBUTE_COUNT_LIMIT", "  ");
     const { kept } = await keptOf(1000);
     expect(kept).toBe(1000);
+  });
+
+  it("reports the dropped count through masking and workspace routing", async () => {
+    // Every exporter in the chain rewrites the span IN PLACE, so the count the
+    // span recorded is the count exported; keys removed on purpose (a masked
+    // value, a mapped source) are not drops and are not counted.
+    vi.stubEnv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "10");
+    const { dropped: plain } = await keptOf(50);
+    await client?.shutdown();
+    client = undefined;
+    const { dropped } = await keptOf(50, { captureContent: false, workspaces: {} });
+    expect(plain).toBeGreaterThanOrEqual(40);
+    expect(dropped).toBe(plain);
   });
 });
