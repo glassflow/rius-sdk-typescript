@@ -188,12 +188,15 @@ describe("the shipped table", () => {
       ["llm.provider", "gen_ai.system"],
       "llm.request.model_name",
       "llm.response.model_name",
+      "tool.name",
       "llm.finish_reason",
       "llm.token_count.prompt",
       "llm.token_count.completion",
       "llm.token_count.prompt_details.cache_read",
       "llm.token_count.prompt_details.cache_write",
       "llm.token_count.completion_details.reasoning",
+      "gen_ai.usage.cache_creation.input_tokens",
+      "gen_ai.usage.details.reasoning_tokens",
       "llm.invocation_parameters",
     ]);
   });

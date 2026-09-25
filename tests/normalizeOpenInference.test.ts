@@ -299,7 +299,7 @@ describe("the invocation-parameter bag", () => {
   });
 
   it("returns a bag with nothing promotable byte-identical", () => {
-    const raw = JSON.stringify({ tools: [{ name: "get_weather" }], user: "u1" });
+    const raw = JSON.stringify({ user: "u1", response_format: { type: "json_object" } });
     expect(normalized({ "llm.invocation_parameters": raw })["llm.invocation_parameters"]).toBe(raw);
   });
 
@@ -311,14 +311,18 @@ describe("the invocation-parameter bag", () => {
     expect(normalized({ "llm.invocation_parameters": raw })["llm.invocation_parameters"]).toBe(raw);
   });
 
-  it("leaves tool definitions in the bag, where masking already redacts them", () => {
+  it("moves tool definitions onto gen_ai.tool.definitions, never into a key of our own", () => {
     // Fanning unknown members out into keys of our own would move content out
-    // from under that redaction and past captureContent: false. There is
-    // deliberately no rius.request.<key> catch-all.
+    // from under masking and past captureContent: false, so there is
+    // deliberately no rius.request.<key> catch-all. Tool definitions have a
+    // canonical CONTENT key, and the reassembly pass puts them there.
     const out = normalized({
       "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o", tools: ["secret"] }),
     });
-    expect(out["llm.invocation_parameters"]).toBe(JSON.stringify({ tools: ["secret"] }));
+    expect(out).toEqual({
+      "gen_ai.request.model": "gpt-4o",
+      "gen_ai.tool.definitions": JSON.stringify(["secret"]),
+    });
   });
 
   it("is idempotent across the start-then-end double pass", () => {

@@ -26,11 +26,14 @@ import {
   GEN_AI_RESPONSE_FINISH_REASONS,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+  GEN_AI_TOOL_DEFINITIONS,
+  GEN_AI_TOOL_NAME,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+  INVOCATION_PARAMETERS_CONTENT_MEMBERS,
   LLM_INVOCATION_PARAMETERS,
   OPENINFERENCE_SPAN_KIND,
   kindForOperation,
@@ -268,6 +271,9 @@ function asText(value: unknown): AttributeValue | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/** The source as a non-empty string, or nothing: a name that is not a name maps to nothing. */
+export const textValue: Converter = (values) => asText(values[0]);
+
 /** A boolean, or nothing. */
 function asFlag(value: unknown): AttributeValue | undefined {
   return typeof value === "boolean" ? value : undefined;
@@ -413,8 +419,9 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  *
  * ORDER MATTERS where two sources share a target: the first rule to produce
  * one keeps it. Provider, then the request model, then the response model,
- * then the finish reason, then the five usage rules, then the request bag
- * LAST so the dedicated model rules beat its `model` member.
+ * then the tool name, then the finish reason, then the five OpenInference
+ * usage rules and the two GenAI-shaped usage spellings after them, then the
+ * request bag LAST so the dedicated model rules beat its `model` member.
  *
  * DELIBERATE OMISSIONS — mappings that are not TOTAL, left unmapped so the
  * source rides through under its own name:
@@ -463,6 +470,17 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     identity: true,
   },
   { source: "llm.response.model_name", target: GEN_AI_RESPONSE_MODEL, convert: copy },
+  // Tool identity. OpenInference writes the bare key only on TOOL spans (on an
+  // LLM span the same name sits under llm.tools.N.tool.name instead), so the
+  // rule needs no kind guard. Identity, so it also runs at start and a
+  // still-running third-party tool call is named on its pending snapshot, as
+  // a native one is.
+  //
+  // Deliberately NO fallback to the span name. The native path stopped
+  // deriving the tool name from the span name because a span name is not a
+  // tool name, and a wrong name silently groups unrelated calls, which is
+  // worse than an absent one. A third-party span offers no better guarantee.
+  { source: "tool.name", target: GEN_AI_TOOL_NAME, convert: textValue, identity: true },
   // Why the model stopped. The source is a SCALAR and the canonical key is an
   // array (one entry per generation), so wrap rather than copy.
   //
@@ -504,6 +522,33 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   },
   {
     source: "llm.token_count.completion_details.reasoning",
+    target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    convert: toInt,
+  },
+  // Two GenAI-shaped spellings of the same counts, each its own rule AFTER
+  // the OpenInference one for its target: the OpenInference count keeps the
+  // target where a span somehow carries both, and a separate rule rather than
+  // a second source means an OpenInference count that won't parse still lets
+  // a usable alternate through (a rule converts only its first present
+  // source). Spelled inline for the reason gen_ai.system is: source spellings
+  // we map and never emit.
+  //
+  // cache_creation is the cache-write count's name before the upstream rename
+  // to cache_write. Permanent, not a transition aid: current third-party
+  // releases still emit it (@ai-sdk/otel for every Vercel AI SDK app, and
+  // pydantic-ai), and the backend prices cache writes from the canonical key
+  // alone. The rename is exact, so nothing is lost.
+  {
+    source: "gen_ai.usage.cache_creation.input_tokens",
+    target: GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+    convert: toInt,
+  },
+  // pydantic-ai writes OpenAI's reasoning count as one entry of its usage
+  // details namespace. The other providers' names there for the same split
+  // (Anthropic's thinking_tokens, Google's thoughts_tokens) are not mapped,
+  // matching the sink; the rest of the namespace has no canonical key.
+  {
+    source: "gen_ai.usage.details.reasoning_tokens",
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
@@ -741,6 +786,103 @@ export function errorTypeFromExceptionEvent(span: ReadableSpan): Record<string, 
 }
 
 /**
+ * OpenInference's indexed tool-definition family, `llm.tools.{i}.tool.json_schema`.
+ * A source spelling, inline for the reason the `llm.*` rule sources are.
+ */
+const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
+
+/**
+ * Reassemble a span's tool definitions into one `gen_ai.tool.definitions`,
+ * in place.
+ *
+ * Outside the rule table because the source is an INDEXED family and a rule's
+ * sources are exact keys. End-only, which is also right on the merits:
+ * definitions are content, so they never ride a pending snapshot.
+ *
+ * Two sources, in order:
+ *
+ * - `llm.tools.N.tool.json_schema`, which the OpenInference instrumentations
+ *   write one per tool. Each value is a JSON string; the schemas are parsed
+ *   and re-serialized as ONE array, in numeric index order, VERBATIM: an
+ *   Anthropic `input_schema` stays an Anthropic `input_schema`, as on the
+ *   native `tools` option. The indexed keys are then deleted. If any one
+ *   schema is not a string or does not parse, the whole family is left
+ *   untouched rather than reassembled without it: it is content by prefix
+ *   already, so nothing escapes, and a partial array would be a silent loss.
+ * - Only when there is no indexed schema at all: the tool-definition members
+ *   of `llm.invocation_parameters` (`tools`, then the legacy `functions`),
+ *   where litellm and langchain leave them. Both present are concatenated,
+ *   tools first, and only when every present member is a list. The members
+ *   leave the bag, and a bag left empty is dropped rather than riding as `{}`.
+ *
+ * Native wins: a span already carrying `gen_ai.tool.definitions` keeps it,
+ * and the sources are removed anyway because they are then duplicates.
+ *
+ * Runs before masking, so the promoted key is stripped under
+ * `captureContent: false` exactly like a native one: it is on the content
+ * allowlist.
+ *
+ * Ported from the Python SDK's `normalize_tool_definitions`, rule for rule.
+ * Two language differences reach its edges: `JSON.parse` rejects the `NaN` /
+ * `Infinity` tokens Python's `json.loads` accepts, so such a schema leaves the
+ * family untouched here, and the index pattern is ASCII digits only where
+ * Python's `\d` also matches other Unicode digits.
+ */
+export function normalizeToolDefinitions(
+  attributes: Record<string, AttributeValue | undefined>,
+): void {
+  const native = attributes[GEN_AI_TOOL_DEFINITIONS] !== undefined;
+
+  const indexed = new Map<number, string>();
+  for (const key of Object.keys(attributes)) {
+    // The cheap prefix test first: this runs on every ended span.
+    if (!key.startsWith("llm.tools.")) continue;
+    const match = LLM_TOOL_SCHEMA.exec(key);
+    if (match !== null) indexed.set(Number(match[1]), key);
+  }
+  if (indexed.size > 0) {
+    const schemas: unknown[] = [];
+    for (const index of [...indexed.keys()].sort((a, b) => a - b)) {
+      const raw = attributes[indexed.get(index) as string];
+      if (typeof raw !== "string") return;
+      try {
+        schemas.push(JSON.parse(raw));
+      } catch {
+        return;
+      }
+    }
+    for (const key of indexed.values()) delete attributes[key];
+    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(schemas);
+    return;
+  }
+
+  const bag = attributes[LLM_INVOCATION_PARAMETERS];
+  if (typeof bag !== "string") return;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(bag);
+  } catch {
+    return;
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
+  const members = payload as Record<string, unknown>;
+  const present = INVOCATION_PARAMETERS_CONTENT_MEMBERS.filter((m) => Object.hasOwn(members, m));
+  // Absent, or a shape we cannot vouch is a list of definitions: the bag is
+  // content already, so leaving it is safe.
+  if (present.length === 0 || !present.every((m) => Array.isArray(members[m]))) return;
+  const definitions = present.flatMap((m) => members[m] as unknown[]);
+  const leftover = Object.fromEntries(
+    Object.entries(members).filter(([key]) => !present.includes(key)),
+  );
+  if (Object.keys(leftover).length > 0) {
+    attributes[LLM_INVOCATION_PARAMETERS] = toAttributeValue(leftover);
+  } else {
+    delete attributes[LLM_INVOCATION_PARAMETERS];
+  }
+  if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+}
+
+/**
  * Rewrites third-party attribute dialects to the conventions, in place, on
  * every span. Always on: there is no opt-out, because the canonical names are
  * the contract the rest of the pipeline and the backend are written against.
@@ -792,6 +934,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     this.normalize(attributes, this.rules, (key, value) => {
       attributes[key] = value;
     });
+    // After the table, on its output: the table has already taken the request
+    // knobs out of the bag, so what this pass re-serializes is the remainder.
+    normalizeToolDefinitions(attributes);
     // After the table, and only at end: neither source exists at span start.
     // The event is added mid-stream, and the status is not ERROR until the
     // failure happens. setDefault semantics — a key the table produced read
