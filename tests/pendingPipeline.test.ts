@@ -11,7 +11,7 @@ import {
   SpanKind,
 } from "../src/semconv.js";
 import { withSession } from "../src/session.js";
-import { startAsCurrentSpan } from "../src/spans.js";
+import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 
 class Capture implements SpanExporter {
   readonly spans: ReadableSpan[] = [];
@@ -255,6 +255,109 @@ describe("lifecycle interactions", () => {
   });
 });
 
+// Allowlisted keys that legitimately cannot be known when a span opens. Each
+// one is an argued exemption, so a new late write has to be defended in a diff
+// rather than passing unnoticed.
+const LATE_EXEMPTIONS = new Set([
+  // Set by recordFirstToken: whether the response streamed is only
+  // answerable once a first chunk has arrived, after the span started.
+  "gen_ai.request.stream",
+]);
+
+/** One span per helper kind, every option populated, every setter called. */
+const FULLY_POPULATED: Record<string, () => void> = {
+  generation() {
+    const generation = startGeneration({
+      model: "gpt-4o",
+      provider: "openai",
+      input: [{ role: "user", content: "hello" }],
+      modelParameters: {
+        temperature: 0.7,
+        max_completion_tokens: 256, // a recognised provider spelling
+        my_custom_knob: 3, // lands in rius.request.*
+      },
+      operation: "chat",
+      reasoningLevel: "high",
+      tools: [{ name: "get_weather" }],
+      userId: "u-1",
+      outputType: "json",
+    });
+    generation.recordFirstToken();
+    generation.setModel("gpt-4o-2026-08-06");
+    generation.setResponseId("resp_1");
+    generation.setUsage({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadInputTokens: 2,
+      cacheWriteInputTokens: 1,
+      reasoningOutputTokens: 3,
+    });
+    generation.setFinishReasons("stop");
+    generation.setOutput([{ role: "assistant", content: "hi" }]);
+    generation.end();
+  },
+  tool() {
+    const observation = startSpan("lookup", {
+      kind: SpanKind.TOOL,
+      input: { city: "Berlin" },
+      userId: "u-1",
+      toolName: "get_weather",
+      toolCallId: "call_1",
+      toolType: "function",
+    });
+    observation.setOutput({ temp: 20 });
+    observation.end();
+  },
+  agent() {
+    const observation = startSpan({
+      kind: SpanKind.AGENT,
+      input: "research this",
+      userId: "u-1",
+      agentName: "researcher",
+      agentId: "ag_1",
+      agentVersion: "1.0.0",
+    });
+    observation.setOutput("done");
+    observation.end();
+  },
+  retriever() {
+    const observation = startSpan({
+      kind: SpanKind.RETRIEVER,
+      input: "weather berlin",
+      userId: "u-1",
+      dataSourceId: "product-kb",
+      topK: 5,
+    });
+    observation.setRetrievedDocuments([{ id: "doc-1", score: 0.9 }]);
+    observation.end();
+  },
+};
+
+/** Allowlisted values each fixture's final span must carry. */
+const GUARD_WITNESSES: Record<string, Record<string, unknown>> = {
+  generation: {
+    "gen_ai.request.max_tokens": 256,
+    "rius.request.my_custom_knob": 3,
+    "gen_ai.request.reasoning.level": "high",
+  },
+  tool: {
+    "gen_ai.tool.name": "get_weather",
+    "gen_ai.tool.call.id": "call_1",
+    "gen_ai.tool.type": "function",
+    "user.id": "u-1",
+    "session.id": "sess-1",
+  },
+  agent: {
+    "gen_ai.agent.name": "researcher",
+    "gen_ai.agent.id": "ag_1",
+    "gen_ai.agent.version": "1.0.0",
+  },
+  retriever: {
+    "gen_ai.data_source.id": "product-kb",
+    "gen_ai.retrieval.top_k": 5,
+  },
+};
+
 describe("request parameters on a pending snapshot", () => {
   /** One pending and one final span, from a partial-spans pipeline. */
   function split(spans: readonly ReadableSpan[]): { pending: ReadableSpan; final: ReadableSpan } {
@@ -315,71 +418,42 @@ describe("request parameters on a pending snapshot", () => {
    * whole life of partial spans, with the prefix rule sitting in the
    * allowlist looking correct because nothing exercised it.
    *
-   * So: a generation with every option populated and every post-call setter
-   * called, and every allowlisted attribute the FINAL span carries must be on
-   * the snapshot too.
+   * So: one span per helper kind with every option populated and every
+   * post-call setter called, and every allowlisted attribute the FINAL span
+   * carries must be on the snapshot too. The four fixtures mirror the Python
+   * SDK's.
    */
-  it("carries every allowlisted attribute the finished generation ends up with", async () => {
-    // Allowlisted keys that legitimately cannot be known when the span opens.
-    // Each one is an argued exemption, so a new late write has to be defended
-    // in a diff rather than passing unnoticed.
-    const LATE_EXEMPTIONS = new Set([
-      // Set by recordFirstToken: whether the response streamed is only
-      // answerable once a first chunk has arrived, after the span started.
-      "gen_ai.request.stream",
-    ]);
-    const exporter = new Capture();
-    client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
-    withSession("sess-1", () => {
-      const generation = startGeneration({
-        model: "gpt-4o",
-        provider: "openai",
-        input: [{ role: "user", content: "hello" }],
-        modelParameters: {
-          temperature: 0.7,
-          max_completion_tokens: 256, // a recognised provider spelling
-          my_custom_knob: 3, // lands in rius.request.*
-        },
-        operation: "chat",
-        reasoningLevel: "high",
-        tools: [{ name: "get_weather" }],
-        userId: "u-1",
-        outputType: "json",
-      });
-      generation.recordFirstToken();
-      generation.setModel("gpt-4o-2026-08-06");
-      generation.setResponseId("resp_1");
-      generation.setUsage({
-        inputTokens: 10,
-        outputTokens: 5,
-        cacheReadInputTokens: 2,
-        cacheWriteInputTokens: 1,
-        reasoningOutputTokens: 3,
-      });
-      generation.setFinishReasons("stop");
-      generation.setOutput([{ role: "assistant", content: "hi" }]);
-      generation.end();
-    });
-    await client.flush();
-    const { pending, final } = split(exporter.spans);
+  it.each(Object.entries(FULLY_POPULATED))(
+    "carries every allowlisted attribute the finished %s span ends up with",
+    async (_kind, build) => {
+      const exporter = new Capture();
+      client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
+      // A session scope so session.id is on the span too: it is allowlisted,
+      // and a scope-derived attribute is exactly the kind that could be
+      // applied late.
+      withSession("sess-1", build);
+      await client.flush();
+      const { pending, final } = split(exporter.spans);
 
-    const missing = Object.keys(final.attributes).filter(
-      (key) =>
-        (PENDING_IDENTITY_ATTRIBUTES.has(key) ||
-          PENDING_IDENTITY_PREFIXES.some((prefix) => key.startsWith(prefix))) &&
-        !LATE_EXEMPTIONS.has(key) &&
-        !(key in pending.attributes),
-    );
-    expect(
-      missing,
-      "allowlisted but written too late to reach the pending snapshot: set it at creation, " +
-        "or add it to LATE_EXEMPTIONS with the reason it cannot be known at span start",
-    ).toEqual([]);
-    // The guard has something to bite on: both namespaces are on the final span.
-    expect(final.attributes["gen_ai.request.max_tokens"]).toBe(256);
-    expect(final.attributes["rius.request.my_custom_knob"]).toBe(3);
-    expect(final.attributes["gen_ai.request.reasoning.level"]).toBe("high");
-  });
+      const missing = Object.keys(final.attributes).filter(
+        (key) =>
+          (PENDING_IDENTITY_ATTRIBUTES.has(key) ||
+            PENDING_IDENTITY_PREFIXES.some((prefix) => key.startsWith(prefix))) &&
+          !LATE_EXEMPTIONS.has(key) &&
+          !(key in pending.attributes),
+      );
+      expect(
+        missing,
+        "allowlisted but written too late to reach the pending snapshot: set it at creation, " +
+          "or add it to LATE_EXEMPTIONS with the reason it cannot be known at span start",
+      ).toEqual([]);
+      // The guard has something to bite on: the kind's own identity is on the
+      // final span, so an empty comparison cannot pass by accident.
+      for (const [key, value] of Object.entries(GUARD_WITNESSES[_kind] ?? {})) {
+        expect(final.attributes[key], key).toBe(value);
+      }
+    },
+  );
 
   describe("the llm.invocation_parameters bag", () => {
     // The bag's membership is open and provider-defined: litellm and langchain
