@@ -354,6 +354,43 @@ async function registerVercelTelemetry(
   return true;
 }
 
+/**
+ * The Vercel AI SDK's own operation id. A SOURCE spelling of a dialect this SDK
+ * never emits, so it stays here rather than in semconv.ts, the set of keys we
+ * write — the same reason normalize.ts spells its dialect sources inline.
+ */
+const VERCEL_OPERATION_ID = "ai.operationId";
+
+/**
+ * Whether a span speaks the Vercel AI SDK's `ai.*` dialect, the one
+ * @arizeai/openinference-vercel's transform exists to translate.
+ *
+ * The transform is not scoped by itself: it also converts ANY `gen_ai.*` span,
+ * so run on every span it rewrote native and third-party spans alike —
+ * flattened `llm.input_messages.*`, `llm.system`, `llm.token_count.total`,
+ * `input/output.mime_type`, the messages duplicated into
+ * `input.value`/`output.value`. So it runs only on a span carrying a string
+ * `ai.operationId` that starts with `ai.`.
+ *
+ * That attribute, not the instrumentation scope, because the scope proves
+ * nothing either way. AI SDK v5/v6 default to a tracer named `ai` but take
+ * whatever tracer the caller passes in `experimental_telemetry.tracer`, and
+ * the v7 integration registered above is bound to OUR tracer. Every v5/v6 span
+ * sets `ai.operationId` (their `assembleOperationName`, on all of
+ * `ai.generateText`, `.doGenerate`, `ai.streamText`, `ai.toolCall`, `ai.embed`,
+ * `ai.rerank` and the rest), as does @ai-sdk/otel's `LegacyOpenTelemetry`, the
+ * v7 integration that still emits that dialect. `operation.name` is not used:
+ * it is a display label any producer may set. @ai-sdk/otel's `OpenTelemetry`
+ * integration, the one this SDK registers for v7, never sets
+ * `ai.operationId`: its spans are GenAI-native, the normalizer already derives
+ * their taxonomy from `gen_ai.operation.name`, and the transform would only
+ * duplicate them.
+ */
+export function isVercelDialectSpan(span: ReadableSpan): boolean {
+  const operationId = span.attributes[VERCEL_OPERATION_ID];
+  return typeof operationId === "string" && operationId.startsWith("ai.");
+}
+
 export const REGISTRY: RegistryEntry[] = [
   {
     name: "vercel-ai",
@@ -386,7 +423,7 @@ export const REGISTRY: RegistryEntry[] = [
       return {
         onStart() {},
         onEnd(span: ReadableSpan) {
-          add?.(span);
+          if (add !== undefined && isVercelDialectSpan(span)) add(span);
         },
         async forceFlush() {},
         async shutdown() {},
