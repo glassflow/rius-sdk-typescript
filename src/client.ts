@@ -198,6 +198,42 @@ export class RiusClient {
 let globalClient: RiusClient | undefined;
 
 /**
+ * The span attribute COUNT limit init() applies when the environment names
+ * none.
+ *
+ * OpenTelemetry's default is 128, and OpenInference writes one attribute per
+ * message field and per tool field: an agent loop with 10 tools passes 128
+ * after about 9 turns. A full span does not fail loudly, it refuses every NEW
+ * key, and the keys an instrumentor writes last are the usage, the output
+ * messages, `output.value` and the finish reason, so cost and output vanish
+ * from exactly the calls that matter most. 4096 holds a 20-turn, 10-tool agent
+ * call several times over while still bounding a runaway span.
+ *
+ * The value-LENGTH limit is deliberately left at OpenTelemetry's default
+ * (unlimited): truncating a message would corrupt its JSON.
+ */
+export const DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT = 4096;
+
+/** The variables OpenTelemetry reads for the span attribute count limit, most specific first. */
+const ATTRIBUTE_COUNT_LIMIT_ENV = ["OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "OTEL_ATTRIBUTE_COUNT_LIMIT"];
+
+/**
+ * Whether the environment sets the count limit in a way OpenTelemetry will
+ * honour. OpenTelemetry JS resolves an explicit `spanLimits` in the provider
+ * config BEFORE the environment, so the default above may only be passed when
+ * neither variable is set; otherwise it would silently override the operator.
+ * "Set" means what OpenTelemetry's own `getNumberFromEnv` accepts: non-blank
+ * and a number. A blank or non-numeric value is ignored by OpenTelemetry (it
+ * warns and falls back to 128), so it gets this SDK's default instead.
+ */
+function attributeCountLimitFromEnv(): boolean {
+  return ATTRIBUTE_COUNT_LIMIT_ENV.some((name) => {
+    const raw = process.env[name];
+    return raw !== undefined && raw.trim() !== "" && !Number.isNaN(Number(raw));
+  });
+}
+
+/**
  * Initialize the SDK: build a tracer pipeline that exports OTLP traces and
  * enable every bundled auto-instrumentation whose package is installed.
  *
@@ -351,6 +387,11 @@ export function init(options: InitOptions = {}): RiusClient {
     // upstream service dropped. Rate 1 is the default, so the shortcut would
     // have been the default path for every user.
     sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
+    // Only when the environment names no count limit: an explicit config
+    // beats the environment in OpenTelemetry JS. See the constant.
+    ...(attributeCountLimitFromEnv()
+      ? {}
+      : { spanLimits: { attributeCountLimit: DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT } }),
     spanProcessors: [processors],
   });
 
