@@ -6,6 +6,7 @@ import {
 } from "@opentelemetry/api";
 import { executingAgentName, resolveAgentName, withAgentScope } from "./agent.js";
 import { getTracer } from "./client.js";
+import { errorType, exceptionForRecording } from "./errorType.js";
 import {
   ERROR_TYPE,
   GEN_AI_AGENT_ID,
@@ -24,7 +25,7 @@ import {
   kindAttributes,
   otelSpanKind,
 } from "./semconv.js";
-import { attributeValue, errorType, toAttributeValue } from "./serde.js";
+import { attributeValue, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";
 
 /** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
@@ -195,15 +196,17 @@ export class Observation {
    *
    * `error.type` is Conditionally Required by the GenAI conventions on every
    * span that ends in an error, and every helper's throw path funnels through
-   * here, so this is the one place that sets it. The error's name only, never
-   * the message: it must stay low-cardinality and free of echoed content.
+   * here, so this is the one place that sets it. The error's name or class
+   * (see errorType), never the message: it must stay low-cardinality and free
+   * of echoed content.
    *
    * Accepts `unknown` because that is what a `catch` binding is; a non-Error
    * throwable is wrapped so `recordException` still gets a real Error.
    */
   recordException(error: unknown): this {
     const wrapped = error instanceof Error ? error : new Error(String(error));
-    this.span.recordException(wrapped);
+    // Typed by class, so the event's exception.type and error.type agree.
+    this.span.recordException(exceptionForRecording(wrapped));
     this.span.setStatus({ code: SpanStatusCode.ERROR, message: wrapped.message });
     this.span.setAttribute(ERROR_TYPE, errorType(error));
     return this;

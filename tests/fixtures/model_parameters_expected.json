@@ -137,8 +137,46 @@
   "key untouched apart from the prefix": {
     "rius.request.Weird.Key-1": "x"
   },
-  "lone stop string is not wrapped": {
-    "gen_ai.request.stop_sequences": "END"
+  "lone stop string is wrapped into a list": {
+    "gen_ai.request.stop_sequences": ["END"]
+  },
+  "lone encoding_format string is wrapped into a list": {
+    "gen_ai.request.encoding_formats": ["float"]
+  },
+  "numeric string on a double key goes to rius.request": {
+    "rius.request.temperature": "0.2"
+  },
+  "bool on a double key goes to rius.request": {
+    "rius.request.top_p": true
+  },
+  "numeric string on an int key goes to rius.request": {
+    "rius.request.n": "2",
+    "rius.request.top_k": "40",
+    "rius.request.seed": "7"
+  },
+  "object on an int key is JSON-encoded under rius.request": {
+    "rius.request.max_tokens": "{\"limit\":5}"
+  },
+  "list on a double key goes to rius.request": {
+    "rius.request.frequency_penalty": [0.1]
+  },
+  "empty string on a string key goes to rius.request": {
+    "rius.request.model": ""
+  },
+  "number on a string key goes to rius.request": {
+    "rius.request.reasoning_effort": 3,
+    "rius.request.previous_response_id": 7,
+    "rius.request.starting_after": 9
+  },
+  "non-string list on a string-array key goes to rius.request": {
+    "rius.request.stop_sequences": [1, 2],
+    "rius.request.encoding_formats": [true]
+  },
+  "non-bool on the stream flag goes to rius.request": {
+    "rius.request.stream": "yes"
+  },
+  "integer-valued double on an int key becomes an int": {
+    "gen_ai.request.max_tokens": 256
   },
   "null is not set": {},
   "string list stays a list": {
@@ -162,15 +200,29 @@
   "JSON-encoded text stays raw UTF-8 with no HTML escaping": {
     "rius.request.response_format": "{\"description\":\"café <b>日本</b> & 🙂\"}"
   },
-  "nested list is JSON-encoded": {
-    "gen_ai.request.stop_sequences": "[[\"a\"],[\"b\"]]"
+  "nested list on stop fails its guard and is JSON-encoded under rius.request": {
+    "rius.request.stop": "[[\"a\"],[\"b\"]]"
   },
   "tool definitions land on their own key": {
     "rius.request.tools": "[{\"name\":\"get_weather\",\"description\":\"SECRET\"}]",
     "rius.request.functions": "[{\"name\":\"f\"}]"
   },
-  "two spellings of one parameter: the later one wins": {
+  "two spellings of one parameter: the first one wins": {
+    "gen_ai.request.max_tokens": 100,
+    "rius.request.max_completion_tokens": 200
+  },
+  "two spellings in the reverse order: the table decides, not the caller": {
+    "gen_ai.request.max_tokens": 1,
+    "rius.request.max_completion_tokens": 200,
+    "rius.request.max_output_tokens": 300
+  },
+  "a first spelling that fails its guard leaves the key to the next": {
+    "rius.request.max_tokens": "100",
     "gen_ai.request.max_tokens": 200
+  },
+  "stop and stop_sequences together: stop wins, as in the invocation-parameters rule": {
+    "gen_ai.request.stop_sequences": ["A"],
+    "rius.request.stop_sequences": ["B"]
   },
   "prototype-chain names are caller parameters": {
     "rius.request.constructor": 1,
@@ -180,8 +232,8 @@
   "a realistic mixed request": {
     "gen_ai.request.model": "gpt-4o",
     "gen_ai.request.max_tokens": 512,
-    "gen_ai.request.top_p": 0.95,
     "gen_ai.request.choice.count": 1,
+    "gen_ai.request.top_p": 0.95,
     "gen_ai.request.stop_sequences": ["\n"],
     "gen_ai.request.reasoning.level": "low",
     "rius.request.user": "u-1",

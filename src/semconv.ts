@@ -88,6 +88,11 @@ export const GEN_AI_REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty"
 export const GEN_AI_REQUEST_SEED = "gen_ai.request.seed";
 export const GEN_AI_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences";
 export const GEN_AI_REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count";
+// Reached only through modelParameters (and so through
+// GEN_AI_REQUEST_PARAMETERS), named here because a per-key guard is keyed by them.
+export const GEN_AI_REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats";
+export const GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID = "gen_ai.request.previous_response.id";
+export const GEN_AI_REQUEST_STREAM_CURSOR = "gen_ai.request.stream_cursor";
 export const GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens";
 export const GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens";
 export const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens";
@@ -284,8 +289,15 @@ export const RIUS_REQUEST_TOOL_CHOICE = "rius.request.tool_choice";
  * consumer de-duplicate, and the point of a convention is that there is one
  * place to look.
  *
- * Kept identical to the Python SDK's table of the same name; a parity fixture
- * runs every spelling through both.
+ * ORDER IS PRECEDENCE. When a request carries two spellings of one
+ * parameter, the spelling listed first here that has a value of the right
+ * shape wins the canonical key, and the other is kept under
+ * {@link RIUS_REQUEST_PREFIX}. That is the rule the normalizer's tables follow
+ * (the first source present wins), and it does not depend on the order the
+ * caller wrote the keys in.
+ *
+ * Kept identical to the Python SDK's table of the same name, order included;
+ * a parity fixture runs every spelling through both.
  */
 export const GEN_AI_REQUEST_PARAMETERS: Readonly<Record<string, string>> = {
   // model: the request's model; also settable via the `model` option.
@@ -318,10 +330,12 @@ export const GEN_AI_REQUEST_PARAMETERS: Readonly<Record<string, string>> = {
   top_k: GEN_AI_REQUEST_TOP_K,
   topK: GEN_AI_REQUEST_TOP_K,
   k: GEN_AI_REQUEST_TOP_K,
-  // stop_sequences: OpenAI `stop`, Google `stopSequences`.
+  // stop_sequences: OpenAI `stop`, Google `stopSequences`. `stop` is listed
+  // FIRST because the llm.invocation_parameters rule prefers it, and both
+  // paths must keep the same spelling when a request carries two.
+  stop: GEN_AI_REQUEST_STOP_SEQUENCES,
   stop_sequences: GEN_AI_REQUEST_STOP_SEQUENCES,
   stopSequences: GEN_AI_REQUEST_STOP_SEQUENCES,
-  stop: GEN_AI_REQUEST_STOP_SEQUENCES,
   frequency_penalty: GEN_AI_REQUEST_FREQUENCY_PENALTY,
   frequencyPenalty: GEN_AI_REQUEST_FREQUENCY_PENALTY,
   presence_penalty: GEN_AI_REQUEST_PRESENCE_PENALTY,
@@ -329,10 +343,10 @@ export const GEN_AI_REQUEST_PARAMETERS: Readonly<Record<string, string>> = {
   // encoding_formats: plural in the registry; OpenAI's embeddings endpoint
   // sends the singular `encoding_format`, and the registry's note says some
   // systems call these "embedding types" (Cohere `embedding_types`).
-  encoding_formats: "gen_ai.request.encoding_formats",
-  encoding_format: "gen_ai.request.encoding_formats",
-  encodingFormat: "gen_ai.request.encoding_formats",
-  embedding_types: "gen_ai.request.encoding_formats",
+  encoding_formats: GEN_AI_REQUEST_ENCODING_FORMATS,
+  encoding_format: GEN_AI_REQUEST_ENCODING_FORMATS,
+  encodingFormat: GEN_AI_REQUEST_ENCODING_FORMATS,
+  embedding_types: GEN_AI_REQUEST_ENCODING_FORMATS,
   seed: GEN_AI_REQUEST_SEED,
   stream: GEN_AI_REQUEST_STREAM,
   // reasoning.level: "the exact string value sent to the provider"; OpenAI
@@ -343,15 +357,15 @@ export const GEN_AI_REQUEST_PARAMETERS: Readonly<Record<string, string>> = {
   reasoningEffort: GEN_AI_REQUEST_REASONING_LEVEL,
   // previous_response.id: the registry names OpenAI's `previous_response_id`
   // and Google's `previous_interaction_id`.
-  "previous_response.id": "gen_ai.request.previous_response.id",
-  previous_response_id: "gen_ai.request.previous_response.id",
-  previousResponseId: "gen_ai.request.previous_response.id",
-  previous_interaction_id: "gen_ai.request.previous_response.id",
+  "previous_response.id": GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+  previous_response_id: GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+  previousResponseId: GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+  previous_interaction_id: GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
   // stream_cursor: the registry names OpenAI's `starting_after` and Google's
   // `last_event_id`.
-  stream_cursor: "gen_ai.request.stream_cursor",
-  starting_after: "gen_ai.request.stream_cursor",
-  last_event_id: "gen_ai.request.stream_cursor",
+  stream_cursor: GEN_AI_REQUEST_STREAM_CURSOR,
+  starting_after: GEN_AI_REQUEST_STREAM_CURSOR,
+  last_event_id: GEN_AI_REQUEST_STREAM_CURSOR,
 };
 
 /**
