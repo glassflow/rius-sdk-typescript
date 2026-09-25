@@ -241,6 +241,7 @@ describe("the invocation-parameter bag", () => {
       ["stop", "gen_ai.request.stop_sequences"],
       ["stop_sequences", "gen_ai.request.stop_sequences"],
       ["stream", "gen_ai.request.stream"],
+      ["tool_choice", "rius.request.tool_choice"],
     ]);
   });
 
