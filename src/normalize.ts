@@ -576,15 +576,6 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     convert: copy,
     identity: true,
   },
-  // The embedding model: OpenInference's EMBEDDING spans name it here and
-  // nowhere else. A non-empty string only, like the tool name. Identity, as
-  // the request model above is, so a pending embedding span is classifiable.
-  {
-    source: "embedding.model_name",
-    target: GEN_AI_REQUEST_MODEL,
-    convert: textValue,
-    identity: true,
-  },
   { source: "llm.response.model_name", target: GEN_AI_RESPONSE_MODEL, convert: copy },
   // Tool identity. OpenInference writes the bare key only on TOOL spans (on an
   // LLM span the same name sits under llm.tools.N.tool.name instead), so the
@@ -671,6 +662,16 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // The request bag, last: the dedicated model rules above take precedence
   // over its `model` member. Identity, because what it promotes is.
   { source: LLM_INVOCATION_PARAMETERS, expand: invocationParameters, identity: true },
+  // The embedding model: OpenInference's EMBEDDING spans name it here. A
+  // non-empty string only, like the tool name. LAST, as in the Python SDK, so
+  // it only fills the key when no LLM spelling above produced one. Identity,
+  // as the request model is, so a pending embedding span is classifiable.
+  {
+    source: "embedding.model_name",
+    target: GEN_AI_REQUEST_MODEL,
+    convert: textValue,
+    identity: true,
+  },
 ];
 
 /**
@@ -1405,7 +1406,7 @@ export function promoteSystemInstruction(
  * OpenInference's embedding vectors, `embedding.embeddings.N.embedding.vector`.
  * A source spelling, inline for the reason the `llm.*` rule sources are.
  */
-const EMBEDDING_VECTOR = /^embedding\.embeddings\.[0-9]+\.embedding\.vector$/;
+const EMBEDDING_VECTOR = /^embedding\.embeddings\.([^.]+)\.embedding\.vector$/;
 
 /**
  * Drop OpenInference's embedding vectors, in place.
@@ -1415,13 +1416,18 @@ const EMBEDDING_VECTOR = /^embedding\.embeddings\.[0-9]+\.embedding\.vector$/;
  * span (a 1536-dimension vector per input, as an attribute each). So it goes
  * regardless of the capture setting. The matching `...embedding.text` keys
  * stay: they are the inputs, content by suffix, masked under
- * `captureContent: false` like every other content key. The index pattern is
- * ASCII digits only, as for the tool family.
+ * `captureContent: false` like every other content key. The index is read as
+ * the message families read theirs: an optional sign and ASCII digits, within
+ * int64 (the Python SDK's rule too).
  */
 export function dropEmbeddingVectors(attributes: Record<string, AttributeValue | undefined>): void {
-  const doomed = Object.keys(attributes).filter(
-    (key) => key.startsWith("embedding.") && EMBEDDING_VECTOR.test(key),
-  );
+  const doomed = Object.keys(attributes).filter((key) => {
+    if (!key.startsWith("embedding.")) return false;
+    const match = EMBEDDING_VECTOR.exec(key);
+    // The index as the message families read one, so every producer agrees
+    // on which keys are the family.
+    return match !== null && parseIndex(match[1] as string) !== undefined;
+  });
   for (const key of doomed) delete attributes[key];
 }
 

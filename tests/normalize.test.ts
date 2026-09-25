@@ -187,7 +187,6 @@ describe("the shipped table", () => {
       "gen_ai.operation.name",
       ["llm.provider", "gen_ai.system"],
       "llm.request.model_name",
-      "embedding.model_name",
       "llm.response.model_name",
       "tool.name",
       "llm.finish_reason",
@@ -199,6 +198,7 @@ describe("the shipped table", () => {
       "gen_ai.usage.cache_creation.input_tokens",
       "gen_ai.usage.details.reasoning_tokens",
       "llm.invocation_parameters",
+      "embedding.model_name",
     ]);
   });
 

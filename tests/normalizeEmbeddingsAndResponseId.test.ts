@@ -96,13 +96,43 @@ describe("embedding vectors", () => {
     expect(out["embedding.embeddings.1.embedding.text"]).toBe("b");
   });
 
-  it("leaves a key that is not the indexed vector family", () => {
+  it("reads the index as the message families do: a sign and ASCII digits, within int64", () => {
     const out = normalized({
-      "embedding.embeddings.x.embedding.vector": [1],
-      "embedding.embeddings.0.embedding.vector_norm": 1,
+      "embedding.embeddings.+2.embedding.vector": [1],
+      "embedding.embeddings.9223372036854775807.embedding.vector": [1],
     });
-    expect(out["embedding.embeddings.x.embedding.vector"]).toEqual([1]);
-    expect(out["embedding.embeddings.0.embedding.vector_norm"]).toBe(1);
+    expect(present(out, "embedding.embeddings.+2.embedding.vector")).toBe(false);
+    expect(present(out, "embedding.embeddings.9223372036854775807.embedding.vector")).toBe(false);
+  });
+
+  it("leaves a key that is not the indexed vector family", () => {
+    const kept = {
+      "embedding.embeddings.x.embedding.vector": [1],
+      "embedding.embeddings.-1.embedding.vector": [1],
+      "embedding.embeddings.9223372036854775808.embedding.vector": [1],
+      "embedding.embeddings.\u0661.embedding.vector": [1],
+      "embedding.embeddings.0.embedding.vector_norm": 1,
+    };
+    const out = normalized(kept);
+    for (const [key, value] of Object.entries(kept)) expect(out[key]).toEqual(value);
+  });
+
+  it("an EMBEDDING span's kind and prompt tokens map like an LLM span's", () => {
+    const out = normalized({
+      "openinference.span.kind": "EMBEDDING",
+      "llm.token_count.prompt": 2,
+    });
+    expect(out["gen_ai.operation.name"]).toBe("embeddings");
+    expect(out["gen_ai.usage.input_tokens"]).toBe(2);
+  });
+
+  it("lets a request-bag model beat embedding.model_name, which only fills a gap", () => {
+    const out = normalized({
+      "embedding.model_name": "embed-name",
+      "llm.invocation_parameters": JSON.stringify({ model: "bag-model" }),
+    });
+    expect(out[GEN_AI_REQUEST_MODEL]).toBe("bag-model");
+    expect(present(out, "embedding.model_name")).toBe(false);
   });
 
   it("masks the texts with content capture off", async () => {
@@ -260,6 +290,11 @@ describe("auto-instrumented OpenAI calls", () => {
     expect(Object.keys(attributes).filter((k) => k.endsWith(".embedding.vector"))).toEqual([]);
     expect(attributes["embedding.embeddings.0.embedding.text"]).toBe("a");
     expect(attributes["embedding.embeddings.1.embedding.text"]).toBe("b");
+    expect(attributes["gen_ai.operation.name"]).toBe("embeddings");
+    // The JS OpenAI instrumentation (4.2.x) writes no token count on an
+    // embeddings span, unlike the Python one; pinned so an upstream fix shows.
+    expect(attributes["llm.token_count.prompt"]).toBeUndefined();
+    expect(attributes["gen_ai.usage.input_tokens"]).toBeUndefined();
   });
 
   it("a chat completion carries the response id", async () => {
