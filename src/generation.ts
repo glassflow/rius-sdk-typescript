@@ -2,6 +2,7 @@ import type { AttributeValue } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import { contextSizes } from "./contextSizes.js";
 import { type Message, normalizeMessages } from "./messages.js";
+import { REQUEST_PARAMETER_GUARDS } from "./normalize.js";
 import {
   GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_INPUT_MESSAGES,
@@ -10,6 +11,7 @@ import {
   GEN_AI_OUTPUT_TYPE,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
+  GEN_AI_REQUEST_PARAMETERS,
   GEN_AI_REQUEST_REASONING_LEVEL,
   GEN_AI_REQUEST_STREAM,
   GEN_AI_RESPONSE_FINISH_REASONS,
@@ -23,6 +25,7 @@ import {
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   RIUS_CONTEXT_SIZES,
+  RIUS_REQUEST_PREFIX,
   SpanKind,
   USER_ID,
   composeSpanName,
@@ -289,14 +292,41 @@ export class Generation extends Observation {
  * (including recognised provider spellings) under their canonical
  * `gen_ai.request.*` key, everything else under `rius.request.<key>` with the
  * key otherwise untouched. `null` and `undefined` are "not set" and skipped.
- * Two spellings of one parameter collapse onto one key, and the later one in
- * the caller's object wins, as it does in the Python SDK.
+ *
+ * A canonical key carries only a value of its own type: each goes through the
+ * key's guard in {@link REQUEST_PARAMETER_GUARDS}, the same one the normalizer
+ * applies to `llm.invocation_parameters`, so a lone `stop` string becomes a
+ * one-element list and a numeric string never reaches a numeric key. A value
+ * its guard rejects was still sent to the model, so it lands under
+ * `rius.request.<key>` unchanged instead.
+ *
+ * Two spellings of one parameter: the first in {@link GEN_AI_REQUEST_PARAMETERS}
+ * order that passes its guard wins the canonical key, whatever order the
+ * caller wrote them in, and the other is kept under `rius.request.<key>`. The
+ * same rule as the Python SDK.
  */
 function requestAttributes(
   modelParameters: Record<string, unknown> | undefined,
 ): Record<string, AttributeValue> {
+  const parameters = new Map(
+    Object.entries(modelParameters ?? {}).filter(([, value]) => value != null),
+  );
   const attributes: Record<string, AttributeValue> = {};
-  for (const [key, value] of Object.entries(modelParameters ?? {})) {
+  // Canonical spellings first, in precedence order, so the winner of a
+  // collision is decided by the table and not by the caller's key order.
+  for (const [spelling, canonical] of Object.entries(GEN_AI_REQUEST_PARAMETERS)) {
+    if (!parameters.has(spelling)) continue;
+    const value = parameters.get(spelling);
+    parameters.delete(spelling);
+    const guarded = REQUEST_PARAMETER_GUARDS[canonical](value);
+    if (guarded !== undefined && !Object.hasOwn(attributes, canonical)) {
+      attributes[canonical] = guarded;
+    } else {
+      const coerced = attributeValue(value);
+      if (coerced !== undefined) attributes[`${RIUS_REQUEST_PREFIX}${spelling}`] = coerced;
+    }
+  }
+  for (const [key, value] of parameters) {
     const coerced = attributeValue(value);
     if (coerced !== undefined) attributes[requestAttributeKey(key)] = coerced;
   }

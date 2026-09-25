@@ -103,14 +103,3 @@ export function attributeValue(value: unknown): AttributeValue | undefined {
   }
   return toAttributeValue(value);
 }
-
-/**
- * `error.type` for a thrown value: the error's name, the same spelling the
- * span's own exception event uses for `exception.type`, so the two never
- * disagree on one span. A non-Error throwable has no name; its runtime type
- * is the only honest label. Never the message: the GenAI conventions want
- * this low-cardinality, and messages echo request content.
- */
-export function errorType(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
-}

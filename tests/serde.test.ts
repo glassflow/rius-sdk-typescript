@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { errorType, toAttributeValue } from "../src/serde.js";
+import { errorType } from "../src/errorType.js";
+import { toAttributeValue } from "../src/serde.js";
 
 describe("toAttributeValue", () => {
   it("passes primitives through untouched", () => {
