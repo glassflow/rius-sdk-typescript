@@ -454,4 +454,63 @@ describe("request parameters on a pending snapshot", () => {
       }
     },
   );
+
+  describe("the llm.invocation_parameters bag", () => {
+    // The bag's membership is open and provider-defined: litellm and langchain
+    // put the request's tools array in it, and nothing stops a provider adding
+    // a system prompt or customer data beside it. So the whole bag is content.
+    // Normalization runs first and lifts every member the rule table knows
+    // onto gen_ai.request.*, so what capture-off drops is exactly what nothing
+    // classified. Same cases as the Python SDK's masking tests.
+    const SENTINEL = "SENTINEL-9d1e";
+    const bag = {
+      model: "claude-sonnet-4",
+      temperature: 0.2,
+      tools: [{ name: "refund", description: `${SENTINEL} never above $500` }],
+      system: `${SENTINEL} our margin floor is 12%`,
+      extra_body: { customer_tier: `${SENTINEL} enterprise-gold` },
+    };
+
+    async function runWithBag(options: { captureContent?: boolean }) {
+      const exporter = new Capture();
+      client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false, ...options });
+      trace
+        .getTracer("openinference-like")
+        .startSpan("ChatCompletion", {
+          attributes: {
+            "openinference.span.kind": "LLM",
+            "llm.invocation_parameters": JSON.stringify(bag),
+          },
+        })
+        .end();
+      await client.flush();
+      return split(exporter.spans);
+    }
+
+    it("reaches neither the snapshot nor the final span under captureContent: false", async () => {
+      const { pending, final } = await runWithBag({ captureContent: false });
+      for (const span of [pending, final]) {
+        expect(span.attributes["llm.invocation_parameters"]).toBeUndefined();
+        expect(JSON.stringify(span.attributes)).not.toContain(SENTINEL);
+        expect(JSON.stringify(span.attributes)).not.toContain("refund");
+      }
+      // The members the rule table recognises were promoted before masking
+      // saw the bag, and they are request parameters, not content.
+      expect(final.attributes["gen_ai.request.model"]).toBe("claude-sonnet-4");
+      expect(final.attributes["gen_ai.request.temperature"]).toBe(0.2);
+      expect(pending.attributes["gen_ai.request.model"]).toBe("claude-sonnet-4");
+      expect(pending.attributes["gen_ai.request.temperature"]).toBe(0.2);
+    });
+
+    it("is unchanged with content captured (the sentinel test is live)", async () => {
+      const { pending, final } = await runWithBag({});
+      const { model: _model, temperature: _temperature, ...leftover } = bag;
+      expect(final.attributes["llm.invocation_parameters"]).toBe(JSON.stringify(leftover));
+      expect(final.attributes["gen_ai.request.model"]).toBe("claude-sonnet-4");
+      expect(final.attributes["gen_ai.request.temperature"]).toBe(0.2);
+      // A snapshot never carries the bag: it is not on the identity allowlist.
+      expect(pending.attributes["llm.invocation_parameters"]).toBeUndefined();
+      expect(JSON.stringify(pending.attributes)).not.toContain(SENTINEL);
+    });
+  });
 });
