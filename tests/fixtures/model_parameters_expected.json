@@ -151,20 +151,23 @@
     "rius.request.empty": []
   },
   "bool is not a number in a list": {
-    "rius.request.mixed_bool_int": "[true, 1]"
+    "rius.request.mixed_bool_int": "[true,1]"
   },
   "heterogeneous list is JSON-encoded": {
-    "rius.request.mixed": "[1, \"a\"]"
+    "rius.request.mixed": "[1,\"a\"]"
   },
   "nested object is JSON-encoded": {
-    "rius.request.response_format": "{\"type\": \"json_object\"}"
+    "rius.request.response_format": "{\"type\":\"json_object\"}"
+  },
+  "JSON-encoded text stays raw UTF-8 with no HTML escaping": {
+    "rius.request.response_format": "{\"description\":\"café <b>日本</b> & 🙂\"}"
   },
   "nested list is JSON-encoded": {
-    "gen_ai.request.stop_sequences": "[[\"a\"], [\"b\"]]"
+    "gen_ai.request.stop_sequences": "[[\"a\"],[\"b\"]]"
   },
   "tool definitions land on their own key": {
-    "rius.request.tools": "[{\"name\": \"get_weather\", \"description\": \"SECRET\"}]",
-    "rius.request.functions": "[{\"name\": \"f\"}]"
+    "rius.request.tools": "[{\"name\":\"get_weather\",\"description\":\"SECRET\"}]",
+    "rius.request.functions": "[{\"name\":\"f\"}]"
   },
   "two spellings of one parameter: the later one wins": {
     "gen_ai.request.max_tokens": 200
