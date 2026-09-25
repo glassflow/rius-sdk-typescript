@@ -109,7 +109,8 @@ describeV7("the vercel-ai entry on ai v7", () => {
     // included — richer than the v5 ai.* path ever was.
     expect(String(llm?.["gen_ai.tool.definitions"])).toContain("get_weather");
     expect(llm?.["gen_ai.usage.input_tokens"]).toBe(5);
-    // The transform processor still runs, so OpenInference taxonomy rides along.
+    // The OpenInference taxonomy rides along, derived by the normalizer from
+    // gen_ai.operation.name: the Vercel transform skips these GenAI-native spans.
     expect(llm?.["openinference.span.kind"]).toBe("LLM");
 
     const agent = attributesOf((a) => a["gen_ai.operation.name"] === "invoke_agent");

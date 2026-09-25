@@ -69,6 +69,8 @@ async function withEntry(entry: RegistryEntry, body: () => Promise<void>): Promi
 /** Attributes as the Vercel AI SDK sets them on a generateText span. */
 const VERCEL_SPAN_ATTRIBUTES = {
   "operation.name": "ai.generateText.doGenerate",
+  // The attribute the transform is gated on: every v5/v6 span carries it.
+  "ai.operationId": "ai.generateText.doGenerate",
   "ai.model.id": "gpt-4o-mini",
   "ai.model.provider": "openai",
   "ai.prompt": JSON.stringify({ prompt: "what is 2+2" }),
