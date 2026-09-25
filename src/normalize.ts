@@ -312,11 +312,21 @@ function asTextList(value: unknown): AttributeValue | undefined {
 /** A UTF-16 surrogate with no partner. */
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
-/** One JSON string literal, escaped as the sink's Go encoder escapes it. */
+/** `text` with every unpaired surrogate replaced by U+FFFD, as Go's encoder does. */
+function wellFormed(text: string): string {
+  return text.replace(LONE_SURROGATE, "\ufffd");
+}
+
+/**
+ * One JSON string literal in the encoding the sink shares with this SDK and
+ * the Python one (the sink's `jsonenc`): raw UTF-8, no HTML escaping, U+2028
+ * and U+2029 left RAW, an unpaired surrogate replaced with U+FFFD. Everything
+ * else is `JSON.stringify`'s escaping, which already agrees: the short escapes
+ * (`\b \f \n \r \t`), `\u00XX` for the other control characters, and `/`
+ * unescaped.
+ */
 function jsonString(text: string): string {
-  return JSON.stringify(text.replace(LONE_SURROGATE, "\ufffd"))
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
+  return JSON.stringify(wellFormed(text));
 }
 
 /**
@@ -325,9 +335,14 @@ function jsonString(text: string): string {
  * Written out rather than left to `JSON.stringify`, because the result is
  * matched byte for byte: the sink promotes the same member from the same bag
  * and the Python SDK writes the same string. `JSON.stringify` alone would
- * leave U+2028/U+2029 raw and escape an unpaired surrogate, where Go's
- * encoder escapes the first two and replaces the third with U+FFFD, in keys
- * as well as values.
+ * escape an unpaired surrogate as `\udXXX` text, where the sink replaces it
+ * with U+FFFD, in keys as well as values.
+ *
+ * Known, accepted divergence, shared with the Python SDK: numbers are
+ * re-spelled from the parsed value (`1e2` becomes `100`, `-0` becomes `0`)
+ * where the sink keeps the literal, and a duplicate member name keeps only
+ * its last value. No provider sends numeric or duplicated `tool_choice`
+ * members.
  */
 function compactJson(value: unknown): string {
   if (typeof value === "string") return jsonString(value);
@@ -348,7 +363,10 @@ function asToolChoice(value: unknown): AttributeValue | undefined {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     return compactJson(value);
   }
-  return asText(value);
+  // A mode is written as the attribute itself, not as JSON, so it gets the
+  // same U+FFFD replacement the object path applies; a lone surrogate would
+  // otherwise leave the SDK as the sink never writes it.
+  return typeof value === "string" ? asText(wellFormed(value)) : undefined;
 }
 
 /**
@@ -1292,31 +1310,20 @@ export function normalizeToolDefinitions(
 }
 
 /**
- * One JSON string literal in the MESSAGE encoding the sink shares with the
- * reassembly fixture: raw UTF-8, no HTML escaping, U+2028/U+2029 left RAW (the
- * sink's shared encoder unescapes them), an unpaired surrogate replaced with
- * U+FFFD as Go's encoder does. Unlike {@link jsonString}, which the
- * `tool_choice` promotion's own shared fixture pins to the escaped form.
- */
-function messageJsonString(text: string): string {
-  return JSON.stringify(text.replace(LONE_SURROGATE, "\ufffd"));
-}
-
-/**
  * `value` (parsed JSON) as compact JSON with object keys sorted by code point
- * at every depth, strings in the message encoding ({@link messageJsonString}).
+ * at every depth, strings as {@link jsonString} writes them.
  * That is byte for byte what the sink's shared encoder writes for a decoded
  * `map[string]any`, whose keys Go always sorts, so the two producers agree on
  * a block neither of them can type.
  */
 function sortedCompactJson(value: unknown): string {
-  if (typeof value === "string") return messageJsonString(value);
+  if (typeof value === "string") return jsonString(value);
   if (Array.isArray(value)) return `[${value.map(sortedCompactJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
     const members = Object.keys(record)
       .sort(byCodePoint)
-      .map((k) => `${messageJsonString(k)}:${sortedCompactJson(record[k])}`);
+      .map((k) => `${jsonString(k)}:${sortedCompactJson(record[k])}`);
     return `{${members.join(",")}}`;
   }
   return JSON.stringify(value);
