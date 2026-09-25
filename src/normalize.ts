@@ -353,9 +353,9 @@ export const REQUEST_PARAMETER_GUARDS: Readonly<
  * The leftover members go back under `llm.invocation_parameters`, and that is
  * deliberate rather than a half-measure. The bag's membership is open and
  * provider-defined: the litellm and langchain instrumentations leave the
- * request's `tools` / `functions` arrays in it, which is why masking redacts
- * those members THERE. Fanning unknown members out into keys of our own would
- * move content out from under that redaction and past `captureContent: false`.
+ * request's `tools` / `functions` arrays in it, which is why the whole bag is
+ * content (semconv.ts). Fanning unknown members out into keys of our own would
+ * move content out from under that and past `captureContent: false`.
  * So a member is promoted only when a canonical key represents it totally,
  * and the bag survives to carry everything else.
  *
