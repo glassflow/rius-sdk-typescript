@@ -96,20 +96,18 @@ describe("embedding vectors", () => {
     expect(out["embedding.embeddings.1.embedding.text"]).toBe("b");
   });
 
-  it("reads the index as the message families do: a sign and ASCII digits, within int64", () => {
+  it("reads the index as ASCII digits, with no bound", () => {
     const out = normalized({
-      "embedding.embeddings.+2.embedding.vector": [1],
-      "embedding.embeddings.9223372036854775807.embedding.vector": [1],
+      "embedding.embeddings.9223372036854775808.embedding.vector": [1],
     });
-    expect(present(out, "embedding.embeddings.+2.embedding.vector")).toBe(false);
-    expect(present(out, "embedding.embeddings.9223372036854775807.embedding.vector")).toBe(false);
+    expect(present(out, "embedding.embeddings.9223372036854775808.embedding.vector")).toBe(false);
   });
 
   it("leaves a key that is not the indexed vector family", () => {
     const kept = {
       "embedding.embeddings.x.embedding.vector": [1],
       "embedding.embeddings.-1.embedding.vector": [1],
-      "embedding.embeddings.9223372036854775808.embedding.vector": [1],
+      "embedding.embeddings.+2.embedding.vector": [1],
       "embedding.embeddings.\u0661.embedding.vector": [1],
       "embedding.embeddings.0.embedding.vector_norm": 1,
     };

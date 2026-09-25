@@ -1406,7 +1406,7 @@ export function promoteSystemInstruction(
  * OpenInference's embedding vectors, `embedding.embeddings.N.embedding.vector`.
  * A source spelling, inline for the reason the `llm.*` rule sources are.
  */
-const EMBEDDING_VECTOR = /^embedding\.embeddings\.([^.]+)\.embedding\.vector$/;
+const EMBEDDING_VECTOR = /^embedding\.embeddings\.[0-9]+\.embedding\.vector$/;
 
 /**
  * Drop OpenInference's embedding vectors, in place.
@@ -1416,18 +1416,13 @@ const EMBEDDING_VECTOR = /^embedding\.embeddings\.([^.]+)\.embedding\.vector$/;
  * span (a 1536-dimension vector per input, as an attribute each). So it goes
  * regardless of the capture setting. The matching `...embedding.text` keys
  * stay: they are the inputs, content by suffix, masked under
- * `captureContent: false` like every other content key. The index is read as
- * the message families read theirs: an optional sign and ASCII digits, within
- * int64 (the Python SDK's rule too).
+ * `captureContent: false` like every other content key. The index is ASCII
+ * digits only, with no sign and no bound, as in the Python SDK.
  */
 export function dropEmbeddingVectors(attributes: Record<string, AttributeValue | undefined>): void {
-  const doomed = Object.keys(attributes).filter((key) => {
-    if (!key.startsWith("embedding.")) return false;
-    const match = EMBEDDING_VECTOR.exec(key);
-    // The index as the message families read one, so every producer agrees
-    // on which keys are the family.
-    return match !== null && parseIndex(match[1] as string) !== undefined;
-  });
+  const doomed = Object.keys(attributes).filter(
+    (key) => key.startsWith("embedding.") && EMBEDDING_VECTOR.test(key),
+  );
   for (const key of doomed) delete attributes[key];
 }
 
