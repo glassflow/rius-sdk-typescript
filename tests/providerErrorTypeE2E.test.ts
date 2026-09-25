@@ -103,7 +103,7 @@ describe("a provider 404", () => {
     }
   });
 
-  it("names openai.NotFoundError on the agent root, not the body's error code", async () => {
+  it("names openai.NotFoundError on the auto-instrumented span and the agent root, not the body's error code", async () => {
     const server = await notFoundServer({
       error: { message: "no such model", type: "invalid_request_error", code: "model_not_found" },
     });
@@ -119,12 +119,13 @@ describe("a provider 404", () => {
           messages: [{ role: "user", content: "hi" }],
         }),
       );
-      // OpenInference's OpenAI instrumentation (4.2.1) ends its span only on
-      // success or a synchronous throw: a rejected call leaves it open, so a
-      // failed call exports no LLM span at all. Pinned so a fix upstream
-      // fails this line and the span gets the assertions the Anthropic case has.
+      // The instrumentation alone leaves a rejected call's span open; the
+      // SDK's guard ends it (see withRejectedCallsEnded), so the span gets the
+      // same assertions as the Anthropic case.
       const llm = spans.find((s) => s.attributes["openinference.span.kind"] === "LLM");
-      expect(llm).toBeUndefined();
+      expect(llm).toBeDefined();
+      expect(llm?.attributes["error.type"]).toBe("openai.NotFoundError");
+      expect(exceptionType(llm)).toBe("openai.NotFoundError");
       const root = spans.find((s) => s.name === "agent");
       expect(root?.attributes["error.type"]).toBe("openai.NotFoundError");
       expect(exceptionType(root)).toBe("openai.NotFoundError");

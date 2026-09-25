@@ -1,6 +1,12 @@
 import { createRequire } from "node:module";
 import { join, sep } from "node:path";
-import type { TracerProvider } from "@opentelemetry/api";
+import {
+  type Exception,
+  type Span,
+  SpanStatusCode,
+  type TracerProvider,
+  trace,
+} from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { McpClientLike } from "./instrumentationMcp.js";
@@ -277,6 +283,155 @@ export function anthropicPatchable(exports: Record<string, unknown>): object | u
 }
 
 /**
+ * The OpenAI methods the OpenInference instrumentation wraps, as paths from
+ * the `OpenAI` class to the resource whose prototype carries `create`.
+ * `Responses` is absent from older provider builds and skipped there, as the
+ * instrumentation itself does.
+ */
+const OPENAI_INSTRUMENTED_RESOURCES: readonly (readonly string[])[] = [
+  ["Chat", "Completions"],
+  ["Completions"],
+  ["Embeddings"],
+  ["Responses"],
+];
+
+/** Marks a guard wrapper and remembers the method it wraps. */
+const GUARDED_ORIGINAL = Symbol("rius.openai.guardedOriginal");
+
+type Method = ((...args: unknown[]) => unknown) & { [GUARDED_ORIGINAL]?: Method };
+
+function openaiPrototypes(moduleExports: unknown): Array<Record<string, unknown>> {
+  const cls = (moduleExports as { OpenAI?: unknown } | undefined)?.OpenAI;
+  const prototypes: Array<Record<string, unknown>> = [];
+  for (const path of OPENAI_INSTRUMENTED_RESOURCES) {
+    let resource: unknown = cls;
+    for (const segment of path) {
+      resource = (resource as Record<string, unknown> | undefined)?.[segment];
+    }
+    const proto = (resource as { prototype?: Record<string, unknown> } | undefined)?.prototype;
+    if (typeof proto?.create === "function") prototypes.push(proto);
+  }
+  return prototypes;
+}
+
+/**
+ * The promise that settles when the HTTP exchange does, WITHOUT parsing the
+ * body. The provider's `APIPromise` parses lazily on its first `then`. When the
+ * instrumentation recognises it as the `APIPromise` class it imported itself
+ * (the app uses the same build, as an ESM app does), it chains through
+ * `_thenUnwrap`, which parses AGAIN from the raw response, so observing the
+ * `APIPromise` itself would read the body twice and fail every successful
+ * call. `responsePromise` rejects with the provider's status error
+ * (404, 429, 500 …), a connection error, a timeout or an abort. A plain promise
+ * (a build without `APIPromise`) has no lazy parse and is observed as is.
+ */
+function settlementOf(result: unknown): PromiseLike<unknown> | undefined {
+  const raw = (result as { responsePromise?: unknown } | null | undefined)?.responsePromise;
+  if (typeof (raw as PromiseLike<unknown> | undefined)?.then === "function") {
+    return raw as PromiseLike<unknown>;
+  }
+  return result instanceof Promise ? result : undefined;
+}
+
+/** Ends `span` the way the instrumentation ends it on a synchronous throw. */
+function failSpan(span: Span, error: unknown): void {
+  // The instrumentation may have ended it already (a throw it did handle).
+  if (!span.isRecording()) return;
+  span.recordException(error instanceof Error ? error : (String(error) as Exception));
+  span.setStatus({
+    code: SpanStatusCode.ERROR,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  span.end();
+}
+
+/**
+ * Wrap one provider method BENEATH the instrumentation's own patch, so the
+ * instrumentation's wrapper calls this one as its `original`. It runs inside
+ * the instrumentation's `context.with(trace.setSpan(..., span))`, which makes
+ * the active span the instrumentation's LLM span, not the caller's. On a
+ * rejection it ends that span as the instrumentation would have. The value
+ * returned to the instrumentation, and through it to the caller, is the
+ * provider's own, unchanged.
+ */
+function guardRejections(original: Method): Method {
+  const guarded: Method = function (this: unknown, ...args: unknown[]): unknown {
+    const span = trace.getActiveSpan();
+    const result = original.apply(this, args);
+    if (span?.isRecording()) {
+      // A derived promise that always settles fulfilled, so observing the
+      // rejection never produces an unhandled one of its own; the caller's
+      // promise still rejects exactly as before.
+      settlementOf(result)?.then(undefined, (error: unknown) => failSpan(span, error));
+    }
+    return result;
+  };
+  guarded[GUARDED_ORIGINAL] = original;
+  return guarded;
+}
+
+interface PatchingInstrumentation extends ManuallyInstrumentable {
+  patch(moduleExports: unknown, moduleVersion?: string): unknown;
+  unpatch(moduleExports: unknown, moduleVersion?: string): void;
+}
+
+/**
+ * The OpenInference OpenAI instrumentation, with its rejected calls ended.
+ *
+ * `@arizeai/openinference-instrumentation-openai` (4.2.1 through 4.2.7) ends
+ * its span when `create` resolves or throws synchronously, and nowhere else:
+ * `invokeMaybeAPIPromise` passes only an `onfulfilled` handler. A call the
+ * provider REJECTS — a 404 for an unknown model, a 429, a timeout — leaves the
+ * span open forever, so it is never exported and the trace shows the parent
+ * alone, status Ok. The Python instrumentation records the same call as an
+ * ERROR span.
+ *
+ * The subclass overrides `patch`, the one method both the instrumentation's
+ * require hook and `manuallyInstrument` go through, so every build it patches
+ * gets the guard, the CJS copy a later require brings in included. The guard
+ * is installed just before the instrumentation wraps the method and taken off
+ * again if it declined to (a module it had already patched), so it only ever
+ * sits directly beneath the instrumentation's wrapper. `unpatch` restores the
+ * provider's own method once the instrumentation has unwrapped its layer. It
+ * does not unwrap `Responses` (an upstream omission), so there the guard stays
+ * beneath the instrumentation's leftover wrapper, where it still only ever sees
+ * that wrapper's span.
+ *
+ * Remove once upstream ends the span on rejection.
+ */
+function withRejectedCallsEnded(
+  Base: new () => PatchingInstrumentation,
+): new () => PatchingInstrumentation {
+  return class extends Base {
+    patch(moduleExports: unknown, moduleVersion?: string): unknown {
+      const installed: Array<[Record<string, unknown>, Method]> = [];
+      for (const proto of openaiPrototypes(moduleExports)) {
+        const create = proto.create as Method;
+        if (create[GUARDED_ORIGINAL] !== undefined) continue;
+        const guarded = guardRejections(create);
+        proto.create = guarded;
+        installed.push([proto, guarded]);
+      }
+      const patched = super.patch(moduleExports, moduleVersion);
+      // Still on top means the instrumentation did not wrap it: take the guard
+      // off, or it would see the CALLER's span as active.
+      for (const [proto, guarded] of installed) {
+        if (proto.create === guarded) proto.create = guarded[GUARDED_ORIGINAL];
+      }
+      return patched;
+    }
+
+    unpatch(moduleExports: unknown, moduleVersion?: string): void {
+      super.unpatch(moduleExports, moduleVersion);
+      for (const proto of openaiPrototypes(moduleExports)) {
+        const original = (proto.create as Method)[GUARDED_ORIGINAL];
+        if (original !== undefined) proto.create = original;
+      }
+    }
+  };
+}
+
+/**
  * Shape test for the MCP SDK's client module: picks the exports carrying a
  * `Client` whose prototype has the `callTool` this SDK wraps, so
  * `cachedCjsExports` cannot mistake an internal file for the client module.
@@ -435,9 +590,11 @@ export const REGISTRY: RegistryEntry[] = [
     kind: "instrumentation",
     async load() {
       const mod = await optional("@arizeai/openinference-instrumentation-openai");
-      const Ctor = mod?.OpenAIInstrumentation as (new () => ManuallyInstrumentable) | undefined;
+      const Ctor = mod?.OpenAIInstrumentation as (new () => PatchingInstrumentation) | undefined;
       if (Ctor === undefined) return undefined;
-      const instrumentation = new Ctor();
+      // Subclassed so a rejected call still ends its span; see
+      // withRejectedCallsEnded.
+      const instrumentation = new (withRejectedCallsEnded(Ctor))();
       // The require hook registered by enableInstrumentations only covers CJS
       // consumers, and only for requires that happen after init(). Patch the
       // build in use directly so ESM apps and require-before-init both work.
