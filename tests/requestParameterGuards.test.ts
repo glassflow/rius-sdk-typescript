@@ -149,7 +149,13 @@ describe("the native path and the invocation-parameters rule share one table", (
   });
 
   it("uses the same guard in the invocation-parameters rule", () => {
-    for (const [member, target, convert] of INVOCATION_PARAMETER_MEMBERS) {
+    // Only canonical targets have a native counterpart; a member promoted to
+    // rius.request.* (tool_choice) has no gen_ai.request.* key to agree with.
+    const canonical = INVOCATION_PARAMETER_MEMBERS.filter(([, target]) =>
+      target.startsWith(GEN_AI_REQUEST_PREFIX),
+    );
+    expect(canonical.length).toBeGreaterThan(0);
+    for (const [member, target, convert] of canonical) {
       expect(convert, member).toBe(REQUEST_PARAMETER_GUARDS[target]);
     }
   });
