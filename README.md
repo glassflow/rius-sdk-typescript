@@ -499,6 +499,27 @@ Batching is tunable via the standard OpenTelemetry env vars:
 `OTEL_BSP_SCHEDULE_DELAY` (default 5000 ms), `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`
 (default 512), and `OTEL_BSP_EXPORT_TIMEOUT` (default 30000 ms).
 
+### Span attribute limit
+
+OpenTelemetry caps a span at 128 attributes by default, and a span that
+reaches the cap silently refuses every new key. OpenInference writes one
+attribute per message field and per tool field, so an agent loop with ten
+tools passes 128 after about nine turns, and the keys written last are
+the ones that matter most: the token usage (so cost), the output messages,
+`output.value` and the finish reason.
+
+`init()` therefore raises the span attribute count limit to 4096. The
+standard variables still win: if `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` or
+`OTEL_ATTRIBUTE_COUNT_LIMIT` is set to a number, `init()` leaves the limit
+to OpenTelemetry, which applies that value. The attribute value-length
+limit is not changed.
+
+If you run the OpenInference instrumentations **without** this SDK, on a
+tracer provider of your own, set the limit yourself, for example
+`OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT=4096`, or pass
+`spanLimits: { attributeCountLimit: 4096 }` to your provider. Otherwise
+long agent calls lose their usage and output.
+
 ## Development
 
 ```bash

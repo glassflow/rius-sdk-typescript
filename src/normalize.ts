@@ -717,11 +717,20 @@ function sourcePrefixes(rules: readonly NormalizationRule[]): readonly string[] 
  *   survive untouched — dropping them would lose the only copy.
  * - Everything else is left exactly as it was found.
  */
+/**
+ * Source keys a rule consumed, and the canonical keys that now carry them. The
+ * sources may be deleted only once every target is actually on the span.
+ */
+interface Consumption {
+  readonly sources: readonly string[];
+  readonly targets: readonly string[];
+}
+
 function applyRules(
   attributes: Record<string, AttributeValue | undefined>,
   rules: readonly NormalizationRule[],
-): { mapped: string[]; rewritten: string[] } {
-  const mapped: string[] = [];
+): { mapped: Consumption[]; rewritten: string[] } {
+  const mapped: Consumption[] = [];
   const rewritten: string[] = [];
   for (const rule of rules) {
     const keys = sourceKeys(rule);
@@ -747,18 +756,22 @@ function applyRules(
         if (ownSource) rewritten.push(key);
       }
       // The source is deleted only when the expansion did not keep it.
-      if (expansion[rule.source] === undefined) mapped.push(rule.source);
+      if (expansion[rule.source] === undefined) {
+        const targets = Object.keys(expansion).filter((key) => expansion[key] !== undefined);
+        mapped.push({ sources: [rule.source], targets });
+      }
       continue;
     }
 
     if (attributes[rule.target] !== undefined) {
-      mapped.push(...present); // native wins; the dialect still goes
+      // Native wins; the dialect still goes.
+      mapped.push({ sources: present, targets: [rule.target] });
       continue;
     }
     const value = rule.convert(present.map((key) => attributes[key] as AttributeValue));
     if (value === undefined) continue;
     attributes[rule.target] = value;
-    mapped.push(...present);
+    mapped.push({ sources: present, targets: [rule.target] });
   }
   return { mapped, rewritten };
 }
@@ -1365,7 +1378,17 @@ export class NormalizingSpanProcessor implements SpanProcessor {
         write(key, staged[key] as AttributeValue);
       }
     }
-    for (const key of mapped) delete bag[key];
+    // A source goes only when everything it was mapped to LANDED. At onStart
+    // the write is the span's setAttribute, which a span already at its
+    // attribute count limit refuses without a word; deleting the source then
+    // would lose the fact outright (how `llm.provider` vanished from wide
+    // OpenInference spans). Kept, it rides to onEnd, where the bag is written
+    // directly and the same rule maps it.
+    for (const { sources, targets } of mapped) {
+      if (targets.every((key) => bag[key] !== undefined)) {
+        for (const key of sources) delete bag[key];
+      }
+    }
   }
 
   async forceFlush(): Promise<void> {}
