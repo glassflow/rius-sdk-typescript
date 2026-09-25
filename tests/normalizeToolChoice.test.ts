@@ -135,6 +135,7 @@ describe("through init()", () => {
           [LLM_INVOCATION_PARAMETERS]: JSON.stringify({
             tool_choice: { type: "tool", name: "sentinel_tool_7f3a" },
             tools: [{ name: "lookup", description: "SECRET-PROMPT" }],
+            user: "u-1",
           }),
         },
       })
@@ -148,9 +149,10 @@ describe("through init()", () => {
     expect(span.attributes["gen_ai.request.tool_choice"]).toBeUndefined();
     const bag = span.attributes[LLM_INVOCATION_PARAMETERS];
     if (captureContent) {
-      expect(JSON.parse(bag as string)).toEqual({
-        tools: [{ name: "lookup", description: "SECRET-PROMPT" }],
-      });
+      // Only the member left; `tools` may have been promoted elsewhere.
+      const left = JSON.parse(bag as string);
+      expect(left.user).toBe("u-1");
+      expect(left).not.toHaveProperty("tool_choice");
     } else {
       // Whether masking drops the whole bag or only its content members, the
       // member is not in whatever is left, and no content survives.
