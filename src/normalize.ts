@@ -1442,6 +1442,10 @@ export function dropEmbeddingVectors(attributes: Record<string, AttributeValue |
  * - the span is an LLM span (`openinference.span.kind` is LLM, which the
  *   taxonomy rules also derive from a GenAI operation name);
  * - it has no native `gen_ai.response.id`;
+ * - `output.mime_type`, when present, is `application/json`. The JS
+ *   instrumentors write a stream's accumulated reply TEXT as `output.value`
+ *   (mime `text/plain`), and a JSON-mode reply may well be an object with an
+ *   `id` of the model's making, which must not pass for the response's;
  * - `output.value` is a string whose FIRST character is `{`, checked before
  *   parsing so a plain-text output costs no parse, that parses as a JSON
  *   object with a non-empty string top-level `id`.
@@ -1455,6 +1459,12 @@ export function responseIdFromOutput(
 ): Record<string, AttributeValue> {
   if (attributes[OPENINFERENCE_SPAN_KIND] !== SpanKind.LLM) return {};
   if (attributes[GEN_AI_RESPONSE_ID] !== undefined) return {};
+  // Declared anything but JSON, the output is the model's own words: the JS
+  // instrumentors record a stream's accumulated reply as text/plain, and a
+  // JSON-mode reply's "id" is the model's, not the response's. Undeclared is
+  // taken, as the contract has it. A source spelling, inline.
+  const mime = attributes["output.mime_type"];
+  if (mime !== undefined && mime !== "application/json") return {};
   const output = attributes[OUTPUT_VALUE];
   if (typeof output !== "string" || !output.startsWith("{")) return {};
   let payload: unknown;

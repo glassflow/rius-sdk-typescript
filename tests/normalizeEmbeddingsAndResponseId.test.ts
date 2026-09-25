@@ -172,6 +172,25 @@ describe("gen_ai.response.id from output.value", () => {
     expect(out[GEN_AI_RESPONSE_ID]).toBe("chatcmpl-42");
   });
 
+  it("is taken from output declared JSON, or undeclared", () => {
+    for (const mime of ["application/json", undefined]) {
+      const input: Attributes = { "openinference.span.kind": "LLM", [OUTPUT_VALUE]: body };
+      if (mime !== undefined) input["output.mime_type"] = mime;
+      expect(normalized(input)[GEN_AI_RESPONSE_ID]).toBe("chatcmpl-42");
+    }
+  });
+
+  it("is not taken from output declared plain text, the model's own words", () => {
+    // A streamed reply in JSON mode: the JS instrumentors record the
+    // accumulated TEXT, which may be a JSON object with an id of its own.
+    const out = normalized({
+      "openinference.span.kind": "LLM",
+      [OUTPUT_VALUE]: '{"id":"user-123","name":"Ada"}',
+      "output.mime_type": "text/plain",
+    });
+    expect(present(out, GEN_AI_RESPONSE_ID)).toBe(false);
+  });
+
   it("never overrides a native id", () => {
     const out = normalized({
       "openinference.span.kind": "LLM",
@@ -248,14 +267,33 @@ const EMBEDDINGS = {
   usage: { prompt_tokens: 2, total_tokens: 2 },
 };
 
+let streamReply = "";
 let server: { url: string; close: () => void };
 let exporter: InMemorySpanExporter;
 let client: RiusClient;
 
 beforeAll(async () => {
   const s = http.createServer((request, response) => {
-    request.resume();
+    let raw = "";
+    request.on("data", (chunk) => {
+      raw += chunk;
+    });
     request.on("end", () => {
+      if (JSON.parse(raw || "{}").stream === true) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const chunk = (delta: unknown, finish: string | null) =>
+          `data: ${JSON.stringify({
+            id: "chatcmpl-stream",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "gpt-4o-2024-08-06",
+            choices: [{ index: 0, delta, finish_reason: finish }],
+          })}\n\n`;
+        response.end(
+          `${chunk({ role: "assistant", content: streamReply }, null)}${chunk({}, "stop")}data: [DONE]\n\n`,
+        );
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(request.url?.endsWith("/embeddings") ? EMBEDDINGS : COMPLETION));
     });
@@ -309,5 +347,32 @@ describe("auto-instrumented OpenAI calls", () => {
       .getFinishedSpans()
       .find((s) => s.attributes["openinference.span.kind"] === "LLM");
     expect(span?.attributes[GEN_AI_RESPONSE_ID]).toBe("chatcmpl-e2e");
+  });
+
+  it("a streamed chat completion carries no id: its output.value is the reply text", async () => {
+    // Recorded behaviour of the JS instrumentor (4.2.x), which differs from
+    // Python's: a stream's output.value is the accumulated content as
+    // text/plain, not the serialized completion, so there is no id to take.
+    // The reply here is a JSON object with an id, which must not be mistaken
+    // for the response's.
+    exporter.reset();
+    streamReply = '{"id":"user-123"}';
+    const openai = new OpenAI({ apiKey: "k", baseURL: server.url, maxRetries: 0 });
+    const stream = (await openai.chat.completions.create({
+      model: "gpt-4o",
+      stream: true,
+      messages: [{ role: "user", content: "hi" }],
+    })) as AsyncIterable<unknown>;
+    for await (const _chunk of stream) {
+      // drain
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await client.flush();
+    const span = exporter
+      .getFinishedSpans()
+      .find((s) => s.attributes["openinference.span.kind"] === "LLM");
+    expect(span?.attributes[OUTPUT_VALUE]).toBe('{"id":"user-123"}');
+    expect(span?.attributes["output.mime_type"]).toBe("text/plain");
+    expect(span?.attributes[GEN_AI_RESPONSE_ID]).toBeUndefined();
   });
 });
