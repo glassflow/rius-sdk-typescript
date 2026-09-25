@@ -7,6 +7,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it, vi } from "vitest";
 import { REGISTRY, enableInstrumentations } from "../src/instrumentation.js";
+import { reassembleOpenInferenceMessages } from "../src/normalize.js";
 
 // The Anthropic and LangChain entries are asserted end to end against the real
 // packages rather than a stand-in: an entry that loads but instruments nothing
@@ -114,6 +115,16 @@ describe("the anthropic entry", () => {
     expect(attributes["llm.model_name"]).toBe("claude-test");
     expect(attributes["llm.input_messages.0.message.content"]).toBe("what is 2+2");
     expect(attributes["llm.output_messages.0.message.contents.0.message_content.text"]).toBe("4");
+    // The reply's text is ONLY in the multi-part contents form, which is why
+    // reassembly must read it: an Anthropic reply otherwise lands with no parts.
+    const reassembled = { ...attributes };
+    reassembleOpenInferenceMessages(reassembled);
+    expect(reassembled["gen_ai.output.messages"]).toBe(
+      '[{"role":"assistant","parts":[{"type":"text","content":"4"}]}]',
+    );
+    expect(reassembled["gen_ai.input.messages"]).toBe(
+      '[{"role":"user","parts":[{"type":"text","content":"what is 2+2"}]}]',
+    );
     expect(attributes["llm.token_count.prompt"]).toBe(5);
     // Tool-definition contract: the backend's context attribution reads the
     // request's tool definitions from the indexed llm.tools family.

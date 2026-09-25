@@ -11,7 +11,9 @@ import {
   EXCEPTION_EVENT,
   EXCEPTION_TYPE,
   GEN_AI_FIRST_TOKEN_EVENT,
+  GEN_AI_INPUT_MESSAGES,
   GEN_AI_OPERATION_NAME,
+  GEN_AI_OUTPUT_MESSAGES,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_CHOICE_COUNT,
   GEN_AI_REQUEST_ENCODING_FORMATS,
@@ -39,7 +41,19 @@ import {
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   INVOCATION_PARAMETERS_CONTENT_MEMBERS,
+  LLM_INPUT_MESSAGES_PREFIX,
   LLM_INVOCATION_PARAMETERS,
+  LLM_MESSAGE_CONTENT,
+  LLM_MESSAGE_CONTENTS_PREFIX,
+  LLM_MESSAGE_CONTENT_PREFIX,
+  LLM_MESSAGE_ROLE,
+  LLM_MESSAGE_TOOL_CALLS_PREFIX,
+  LLM_MESSAGE_TOOL_CALL_ID,
+  LLM_OUTPUT_MESSAGES_PREFIX,
+  LLM_TOOL_CALL_FUNCTION_ARGUMENTS,
+  LLM_TOOL_CALL_FUNCTION_NAME,
+  LLM_TOOL_CALL_ID,
+  LLM_TOOL_CALL_PREFIX,
   OPENINFERENCE_SPAN_KIND,
   RIUS_REQUEST_TOOL_CHOICE,
   kindForOperation,
@@ -872,6 +886,285 @@ export function errorTypeFromExceptionEvent(span: ReadableSpan): Record<string, 
   return {};
 }
 
+/** OpenInference's flattened message families and the key each becomes. */
+const MESSAGE_FAMILIES: ReadonlyArray<readonly [prefix: string, target: string]> = [
+  [LLM_INPUT_MESSAGES_PREFIX, GEN_AI_INPUT_MESSAGES],
+  [LLM_OUTPUT_MESSAGES_PREFIX, GEN_AI_OUTPUT_MESSAGES],
+];
+
+/**
+ * Tool-call fields and the part field each fills. Any other `tool_call.*`
+ * field is consumed and dropped, as the sink does.
+ */
+const TOOL_CALL_FIELDS: ReadonlyArray<readonly [field: string, name: string]> = [
+  [LLM_TOOL_CALL_ID, "id"],
+  [LLM_TOOL_CALL_FUNCTION_NAME, "name"],
+  [LLM_TOOL_CALL_FUNCTION_ARGUMENTS, "arguments"],
+];
+
+/**
+ * An index as the sink's `strconv.Atoi` reads one: an optional sign and ASCII
+ * digits, within int64. The sink is the other producer of these keys, and the
+ * two must agree on which keys are messages.
+ */
+const INDEX = /^[+-]?[0-9]+$/;
+const INT64_LIMIT = 2n ** 63n;
+
+/** The index, canonical (so "01" and "1" are one message), or undefined. */
+function parseIndex(text: string): bigint | undefined {
+  if (!INDEX.test(text)) return undefined;
+  const value = BigInt(text.startsWith("+") ? text.slice(1) : text);
+  return value >= 0n && value < INT64_LIMIT ? value : undefined;
+}
+
+/** A map's entries in ascending index order. */
+function byIndex<T>(entries: Map<bigint, T>): T[] {
+  return [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, value]) => value);
+}
+
+/** Ascending by code point, as Python's `sorted` orders strings. */
+function byCodePoint(a: string, b: string): number {
+  const x = [...a];
+  const y = [...b];
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const diff = (x[i].codePointAt(0) ?? 0) - (y[i].codePointAt(0) ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return x.length - y.length;
+}
+
+/** `head.<index>.rest` split into its parsed index and `rest`, or undefined. */
+function cutIndexed(text: string): [bigint, string] | undefined {
+  const dot = text.indexOf(".");
+  if (dot < 0) return undefined;
+  const index = parseIndex(text.slice(0, dot));
+  return index === undefined ? undefined : [index, text.slice(dot + 1)];
+}
+
+/** One flattened message's fields, gathered before it is encoded. */
+interface FlatMessage {
+  role: string;
+  content: string | undefined;
+  toolCallId: string;
+  // Null-prototype records: field names come from another producer's keys,
+  // and `__proto__` must be a field like any other.
+  toolCalls: Map<bigint, Record<string, string>>;
+  contents: Map<bigint, Record<string, string>>;
+}
+
+function fieldRecord(): Record<string, string> {
+  return Object.create(null) as Record<string, string>;
+}
+
+/**
+ * One multimodal contents item as a message part, or undefined for no part.
+ *
+ * - A text item, and nothing more, is a text part. This is how the Anthropic
+ *   instrumentors write every text block, replies and block-list system
+ *   prompts alike, never as `message.content`.
+ * - A `tool_use` item that repeats a tool call the message already carries
+ *   adds no part. The Anthropic instrumentors write each tool_use block twice,
+ *   under `message.tool_calls.J` and as a contents item, so the call is
+ *   already a `tool_call` part. It must hold nothing but the call's fields,
+ *   each equal to one tool call's; otherwise it is not provably a copy.
+ * - Anything else (an image, a reasoning block, a text item carrying an id or
+ *   a signature, an item without a type) becomes a text part holding the item
+ *   serialized. The item is its fields by name (`message_content.` cut,
+ *   `tool_call.` kept), sorted, so no field is lost and every producer orders
+ *   it the same way.
+ */
+function contentPart(
+  item: Record<string, string>,
+  toolCalls: Map<bigint, Record<string, string>>,
+): Record<string, unknown> | undefined {
+  const names = Object.keys(item).sort(byCodePoint);
+  if (names.length === 2 && item.type === "text" && Object.hasOwn(item, "text")) {
+    return { type: "text", content: item.text };
+  }
+  if (item.type === "tool_use" && repeatsToolCall(item, toolCalls)) return undefined;
+  const sorted = fieldRecord();
+  for (const name of names) sorted[name] = item[name];
+  return { type: "text", content: toAttributeValue(sorted) };
+}
+
+/**
+ * The fields a tool_use contents item may carry to count as a copy of a tool
+ * call, each with the tool-call field it must equal.
+ */
+const TOOL_USE_ITEM_FIELDS: ReadonlyMap<string, string> = new Map(
+  TOOL_CALL_FIELDS.map(([field]) => [`${LLM_TOOL_CALL_PREFIX}${field}`, field]),
+);
+
+function repeatsToolCall(
+  item: Record<string, string>,
+  toolCalls: Map<bigint, Record<string, string>>,
+): boolean {
+  const fields = Object.keys(item).filter((name) => name !== "type");
+  if (!fields.every((name) => TOOL_USE_ITEM_FIELDS.has(name))) return false;
+  return [...toolCalls.values()].some((call) =>
+    fields.every((name) => {
+      const field = TOOL_USE_ITEM_FIELDS.get(name) as string;
+      return (Object.hasOwn(call, field) ? call[field] : "") === item[name];
+    }),
+  );
+}
+
+/**
+ * The message in the GenAI role/parts shape, as the sink encodes it: the
+ * content first (a `tool_call_response` when the message carries a tool-call
+ * id, a text part otherwise), then the multimodal contents, then the tool
+ * calls, each family in index order. An empty role, id, name or arguments is
+ * omitted rather than written empty; empty content is still a part.
+ */
+function encodeMessage(message: FlatMessage): Record<string, unknown> {
+  const parts: Record<string, unknown>[] = [];
+  if (message.content !== undefined) {
+    parts.push(
+      message.toolCallId
+        ? { type: "tool_call_response", id: message.toolCallId, response: message.content }
+        : { type: "text", content: message.content },
+    );
+  }
+  for (const item of byIndex(message.contents)) {
+    const part = contentPart(item, message.toolCalls);
+    if (part !== undefined) parts.push(part);
+  }
+  for (const call of byIndex(message.toolCalls)) {
+    const part: Record<string, unknown> = { type: "tool_call" };
+    for (const [field, name] of TOOL_CALL_FIELDS) {
+      if (Object.hasOwn(call, field) && call[field]) part[name] = call[field];
+    }
+    parts.push(part);
+  }
+  return message.role ? { role: message.role, parts } : { parts };
+}
+
+/**
+ * One family's messages in index order and the keys they consumed; undefined
+ * when it has no message, or holds a value that is not a string. OpenInference
+ * writes every message field as one, so anything else is a shape we cannot
+ * vouch for, and leaving it is safe: the family is content by prefix already.
+ */
+function reassembleFamily(
+  attributes: Readonly<Record<string, AttributeValue | undefined>>,
+  prefix: string,
+): { messages: Record<string, unknown>[]; consumed: string[] } | undefined {
+  const messages = new Map<bigint, FlatMessage>();
+  const consumed: string[] = [];
+  for (const key of Object.keys(attributes)) {
+    if (!key.startsWith(prefix)) continue;
+    const indexed = cutIndexed(key.slice(prefix.length));
+    if (indexed === undefined) continue;
+    const [index, field] = indexed;
+    let call: [bigint, string] | undefined;
+    let item: [bigint, string] | undefined;
+    if (field.startsWith(LLM_MESSAGE_TOOL_CALLS_PREFIX)) {
+      const sub = cutIndexed(field.slice(LLM_MESSAGE_TOOL_CALLS_PREFIX.length));
+      if (sub?.[1].startsWith(LLM_TOOL_CALL_PREFIX)) {
+        call = [sub[0], sub[1].slice(LLM_TOOL_CALL_PREFIX.length)];
+      }
+    } else if (field.startsWith(LLM_MESSAGE_CONTENTS_PREFIX)) {
+      const sub = cutIndexed(field.slice(LLM_MESSAGE_CONTENTS_PREFIX.length));
+      if (sub?.[1].startsWith(LLM_MESSAGE_CONTENT_PREFIX)) {
+        item = [sub[0], sub[1].slice(LLM_MESSAGE_CONTENT_PREFIX.length)];
+      } else if (sub?.[1].startsWith(LLM_TOOL_CALL_PREFIX)) {
+        // A tool_use item's call fields sit beside message_content.type
+        // rather than under it; they are the item's too, prefix kept.
+        item = [sub[0], sub[1]];
+      }
+    }
+    if (
+      call === undefined &&
+      item === undefined &&
+      field !== LLM_MESSAGE_ROLE &&
+      field !== LLM_MESSAGE_CONTENT &&
+      field !== LLM_MESSAGE_TOOL_CALL_ID
+    ) {
+      continue;
+    }
+    const value = attributes[key];
+    if (typeof value !== "string") return undefined;
+    let message = messages.get(index);
+    if (message === undefined) {
+      message = {
+        role: "",
+        content: undefined,
+        toolCallId: "",
+        toolCalls: new Map(),
+        contents: new Map(),
+      };
+      messages.set(index, message);
+    }
+    if (call !== undefined) {
+      const fields = message.toolCalls.get(call[0]) ?? fieldRecord();
+      fields[call[1]] = value;
+      message.toolCalls.set(call[0], fields);
+    } else if (item !== undefined) {
+      const fields = message.contents.get(item[0]) ?? fieldRecord();
+      fields[item[1]] = value;
+      message.contents.set(item[0], fields);
+    } else if (field === LLM_MESSAGE_ROLE) {
+      message.role = value;
+    } else if (field === LLM_MESSAGE_TOOL_CALL_ID) {
+      message.toolCallId = value;
+    } else {
+      message.content = value;
+    }
+    consumed.push(key);
+  }
+  if (messages.size === 0) return undefined;
+  return { messages: byIndex(messages).map(encodeMessage), consumed };
+}
+
+/**
+ * Rebuilds OpenInference's flattened messages as `gen_ai.*.messages`, in
+ * place, and reports whether it changed anything. A port of the Python SDK's
+ * `reassemble_openinference_messages`, held to the same shared fixture.
+ *
+ * OpenInference writes one attribute per message field:
+ * `llm.input_messages.<i>.message.{role,content,tool_call_id}`,
+ * `...message.tool_calls.<j>.tool_call.{id,function.name,function.arguments}`
+ * and the multimodal `...message.contents.<k>.message_content.*`, and the same
+ * under `llm.output_messages`. Each family becomes one JSON array under its
+ * canonical key, in the role/parts shape the generation helpers write, capped
+ * like every other JSON attribute, and every key it consumed is deleted.
+ *
+ * The output is BYTE-IDENTICAL to the sink's `reassembleMessages` for the same
+ * input; the one known difference is that the sink does not cap the attribute.
+ * That is why this does not reuse the generation helpers' message
+ * normalization, which would default a missing role and write `null` for a
+ * missing tool-call field.
+ *
+ * The multi-part `contents` form is not optional: the Anthropic instrumentors
+ * write EVERY text block there, never in `message.content`, so without it an
+ * Anthropic reply or a block-list system prompt arrives with empty parts.
+ *
+ * Native wins: a family whose canonical key is already present is left
+ * entirely as it came, flattened keys included, as the sink leaves it. Nothing
+ * is written until both families have been read, so the bag is never mutated
+ * while it is being iterated.
+ */
+export function reassembleOpenInferenceMessages(
+  attributes: Record<string, AttributeValue | undefined>,
+): boolean {
+  const keys = Object.keys(attributes);
+  if (!keys.some((key) => MESSAGE_FAMILIES.some(([prefix]) => key.startsWith(prefix)))) {
+    return false;
+  }
+  const writes: Array<{ target: string; value: AttributeValue; consumed: string[] }> = [];
+  for (const [prefix, target] of MESSAGE_FAMILIES) {
+    if (Object.hasOwn(attributes, target) && attributes[target] !== undefined) continue;
+    const family = reassembleFamily(attributes, prefix);
+    if (family === undefined) continue;
+    writes.push({ target, value: toAttributeValue(family.messages), consumed: family.consumed });
+  }
+  for (const { target, value, consumed } of writes) {
+    for (const key of consumed) delete attributes[key];
+    attributes[target] = value;
+  }
+  return writes.length > 0;
+}
+
 /**
  * OpenInference's indexed tool-definition family, `llm.tools.{i}.tool.json_schema`.
  * A source spelling, inline for the reason the `llm.*` rule sources are.
@@ -1041,6 +1334,11 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }
+    // Export-stage only, like the event passes, and for a reason of its own:
+    // messages are content, so they must never be written at span start, where
+    // a pending snapshot could carry them. The sources are an indexed family,
+    // which the exact-key rule table cannot match.
+    reassembleOpenInferenceMessages(attributes);
   }
 
   private normalize(

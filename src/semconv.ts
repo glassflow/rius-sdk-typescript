@@ -629,6 +629,31 @@ export function composeSpanName(kind: SpanKind, attributes: Attributes): string 
   return typeof target === "string" && target !== "" ? `${operation} ${target}` : operation;
 }
 
+// OpenInference's flattened message families, read by normalization and
+// reassembled into GEN_AI_INPUT_MESSAGES / GEN_AI_OUTPUT_MESSAGES: one key per
+// field, `<prefix><i>.message.role`, `...message.tool_calls.<j>.tool_call.id`,
+// `...message.contents.<k>.message_content.type` and so on. Source spellings,
+// never emitted; the Python SDK keeps the same strings in normalization.py.
+export const LLM_INPUT_MESSAGES_PREFIX = "llm.input_messages.";
+export const LLM_OUTPUT_MESSAGES_PREFIX = "llm.output_messages.";
+/** The message fields read, relative to `<prefix><i>.`. */
+export const LLM_MESSAGE_ROLE = "message.role";
+export const LLM_MESSAGE_CONTENT = "message.content";
+export const LLM_MESSAGE_TOOL_CALL_ID = "message.tool_call_id";
+/** A message's tool calls: `message.tool_calls.<j>.tool_call.<field>`. */
+export const LLM_MESSAGE_TOOL_CALLS_PREFIX = "message.tool_calls.";
+export const LLM_TOOL_CALL_PREFIX = "tool_call.";
+/** Tool-call fields relative to `tool_call.`. */
+export const LLM_TOOL_CALL_ID = "id";
+export const LLM_TOOL_CALL_FUNCTION_NAME = "function.name";
+export const LLM_TOOL_CALL_FUNCTION_ARGUMENTS = "function.arguments";
+/**
+ * A message's multimodal items: `message.contents.<k>.message_content.<field>`,
+ * plus `message.contents.<k>.tool_call.<field>` on a tool_use item.
+ */
+export const LLM_MESSAGE_CONTENTS_PREFIX = "message.contents.";
+export const LLM_MESSAGE_CONTENT_PREFIX = "message_content.";
+
 // The request-parameters bag OpenInference instrumentations emit. Content,
 // whole: listed in CONTENT_ATTRIBUTES below, where the reason is written.
 export const LLM_INVOCATION_PARAMETERS = "llm.invocation_parameters";
