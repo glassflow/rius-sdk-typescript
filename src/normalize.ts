@@ -548,7 +548,10 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  *   from the token counts.
  * - A SUM rule for the input tokens. Every bundled instrumentation already
  *   reports llm.token_count.prompt INCLUSIVE of the cache counts, so summing
- *   again would double-count every cached token. Pinned by a test.
+ *   again would double-count every cached token. Pinned by a test. For the
+ *   Anthropic one that holds only from 0.2.7, the peer floor: earlier versions
+ *   copied Anthropic's cache-exclusive input_tokens and dropped both cache
+ *   counts, which no rule here could recover.
  */
 export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Provider. One rule, two spellings, first present wins: llm.provider is
@@ -793,7 +796,7 @@ function applyRules(
  * streaming attribute and no time-to-first-chunk of their own.
  *
  * NO TYPESCRIPT INSTRUMENTATION EMITS IT TODAY. At the pinned peer versions
- * (`@arizeai/openinference-instrumentation-openai` 4.2.1, `-anthropic` 0.2.1,
+ * (`@arizeai/openinference-instrumentation-openai` 4.2.1, `-anthropic` 0.2.7,
  * `-langchain` 4.0.17) the string appears nowhere in the packages, and
  * `addEvent` is called only by openinference-core's span wrapper. The mapping
  * is carried anyway so the two SDKs' tables stay identical, and it costs a
