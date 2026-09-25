@@ -1279,20 +1279,31 @@ export function normalizeToolDefinitions(
 }
 
 /**
+ * One JSON string literal in the MESSAGE encoding the sink shares with the
+ * reassembly fixture: raw UTF-8, no HTML escaping, U+2028/U+2029 left RAW (the
+ * sink's shared encoder unescapes them), an unpaired surrogate replaced with
+ * U+FFFD as Go's encoder does. Unlike {@link jsonString}, which the
+ * `tool_choice` promotion's own shared fixture pins to the escaped form.
+ */
+function messageJsonString(text: string): string {
+  return JSON.stringify(text.replace(LONE_SURROGATE, "\ufffd"));
+}
+
+/**
  * `value` (parsed JSON) as compact JSON with object keys sorted by code point
- * at every depth, strings escaped as {@link compactJson} escapes them. That is
- * byte for byte what the sink's Go encoder writes for a decoded
- * `map[string]any` with HTML escaping off, whose keys Go always sorts, so the
- * two producers agree on a block neither of them can type.
+ * at every depth, strings in the message encoding ({@link messageJsonString}).
+ * That is byte for byte what the sink's shared encoder writes for a decoded
+ * `map[string]any`, whose keys Go always sorts, so the two producers agree on
+ * a block neither of them can type.
  */
 function sortedCompactJson(value: unknown): string {
-  if (typeof value === "string") return jsonString(value);
+  if (typeof value === "string") return messageJsonString(value);
   if (Array.isArray(value)) return `[${value.map(sortedCompactJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
     const members = Object.keys(record)
       .sort(byCodePoint)
-      .map((k) => `${jsonString(k)}:${sortedCompactJson(record[k])}`);
+      .map((k) => `${messageJsonString(k)}:${sortedCompactJson(record[k])}`);
     return `{${members.join(",")}}`;
   }
   return JSON.stringify(value);

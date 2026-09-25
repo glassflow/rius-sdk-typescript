@@ -135,12 +135,16 @@ describe("a block-list system prompt", () => {
     expect(system.parts[0].content).toBe('{"type":"x","v":"<&>é"}');
   });
 
-  it("escapes U+2028 and replaces a lone surrogate, as the sink's Go encoder does", () => {
+  it("leaves U+2028/U+2029 raw and replaces a lone surrogate, as the sink's shared encoder does", () => {
     const out = normalized({
-      [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ system: [{ v: "a\u2028b\ud800c" }] }),
+      [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ system: [{ v: "a\u2028b\u2029\ud800c" }] }),
     });
-    const [system] = JSON.parse(out[GEN_AI_INPUT_MESSAGES] as string);
-    expect(system.parts[0].content).toBe('{"v":"a\\u2028b\ufffdc"}');
+    const raw = out[GEN_AI_INPUT_MESSAGES] as string;
+    // Raw in the stored attribute too: the messages are the shared encoding.
+    expect(raw).toContain("\u2028");
+    expect(raw).not.toContain("\\u2028");
+    const [system] = JSON.parse(raw);
+    expect(system.parts[0].content).toBe('{"v":"a\u2028b\u2029\ufffdc"}');
   });
 });
 
