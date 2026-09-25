@@ -22,6 +22,7 @@ import {
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   LLM_INVOCATION_PARAMETERS,
+  RIUS_REQUEST_TOOL_CHOICE,
   RIUS_SPAN_PENDING,
 } from "../src/semconv.js";
 import { toAttributeValue } from "../src/serde.js";
@@ -133,7 +134,8 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
       [GEN_AI_OPERATION_NAME]: "chat",
       [GEN_AI_PROVIDER_NAME]: "openai",
       [GEN_AI_REQUEST_MODEL]: "gpt-4o",
-      [LLM_INVOCATION_PARAMETERS]: '{"tool_choice":"auto"}',
+      // promoted out of the bag, and the bag, now empty, goes with it
+      [RIUS_REQUEST_TOOL_CHOICE]: "auto",
       [GEN_AI_TOOL_DEFINITIONS]: out[GEN_AI_TOOL_DEFINITIONS],
     });
     expect(llmToolsKeys(out)).toEqual([]);
@@ -226,8 +228,10 @@ describe("gen_ai.tool.definitions from the request bag", () => {
       }),
     });
     expect(definitions(out)).toEqual(OPENAI_TOOLS);
-    expect(JSON.parse(String(out[LLM_INVOCATION_PARAMETERS]))).toEqual({ tool_choice: "auto" });
     expect(out[GEN_AI_REQUEST_MODEL]).toBe("gpt-4o");
+    expect(out[RIUS_REQUEST_TOOL_CHOICE]).toBe("auto");
+    // Every member was promoted somewhere, so the bag goes rather than riding as "{}".
+    expect(out[LLM_INVOCATION_PARAMETERS]).toBeUndefined();
   });
 
   it("promotes the legacy functions member", () => {
@@ -268,7 +272,9 @@ describe("gen_ai.tool.definitions from the request bag", () => {
       ...indexed([{ name: "from-llm-tools" }]),
     });
     expect(definitions(out)).toEqual([{ name: "from-llm-tools" }]);
-    expect(out[LLM_INVOCATION_PARAMETERS]).toBe(bag);
+    // tools stays in the bag; tool_choice is promoted out of it regardless.
+    expect(out[LLM_INVOCATION_PARAMETERS]).toBe(JSON.stringify({ tools: [{ name: "from-bag" }] }));
+    expect(out[RIUS_REQUEST_TOOL_CHOICE]).toBe("auto");
   });
 
   it("lets a native definitions key win over the bag, and the member still goes", () => {

@@ -55,6 +55,7 @@ import {
   LLM_TOOL_CALL_ID,
   LLM_TOOL_CALL_PREFIX,
   OPENINFERENCE_SPAN_KIND,
+  RIUS_REQUEST_TOOL_CHOICE,
   kindForOperation,
   operationForKind,
 } from "./semconv.js";
@@ -305,9 +306,52 @@ function asTextList(value: unknown): AttributeValue | undefined {
   return undefined;
 }
 
+/** A UTF-16 surrogate with no partner. */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/** One JSON string literal, escaped as the sink's Go encoder escapes it. */
+function jsonString(text: string): string {
+  return JSON.stringify(text.replace(LONE_SURROGATE, "\ufffd"))
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 /**
- * Members of `llm.invocation_parameters` that a `gen_ai.request.*` key
- * represents TOTALLY, in precedence order: the first spelling to produce a
+ * `value` (parsed JSON) as compact JSON in raw UTF-8, member order kept.
+ *
+ * Written out rather than left to `JSON.stringify`, because the result is
+ * matched byte for byte: the sink promotes the same member from the same bag
+ * and the Python SDK writes the same string. `JSON.stringify` alone would
+ * leave U+2028/U+2029 raw and escape an unpaired surrogate, where Go's
+ * encoder escapes the first two and replaces the third with U+FFFD, in keys
+ * as well as values.
+ */
+function compactJson(value: unknown): string {
+  if (typeof value === "string") return jsonString(value);
+  if (Array.isArray(value)) return `[${value.map(compactJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const members = Object.entries(value).map(([k, v]) => `${jsonString(k)}:${compactJson(v)}`);
+    return `{${members.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * A mode kept as the non-empty string it is, or an object as compact JSON:
+ * the two shapes a provider's `tool_choice` takes. Any other shape is not one
+ * we can vouch for, so it stays in the bag.
+ */
+function asToolChoice(value: unknown): AttributeValue | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return compactJson(value);
+  }
+  return asText(value);
+}
+
+/**
+ * Members of `llm.invocation_parameters` that a canonical key (a
+ * `gen_ai.request.*` key, or `rius.request.tool_choice`) represents TOTALLY,
+ * in precedence order: the first spelling to produce a
  * target keeps it. Everything else stays in the bag — see
  * {@link invocationParameters} for why that is deliberate.
  *
@@ -338,6 +382,13 @@ export const INVOCATION_PARAMETER_MEMBERS: ReadonlyArray<
   ["stop", GEN_AI_REQUEST_STOP_SEQUENCES, asTextList],
   ["stop_sequences", GEN_AI_REQUEST_STOP_SEQUENCES, asTextList],
   ["stream", GEN_AI_REQUEST_STREAM, asFlag],
+  // Not a convention key: the GenAI conventions define no tool_choice, so it
+  // goes where an unnamed request parameter goes, rius.request.*. Promoted
+  // because context attribution reads it to tell a forced tool call from an
+  // automatic one, and the bag is content: left inside, it goes wherever
+  // masking sends the bag. It is a routing parameter, not content, and this
+  // runs before masking.
+  ["tool_choice", RIUS_REQUEST_TOOL_CHOICE, asToolChoice],
 ];
 
 /**
@@ -378,10 +429,13 @@ export const REQUEST_PARAMETER_GUARDS: Readonly<
  * content (semconv.ts). Fanning unknown members out into keys of our own would
  * move content out from under that and past `captureContent: false`.
  * So a member is promoted only when a canonical key represents it totally,
- * and the bag survives to carry everything else.
+ * and the bag survives to carry everything else. A bag left empty is dropped
+ * rather than kept as `{}`.
  *
  * There is deliberately no `rius.request.<key>` catch-all: that namespace is
- * filled natively and normalization was never meant to populate it.
+ * filled natively and normalization was never meant to populate it. The one
+ * member it does take is `tool_choice`, because attribution reads it and it
+ * must not go with the bag when content capture is off.
  *
  * A member that produced a canonical key leaves the bag even when a native
  * key beat it — at that point it is a duplicate, which is the same reason a
