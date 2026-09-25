@@ -187,6 +187,7 @@ describe("the shipped table", () => {
       "gen_ai.operation.name",
       ["llm.provider", "gen_ai.system"],
       "llm.request.model_name",
+      "embedding.model_name",
       "llm.response.model_name",
       "tool.name",
       "llm.finish_reason",
