@@ -291,8 +291,9 @@ describe("generations", () => {
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.request.temperature"]).toBe(0.2);
     expect(span.attributes["gen_ai.request.max_tokens"]).toBe(512);
-    // OpenAI's `stop` is a recognised spelling of gen_ai.request.stop_sequences.
-    expect(span.attributes["gen_ai.request.stop_sequences"]).toBe("END");
+    // OpenAI's `stop` is a recognised spelling of gen_ai.request.stop_sequences,
+    // and a lone string is the one-element list the key's type requires.
+    expect(span.attributes["gen_ai.request.stop_sequences"]).toEqual(["END"]);
     expect(span.attributes["gen_ai.request.stop"]).toBeUndefined();
     // The request model keeps its own attribute, not a parameter-derived one.
     expect(span.attributes["gen_ai.request.model"]).toBe("m");

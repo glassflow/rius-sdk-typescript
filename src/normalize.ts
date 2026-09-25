@@ -14,13 +14,17 @@ import {
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_CHOICE_COUNT,
+  GEN_AI_REQUEST_ENCODING_FORMATS,
   GEN_AI_REQUEST_FREQUENCY_PENALTY,
   GEN_AI_REQUEST_MAX_TOKENS,
   GEN_AI_REQUEST_MODEL,
   GEN_AI_REQUEST_PRESENCE_PENALTY,
+  GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+  GEN_AI_REQUEST_REASONING_LEVEL,
   GEN_AI_REQUEST_SEED,
   GEN_AI_REQUEST_STOP_SEQUENCES,
   GEN_AI_REQUEST_STREAM,
+  GEN_AI_REQUEST_STREAM_CURSOR,
   GEN_AI_REQUEST_TEMPERATURE,
   GEN_AI_REQUEST_TOP_K,
   GEN_AI_REQUEST_TOP_P,
@@ -321,6 +325,34 @@ export const INVOCATION_PARAMETER_MEMBERS: ReadonlyArray<
   ["stop_sequences", GEN_AI_REQUEST_STOP_SEQUENCES, asTextList],
   ["stream", GEN_AI_REQUEST_STREAM, asFlag],
 ];
+
+/**
+ * The guard for every canonical `gen_ai.request.*` key, by the key's type in
+ * the GenAI registry: the value to record, or `undefined` when the value is
+ * the wrong shape for that key. The native `modelParameters` path
+ * (`requestAttributes` in generation.ts) and the members above use the SAME
+ * function per key, so one parameter has one shape on the wire whichever way
+ * it arrived; a test pins that the two stay wired to this table.
+ */
+export const REQUEST_PARAMETER_GUARDS: Readonly<
+  Record<string, (value: unknown) => AttributeValue | undefined>
+> = {
+  [GEN_AI_REQUEST_MODEL]: asText, // string
+  [GEN_AI_REQUEST_MAX_TOKENS]: asCount, // int
+  [GEN_AI_REQUEST_CHOICE_COUNT]: asCount, // int
+  [GEN_AI_REQUEST_TEMPERATURE]: asNumber, // double
+  [GEN_AI_REQUEST_TOP_P]: asNumber, // double
+  [GEN_AI_REQUEST_TOP_K]: asCount, // int
+  [GEN_AI_REQUEST_STOP_SEQUENCES]: asTextList, // string[]
+  [GEN_AI_REQUEST_FREQUENCY_PENALTY]: asNumber, // double
+  [GEN_AI_REQUEST_PRESENCE_PENALTY]: asNumber, // double
+  [GEN_AI_REQUEST_ENCODING_FORMATS]: asTextList, // string[]
+  [GEN_AI_REQUEST_SEED]: asCount, // int
+  [GEN_AI_REQUEST_STREAM]: asFlag, // boolean
+  [GEN_AI_REQUEST_REASONING_LEVEL]: asText, // string
+  [GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID]: asText, // string
+  [GEN_AI_REQUEST_STREAM_CURSOR]: asText, // string
+};
 
 /**
  * Promote the spec-defined members of the request bag; keep the rest.
