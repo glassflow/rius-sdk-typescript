@@ -5,6 +5,7 @@ import {
   SpanStatusCode,
 } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor, TimedEvent } from "@opentelemetry/sdk-trace-base";
+import { qualifyRecordedExceptions } from "./errorType.js";
 import {
   ERROR_TYPE,
   EXCEPTION_EVENT,
@@ -906,7 +907,10 @@ export function normalizeToolDefinitions(
  *
  * `onStart` applies the `identity` rules only. A pending snapshot is built at
  * span start from an allowlist of canonical identity keys, so a dialect key
- * that is not canonicalized by then simply never reaches the snapshot.
+ * that is not canonicalized by then simply never reaches the snapshot. It also
+ * routes the span's `recordException` through errorType.ts, the one seam that
+ * sees the error OBJECT an instrumentor records; by `onEnd` only the event's
+ * type string is left.
  */
 export class NormalizingSpanProcessor implements SpanProcessor {
   private readonly rules: readonly NormalizationRule[];
@@ -925,6 +929,10 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     this.normalize(span.attributes, this.identityRules, (key, value) =>
       span.setAttribute(key, value),
     );
+    // Before any instrumentor can record an exception on this span, so its
+    // exception.type (and the error.type derived from it at onEnd) names the
+    // error's class rather than the generic "Error" provider SDKs inherit.
+    qualifyRecordedExceptions(span);
   }
 
   onEnd(span: ReadableSpan): void {
