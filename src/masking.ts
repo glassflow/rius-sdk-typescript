@@ -4,6 +4,7 @@ import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { Mask } from "./config.js";
 import {
   CONTENT_ATTRIBUTES,
+  CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES,
   CONTENT_ATTRIBUTE_PREFIXES,
   CONTENT_ATTRIBUTE_SUFFIXES,
   EXCEPTION_EVENT,
@@ -17,6 +18,12 @@ export function isContentKey(key: string): boolean {
   if (CONTENT_ATTRIBUTES.has(key)) return true;
   if (CONTENT_ATTRIBUTE_PREFIXES.some((p) => key.startsWith(p))) return true;
   if (CONTENT_ATTRIBUTE_SUFFIXES.some((s) => key.endsWith(s))) return true;
+  if (
+    CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES.some(
+      ([prefix, leaves]) => key.startsWith(prefix) && leaves.some((leaf) => key.endsWith(leaf)),
+    )
+  )
+    return true;
   // The Vercel transform copies attributes it does not translate under
   // `metadata.<original key>`, so a content key comes through twice; the
   // mirrored copy is content exactly when the original is. Found by the

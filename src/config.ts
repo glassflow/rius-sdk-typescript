@@ -105,6 +105,22 @@ export interface RiusOptions {
    * one with `withSession()` instead, which overrides this default.
    */
   sessionId?: string;
+  /**
+   * What to do when another SDK already holds the OpenTelemetry global tracer
+   * provider at `init()` (`RIUS_BRIDGE_FOREIGN_PROVIDER`; off by default).
+   *
+   * Off, Rius keeps to its own provider: LLM spans started inside the other
+   * SDK's spans arrive without their parent, flagged `rius.parent.foreign`,
+   * counted in the heartbeat, and the first one logs a warning. On, Rius also
+   * exports the other SDK's spans (the parents), under Rius's resource
+   * identity and subject to Rius's sampling and content settings, and it never
+   * modifies what the other SDK exports. Either way the resource records the
+   * conflict as `rius.sdk.global_provider`.
+   *
+   * Off by default: exporting another SDK's spans is consent the caller gives
+   * explicitly.
+   */
+  bridgeForeignProvider?: boolean;
 }
 
 export interface ResolvedConfig {
@@ -135,6 +151,7 @@ export interface ResolvedConfig {
   partialSpans: boolean;
   partialSpansDelayMs: number;
   sessionId?: string;
+  bridgeForeignProvider: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -285,5 +302,8 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     // Empty is unset, like agentName: a blank session id would group every
     // span under the meaningless session "".
     sessionId: options.sessionId || env.RIUS_SESSION_ID || undefined,
+    bridgeForeignProvider:
+      options.bridgeForeignProvider ??
+      bool("RIUS_BRIDGE_FOREIGN_PROVIDER", env.RIUS_BRIDGE_FOREIGN_PROVIDER, false),
   };
 }

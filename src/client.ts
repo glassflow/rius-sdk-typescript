@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { type Tracer, context, propagation, trace } from "@opentelemetry/api";
+import { type Tracer, type TracerProvider, context, propagation, trace } from "@opentelemetry/api";
+import { getNumberFromEnv } from "@opentelemetry/core";
 // The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
 // opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
 // protobuf and refuses a JSON export with 415 Unsupported Media Type, so the
@@ -10,6 +11,7 @@ import {
   BatchSpanProcessor,
   ParentBasedSampler,
   type SpanExporter,
+  type SpanLimits,
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -18,6 +20,16 @@ import { setConfiguredAgentName } from "./agent.js";
 import { type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
+import {
+  type Bridge,
+  BridgeAwareSampler,
+  ForeignParentDetector,
+  ResourceAdoptingExporter,
+  bridge,
+  foreignGlobalProviderName,
+  globalTracerProvider,
+  rememberOwnProvider,
+} from "./foreign.js";
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
 import { enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
@@ -29,6 +41,7 @@ import {
   RIUS_MAIN_AGENT_ID,
   RIUS_MAIN_AGENT_NAME,
   RIUS_MAIN_AGENT_VERSION,
+  RIUS_SDK_GLOBAL_PROVIDER,
   SERVICE_INSTANCE_ID,
   TRACER_NAME,
 } from "./semconv.js";
@@ -96,6 +109,13 @@ const heartbeats = new WeakMap<
   { sender: HeartbeatSender; beforeExitHandler: () => void }
 >();
 
+/**
+ * The handle on Rius's pipeline riding another SDK's tracer provider, kept off
+ * the class for the same reason as `sinks` and `heartbeats` above. Present only
+ * when another provider held the OpenTelemetry global and bridging was enabled.
+ */
+const bridges = new WeakMap<RiusClient, Bridge>();
+
 /** The internals `init()` hands to a new client. Never part of the public API. */
 interface ClientParts {
   provider: NodeTracerProvider;
@@ -105,6 +125,7 @@ interface ClientParts {
   /** Disable functions for the instrumentations `ready` enabled; run on shutdown. */
   teardown: Array<() => void>;
   heartbeat?: { sender: HeartbeatSender; beforeExitHandler: () => void };
+  bridge?: Bridge;
 }
 
 /**
@@ -137,6 +158,7 @@ export class RiusClient {
     this.teardown = parts.teardown;
     sinks.set(this, parts.processors);
     if (parts.heartbeat) heartbeats.set(this, parts.heartbeat);
+    if (parts.bridge) bridges.set(this, parts.bridge);
   }
 
   static {
@@ -177,11 +199,16 @@ export class RiusClient {
         // A patch that cannot be undone must not block the shutdown.
       }
     }
+    // Before the provider shuts down, so the other SDK's spans stop entering a
+    // pipeline that is about to go away. Its own processors are never touched:
+    // OTel offers no way to remove one, so the forwarder is only made inert.
+    bridges.get(this)?.release();
     try {
       await this.provider.shutdown();
     } finally {
       if (globalClient === this) {
         globalClient = undefined;
+        ownTracerProvider = undefined;
         setGlobalRouting(undefined);
         setConfiguredAgentName(undefined);
         // All three globals provider.register() claimed, not just the tracer:
@@ -217,20 +244,36 @@ export const DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT = 4096;
 /** The variables OpenTelemetry reads for the span attribute count limit, most specific first. */
 const ATTRIBUTE_COUNT_LIMIT_ENV = ["OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "OTEL_ATTRIBUTE_COUNT_LIMIT"];
 
+/** The variables OpenTelemetry reads for the span attribute value length limit. */
+const ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV = [
+  "OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+  "OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+];
+
 /**
- * Whether the environment sets the count limit in a way OpenTelemetry will
- * honour. OpenTelemetry JS resolves an explicit `spanLimits` in the provider
- * config BEFORE the environment, so the default above may only be passed when
- * neither variable is set; otherwise it would silently override the operator.
- * "Set" means what OpenTelemetry's own `getNumberFromEnv` accepts: non-blank
- * and a number. A blank or non-numeric value is ignored by OpenTelemetry (it
- * warns and falls back to 128), so it gets this SDK's default instead.
+ * The limits this SDK applies, resolved the way OpenTelemetry resolves them.
+ *
+ * An explicit `spanLimits` in the provider config wins over the environment in
+ * OpenTelemetry JS, so passing one would silently override the operator unless
+ * the environment is consulted here first, in OpenTelemetry's own order and
+ * with its own parser (a blank or non-numeric value is ignored). The result is
+ * resolved once and shared with the bridge, which gives a bridged span's twin
+ * the same limits an own span gets: a foreign span cannot stamp more
+ * attributes, or longer ones, than Rius would have allowed on its own.
  */
-function attributeCountLimitFromEnv(): boolean {
-  return ATTRIBUTE_COUNT_LIMIT_ENV.some((name) => {
-    const raw = process.env[name];
-    return raw !== undefined && raw.trim() !== "" && !Number.isNaN(Number(raw));
-  });
+function resolveSpanLimits(): SpanLimits {
+  const fromEnv = (names: string[]): number | undefined => {
+    for (const name of names) {
+      const value = getNumberFromEnv(name);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  };
+  return {
+    attributeCountLimit: fromEnv(ATTRIBUTE_COUNT_LIMIT_ENV) ?? DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT,
+    attributeValueLengthLimit:
+      fromEnv(ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV) ?? Number.POSITIVE_INFINITY,
+  };
 }
 
 /**
@@ -259,6 +302,75 @@ export function init(options: InitOptions = {}): RiusClient {
   const config = resolveConfig(options);
   const processors = new DelegatingSpanProcessor();
 
+  // Read before anything is registered: the OpenTelemetry global is write-once,
+  // so whichever provider already holds it keeps it, and the resource below —
+  // immutable once built — is the only place that conflict can be recorded.
+  const foreignGlobal = foreignGlobalProviderName();
+
+  // One identity per client lifetime, shared by spans (resource) and
+  // heartbeats (payload instance_id) so the backend can join them and count
+  // replicas. Workers spawned after init() (cluster/fork patterns) should
+  // init() themselves for exact per-worker span identity.
+  const instanceId = randomUUID();
+
+  // telemetry.sdk.* is reserved for the OTel SDK itself; we identify as a
+  // distribution via telemetry.distro.*, the same two keys Python stamps.
+  const resource = resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: config.serviceName,
+    [SERVICE_INSTANCE_ID]: instanceId,
+    // The agent name the heartbeats already carry. Without it here, spans
+    // fall back to service.name downstream while heartbeats group under the
+    // agent name, so a process that configures the two differently sees its
+    // agents view and its trace list disagree. Resolution defaults the agent
+    // name to the service name, so nothing changes when they are the same.
+    [GEN_AI_AGENT_NAME]: config.agentName,
+    // The same fact in our own namespace, and the one the sink reads first.
+    // `gen_ai.agent.name` above is kept ADDITIVELY and on purpose: it has no
+    // resource-level meaning in the conventions and on a span it names the
+    // agent being INVOKED, so it was one key answering two questions — but
+    // dropping it here would be a flag day, blanking agent identity for
+    // every deployment sitting between this SDK release and the sink
+    // release. A resource rides once per OTLP batch, not once per span, so
+    // carrying both costs essentially nothing.
+    //
+    // Spread like `service.version` below, for the same reason: a process
+    // that named nothing resolves to the `unknown_service` placeholder, and
+    // the main-agent name must then be ABSENT rather than claim an identity
+    // the caller never gave — exactly what the span helpers already do.
+    ...(config.mainAgentName === undefined ? {} : { [RIUS_MAIN_AGENT_NAME]: config.mainAgentName }),
+    // Optional and never defaulted; see config.ts. `service.instance.id`
+    // above is the process identity, these describe the AGENT the process
+    // runs, which outlives any one process.
+    ...(config.mainAgentId === undefined ? {} : { [RIUS_MAIN_AGENT_ID]: config.mainAgentId }),
+    ...(config.mainAgentDescription === undefined
+      ? {}
+      : { [RIUS_MAIN_AGENT_DESCRIPTION]: config.mainAgentDescription }),
+    // The version of the AGENT DEFINITION, never derived from (nor deriving)
+    // `service.version` below: the build and the prompt/tools/policy it runs
+    // move independently.
+    ...(config.mainAgentVersion === undefined
+      ? {}
+      : { [RIUS_MAIN_AGENT_VERSION]: config.mainAgentVersion }),
+    // `foreign:<Class>` when another SDK already held the OpenTelemetry global
+    // at init(); absent when Rius registered it. Spread, because the ABSENCE of
+    // the key is what says "Rius owns the global here" — a placeholder value
+    // would make every ordinary process look like a resolved conflict.
+    ...(foreignGlobal === undefined
+      ? {}
+      : { [RIUS_SDK_GLOBAL_PROVIDER]: `foreign:${foreignGlobal}` }),
+    "telemetry.distro.name": "glassflow-rius",
+    "telemetry.distro.version": SDK_VERSION,
+    // Spread rather than assigned so an unresolved version leaves the key
+    // OFF the resource entirely. `resourceFromAttributes` keeps an explicit
+    // `undefined` as a raw attribute, and there is no placeholder to fall
+    // back on by design: `service.name`'s `unknown_service` is the standing
+    // argument against inventing one, since every unversioned process would
+    // then claim the same fake version.
+    ...(config.serviceVersion === undefined
+      ? {}
+      : { [ATTR_SERVICE_VERSION]: config.serviceVersion }),
+  });
+
   // Shared with the heartbeat sender below: both hit the same managed
   // endpoint under the same API key.
   const authHeaders: Record<string, string> = config.apiKey
@@ -267,6 +379,7 @@ export function init(options: InitOptions = {}): RiusClient {
 
   let health: ExportOutcomeExporter | undefined;
   let routing: RoutingSpanExporter | undefined;
+  let detector: ForeignParentDetector | undefined;
   if (!config.disabled) {
     let base =
       options.spanExporter ??
@@ -297,7 +410,16 @@ export function init(options: InitOptions = {}): RiusClient {
             mask: config.mask,
           })
         : health;
-    const batch = new BatchSpanProcessor(exporter);
+    // Outermost: a bridged span arrives carrying the OTHER provider's resource,
+    // from which the sink can derive neither the agent name nor the instance
+    // id. Rius's own spans already hold `resource` and pass through untouched.
+    const adopting = new ResourceAdoptingExporter(exporter, resource);
+    const batch = new BatchSpanProcessor(adopting);
+    // Ahead of every other processor: it reads the parent span out of the start
+    // context, which no later processor changes, and its flag must be on the
+    // span before the pending snapshot is built from it.
+    detector = new ForeignParentDetector(foreignGlobal);
+    processors.add(detector);
     // Added BEFORE the pending processor: both act at onStart, and the
     // pending snapshot is built from the attributes already on the span, so
     // the session id (and the workspace route, which decides which
@@ -323,75 +445,23 @@ export function init(options: InitOptions = {}): RiusClient {
     processors.add(batch);
   }
 
-  // One identity per client lifetime, shared by spans (resource) and
-  // heartbeats (payload instance_id) so the backend can join them and count
-  // replicas. Workers spawned after init() (cluster/fork patterns) should
-  // init() themselves for exact per-worker span identity.
-  const instanceId = randomUUID();
+  const sampler = new BridgeAwareSampler(
+    new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
+  );
+  const spanLimits = resolveSpanLimits();
   const provider = new NodeTracerProvider({
-    // telemetry.sdk.* is reserved for the OTel SDK itself; we identify as a
-    // distribution via telemetry.distro.*, the same two keys Python stamps.
-    resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: config.serviceName,
-      [SERVICE_INSTANCE_ID]: instanceId,
-      // The agent name the heartbeats already carry. Without it here, spans
-      // fall back to service.name downstream while heartbeats group under the
-      // agent name, so a process that configures the two differently sees its
-      // agents view and its trace list disagree. Resolution defaults the agent
-      // name to the service name, so nothing changes when they are the same.
-      [GEN_AI_AGENT_NAME]: config.agentName,
-      // The same fact in our own namespace, and the one the sink reads first.
-      // `gen_ai.agent.name` above is kept ADDITIVELY and on purpose: it has no
-      // resource-level meaning in the conventions and on a span it names the
-      // agent being INVOKED, so it was one key answering two questions — but
-      // dropping it here would be a flag day, blanking agent identity for
-      // every deployment sitting between this SDK release and the sink
-      // release. A resource rides once per OTLP batch, not once per span, so
-      // carrying both costs essentially nothing.
-      //
-      // Spread like `service.version` below, for the same reason: a process
-      // that named nothing resolves to the `unknown_service` placeholder, and
-      // the main-agent name must then be ABSENT rather than claim an identity
-      // the caller never gave — exactly what the span helpers already do.
-      ...(config.mainAgentName === undefined
-        ? {}
-        : { [RIUS_MAIN_AGENT_NAME]: config.mainAgentName }),
-      // Optional and never defaulted; see config.ts. `service.instance.id`
-      // above is the process identity, these describe the AGENT the process
-      // runs, which outlives any one process.
-      ...(config.mainAgentId === undefined ? {} : { [RIUS_MAIN_AGENT_ID]: config.mainAgentId }),
-      ...(config.mainAgentDescription === undefined
-        ? {}
-        : { [RIUS_MAIN_AGENT_DESCRIPTION]: config.mainAgentDescription }),
-      // The version of the AGENT DEFINITION, never derived from (nor deriving)
-      // `service.version` below: the build and the prompt/tools/policy it runs
-      // move independently.
-      ...(config.mainAgentVersion === undefined
-        ? {}
-        : { [RIUS_MAIN_AGENT_VERSION]: config.mainAgentVersion }),
-      "telemetry.distro.name": "glassflow-rius",
-      "telemetry.distro.version": SDK_VERSION,
-      // Spread rather than assigned so an unresolved version leaves the key
-      // OFF the resource entirely. `resourceFromAttributes` keeps an explicit
-      // `undefined` as a raw attribute, and there is no placeholder to fall
-      // back on by design: `service.name`'s `unknown_service` is the standing
-      // argument against inventing one, since every unversioned process would
-      // then claim the same fake version.
-      ...(config.serviceVersion === undefined
-        ? {}
-        : { [ATTR_SERVICE_VERSION]: config.serviceVersion }),
-    }),
+    resource,
     // Always ParentBased, with no AlwaysOn shortcut at rate 1. They are not
     // equivalent: ParentBased honours a remote UNSAMPLED parent and drops,
     // while AlwaysOn records regardless, producing children of a span the
     // upstream service dropped. Rate 1 is the default, so the shortcut would
     // have been the default path for every user.
-    sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
-    // Only when the environment names no count limit: an explicit config
-    // beats the environment in OpenTelemetry JS. See the constant.
-    ...(attributeCountLimitFromEnv()
-      ? {}
-      : { spanLimits: { attributeCountLimit: DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT } }),
+    // Wrapped because ParentBased follows the PARENT's sampled flag, and a
+    // bridged parent's flag is the other SDK's decision (usually always-on),
+    // which would ship every trace it touches whatever sampleRate says.
+    sampler,
+    // Already resolved against the environment; see resolveSpanLimits().
+    spanLimits,
     spanProcessors: [processors],
   });
 
@@ -413,7 +483,12 @@ export function init(options: InitOptions = {}): RiusClient {
   // delegates costs nothing, and it keeps getTracer() returning a real tracer,
   // so caller code that starts spans behaves the same either way and
   // shutdown() has a registration to release.
+  rememberOwnProvider(provider);
+  ownTracerProvider = provider;
   provider.register();
+  const bridged = config.disabled
+    ? undefined
+    : bridgeOrWarn(provider, processors, sampler, spanLimits, config.bridgeForeignProvider);
 
   // Heartbeat: process-lifetime liveness, independent of trace traffic. The
   // tracker rides the delegating processor so payloads can carry the
@@ -435,6 +510,7 @@ export function init(options: InitOptions = {}): RiusClient {
       instanceId,
       tracker,
       transport: options.heartbeatTransport,
+      foreignParentSpans: detector === undefined ? undefined : () => detector.count,
     });
     sender.start();
     // Best-effort: a process that exits without calling shutdown() should
@@ -447,14 +523,73 @@ export function init(options: InitOptions = {}): RiusClient {
     heartbeat = { sender, beforeExitHandler };
   }
 
-  globalClient = createClient({ provider, processors, health, ready, teardown, heartbeat });
+  globalClient = createClient({
+    provider,
+    processors,
+    health,
+    ready,
+    teardown,
+    heartbeat,
+    bridge: bridged,
+  });
   setGlobalRouting(routing);
   // AGENT spans fall back to this when the caller names no agent.
   setConfiguredAgentName(config.agentName);
   return globalClient;
 }
 
+/**
+ * Attach Rius's pipeline to whichever provider won the OpenTelemetry global, or
+ * explain why it did not.
+ *
+ * Called after `register()`, and a no-op when that registration took. The
+ * loser is not always another vendor: a provider this SDK built in an earlier
+ * init() holds the global just as firmly, and its spans are just as invisible
+ * to the new client. Rius's own helpers (`observe`, `startSpan`, the
+ * generation helpers) follow this client either way, but third-party code
+ * calling `trace.getTracer()` keeps the pre-existing provider, and LLM spans
+ * started inside its spans arrive without their parent.
+ */
+function bridgeOrWarn(
+  own: TracerProvider,
+  pipeline: DelegatingSpanProcessor,
+  sampler: BridgeAwareSampler,
+  spanLimits: SpanLimits,
+  bridgeForeignProvider: boolean,
+): Bridge | undefined {
+  const existing = globalTracerProvider();
+  if (existing === undefined || existing === own) return undefined;
+  const foreignGlobal = existing.constructor?.name || "unknown";
+  if (bridgeForeignProvider) {
+    const attached = bridge(existing, pipeline, sampler, spanLimits);
+    if (attached !== undefined) {
+      console.info(
+        `[rius] the OpenTelemetry global tracer provider was already set (${foreignGlobal}); Rius attached its span pipeline to it, so spans started through it are exported to Rius too.`,
+      );
+      return attached;
+    }
+  }
+  const why = bridgeForeignProvider
+    ? "it takes no additional span processor"
+    : "bridgeForeignProvider is off";
+  console.warn(
+    `[rius] could not register the Rius tracer provider as the OpenTelemetry global (${foreignGlobal} is already set, or a previous init() claimed it), and Rius is not attached to it (${why}). Rius' own helpers (observe, startSpan, generations) follow this client regardless; third-party code using trace.getTracer() keeps the pre-existing provider, and LLM spans started inside its spans arrive without their parent. Set RIUS_BRIDGE_FOREIGN_PROVIDER=true or init({ bridgeForeignProvider: true }) to send that provider's spans to Rius as well.`,
+  );
+  return undefined;
+}
+
+/**
+ * The provider this SDK built, whether or not it won the OpenTelemetry global.
+ *
+ * `getTracer()` must not read the global: when another SDK already holds it
+ * (see foreign.ts) `trace.getTracer()` hands back THAT SDK's tracer, so Rius'
+ * own helpers would start their spans on the other vendor's pipeline — exported
+ * by it, and never seen by Rius. Cleared on shutdown, where the global
+ * registration is released too.
+ */
+let ownTracerProvider: NodeTracerProvider | undefined;
+
 /** The SDK tracer. Scope name is wire-visible; do not parameterize it. */
 export function getTracer(): Tracer {
-  return trace.getTracer(TRACER_NAME, SDK_VERSION);
+  return (ownTracerProvider ?? trace).getTracer(TRACER_NAME, SDK_VERSION);
 }

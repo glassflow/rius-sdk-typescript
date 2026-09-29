@@ -118,6 +118,12 @@ export interface HeartbeatSenderOptions {
   transport?: HeartbeatTransport;
   pingTimeoutMs?: number;
   finalPingTimeoutMs?: number;
+  /**
+   * Cumulative count of spans whose local parent came from another in-process
+   * tracer provider Rius does not receive (RIUS-1070). Read at every ping;
+   * omitted from the payload entirely when not supplied.
+   */
+  foreignParentSpans?: () => number;
 }
 
 /** Pings the heartbeat endpoint for the process lifetime; see module docs for the contract. */
@@ -131,6 +137,7 @@ export class HeartbeatSender {
   private readonly pingTimeoutMs: number;
   private readonly finalPingTimeoutMs: number;
   private readonly send: HeartbeatTransport;
+  private readonly foreignParentSpans?: () => number;
 
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
@@ -144,6 +151,7 @@ export class HeartbeatSender {
     this.pingTimeoutMs = opts.pingTimeoutMs ?? DEFAULT_PING_TIMEOUT_MS;
     this.finalPingTimeoutMs = opts.finalPingTimeoutMs ?? DEFAULT_FINAL_PING_TIMEOUT_MS;
     this.send = opts.transport ?? httpTransport(opts.url, opts.headers);
+    this.foreignParentSpans = opts.foreignParentSpans;
   }
 
   /** Starts pinging: an immediate first ping, then every `intervalMs`. */
@@ -180,6 +188,12 @@ export class HeartbeatSender {
       open_traces: openIds.slice(0, OPEN_TRACES_CAP),
       open_trace_count: openIds.length,
     };
+    // Cumulative for this instance, not a delta: a backend that misses a ping
+    // still sees the total. The backend ignores this field until RIUS-1093, so
+    // sending it now costs nothing and starts the data flowing.
+    if (this.foreignParentSpans !== undefined) {
+      payload.foreign_parent_spans = this.foreignParentSpans();
+    }
     // Present-and-true only on the final ping; false is never sent.
     if (stopped) payload.stopped = true;
     return payload;
