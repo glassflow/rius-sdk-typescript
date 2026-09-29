@@ -1,6 +1,11 @@
 import { type ExportResult, ExportResultCode } from "@opentelemetry/core";
-import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
-import { describe, expect, it } from "vitest";
+import {
+  InMemorySpanExporter,
+  type ReadableSpan,
+  type SpanExporter,
+} from "@opentelemetry/sdk-trace-base";
+import { afterEach, describe, expect, it } from "vitest";
+import { type InitOptions, type RiusClient, getTracer, init } from "../src/client.js";
 import { MaskingSpanExporter, isContentKey } from "../src/masking.js";
 
 function span(attributes: Record<string, unknown>): ReadableSpan {
@@ -514,5 +519,189 @@ describe("request-parameter namespaces", () => {
     );
     expect(inner.seen[0].attributes["rius.request.tools"]).toBe("***");
     expect(inner.seen[0].attributes["gen_ai.request.temperature"]).toBe(0.7);
+  });
+});
+
+// --- content keys of other OTel-based SDKs (RIUS-1097) -------------------------
+//
+// With the bridge on, a Langfuse or Logfire span reaches this exporter; so it
+// does whenever Rius holds the global provider those SDKs then write to. Either
+// way their content keys are ours to strip.
+
+const THIRD_PARTY_CONTENT_KEYS = [
+  // langfuse 3.15, langfuse/_client/attributes.py
+  "langfuse.observation.input",
+  "langfuse.observation.output",
+  "langfuse.trace.input",
+  "langfuse.trace.output",
+  "langfuse.observation.metadata",
+  "langfuse.observation.metadata.customer_note",
+  "langfuse.trace.metadata",
+  "langfuse.trace.metadata.customer_note",
+  "langfuse.observation.status_message",
+  "langfuse.experiment.metadata",
+  "langfuse.experiment.item.metadata",
+  "langfuse.experiment.item.expected_output",
+  // traceloop-sdk 0.62.3 and its instrumentations
+  "traceloop.entity.input",
+  "traceloop.entity.output",
+  "traceloop.prompt.template",
+  "traceloop.prompt.template_variables",
+  "traceloop.prompt.template_variables.question",
+  "gen_ai.task.input",
+  "gen_ai.task.output",
+  "mcp.response.value",
+  "llm.request.functions.0.description",
+  "llm.request.functions.0.parameters",
+  "llm.request.functions.12.arguments",
+  // logfire 5.1.1
+  "logfire.msg",
+  "request_data",
+  "response_data",
+  "events",
+  "all_messages_events",
+  "pydantic_ai.all_messages",
+  "raw_input",
+  "response",
+  "input",
+  "output",
+  // mlflow-tracing 3.16.1, mlflow/tracing/constant.py
+  "mlflow.spanInputs",
+  "mlflow.spanOutputs",
+  "mlflow.chat.tools",
+  "mlflow.trace.intermediate_outputs",
+  "mlflow.chunk.value",
+  // openlit 1.45.0, openlit/semcov/__init__.py
+  "gen_ai.retrieval.query.text",
+  "gen_ai.content.reasoning",
+  "gen_ai.content.revised_prompt",
+  "gen_ai.tool.args",
+  "gen_ai.response.tool_calls",
+  "gen_ai.workflow.input",
+  "gen_ai.workflow.output",
+  "gen_ai.framework.pipeline.input_data",
+  "gen_ai.framework.pipeline.output_data",
+  "gen_ai.framework.error.message",
+  "gen_ai.agent.context",
+  "gen_ai.agent.instructions",
+  "gen_ai.agent.goal",
+  "gen_ai.agent.action.tool_input",
+  "gen_ai.agent.final_result",
+  "gen_ai.agent.next_goal",
+  "gen_ai.agent.step_messages",
+  "gen_ai.memory.search.query",
+  "gen_ai.vectordb.search.query",
+  "gen_ai.extraction.instruction",
+  "mcp.tool.arguments",
+  "mcp.tool.result",
+  "mcp.result",
+  "mcp.params",
+  "mcp.sampling.messages",
+  "mcp.fastmcp.prompt.arguments",
+  "mcp.completion.argument.value",
+  "mcp.completion.context.arguments",
+  "mcp.completion.values",
+  "mcp.error.message",
+];
+
+/**
+ * Keys the same SDKs write next to their content that must survive content
+ * capture off: usage, identity and shape, several of them one suffix away from
+ * a content key.
+ */
+const THIRD_PARTY_KEYS_THAT_SURVIVE = [
+  "input_tokens",
+  "gen_ai.usage.input_tokens",
+  "gen_ai.usage.output_tokens",
+  "input.mime_type",
+  "output.mime_type",
+  "llm.token_count.prompt",
+  "llm.token_count.completion",
+  "llm.token_count.total",
+  "langfuse.observation.type",
+  "langfuse.observation.level",
+  "langfuse.observation.model.name",
+  "langfuse.observation.usage_details",
+  "langfuse.trace.name",
+  "langfuse.trace.tags",
+  "session.id",
+  "user.id",
+  "traceloop.entity.name",
+  "traceloop.prompt.key",
+  "llm.request.functions.0.name",
+  "llm.request.functions.12.name",
+  "logfire.msg_template",
+  "logfire.span_type",
+  "mlflow.spanType",
+  "mlflow.chat.tokenUsage",
+  "gen_ai.agent.description",
+  "mcp.method.name",
+];
+
+let client: RiusClient | undefined;
+afterEach(async () => {
+  await client?.shutdown();
+  client = undefined;
+});
+
+/** One span through the real init() pipeline: normalization, then masking. */
+async function exportedAttributes(
+  values: Record<string, string>,
+  options: InitOptions = {},
+): Promise<ReadableSpan["attributes"]> {
+  const exporter = new InMemorySpanExporter();
+  client = init({ spanExporter: exporter, heartbeat: false, ...options });
+  const span = getTracer().startSpan("op");
+  for (const [key, value] of Object.entries(values)) span.setAttribute(key, value);
+  span.end();
+  await client.flush();
+  return { ...exporter.getFinishedSpans()[0].attributes };
+}
+
+describe("third-party SDK content keys", () => {
+  it("are stripped with captureContent off", async () => {
+    const attributes = await exportedAttributes(
+      Object.fromEntries(THIRD_PARTY_CONTENT_KEYS.map((key) => [key, "SECRET"])),
+      { captureContent: false },
+    );
+    const leaked = Object.entries(attributes)
+      .filter(([, value]) => value === "SECRET")
+      .map(([key]) => key)
+      .sort();
+    expect(leaked).toEqual([]);
+  });
+
+  it("reach a mask with their own key", async () => {
+    const seen: string[] = [];
+    await exportedAttributes(
+      Object.fromEntries(THIRD_PARTY_CONTENT_KEYS.map((key) => [key, "SECRET"])),
+      {
+        mask: (_value, ctx) => {
+          if (ctx?.key !== undefined) seen.push(ctx.key);
+          return "***";
+        },
+      },
+    );
+    expect(seen.sort()).toEqual([...THIRD_PARTY_CONTENT_KEYS].sort());
+  });
+
+  it("do not drag usage and identity keys with them", () => {
+    expect(THIRD_PARTY_KEYS_THAT_SURVIVE.filter(isContentKey)).toEqual([]);
+  });
+
+  it("leave usage and identity keys on the span with captureContent off", async () => {
+    // Normalization renames llm.token_count.{prompt,completion} before masking
+    // runs, so only the key-level test above can speak for those two.
+    const renamed = ["llm.token_count.prompt", "llm.token_count.completion"];
+    const values = Object.fromEntries(
+      THIRD_PARTY_KEYS_THAT_SURVIVE.filter((key) => !renamed.includes(key)).map((key) => [
+        key,
+        "kept",
+      ]),
+    );
+    const attributes = await exportedAttributes(values, { captureContent: false });
+    expect(Object.fromEntries(Object.keys(values).map((key) => [key, attributes[key]]))).toEqual(
+      values,
+    );
   });
 });

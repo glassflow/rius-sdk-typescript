@@ -34,6 +34,7 @@ import type {
   SpanExporter,
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+import { twinOf } from "./foreign.js";
 import { WORKSPACE_ROUTE } from "./semconv.js";
 
 const WORKSPACE_KEY = createContextKey("rius-workspace-alias");
@@ -72,7 +73,10 @@ export class WorkspaceSpanProcessor implements SpanProcessor {
   private readonly warnedStraddles = new Set<string>();
 
   onStart(span: Span, parentContext: Context): void {
-    const parent = trace.getSpan(parentContext);
+    // Through twinOf: with a bridge to another SDK's provider, Rius's pipeline
+    // sees that SDK's spans as private twins, and the twin is where the route
+    // was stamped. See foreign.ts.
+    const parent = twinOf(trace.getSpan(parentContext));
     const parentAlias = (parent as unknown as ReadableSpan | undefined)?.attributes?.[
       WORKSPACE_ROUTE
     ];

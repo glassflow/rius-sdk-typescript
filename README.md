@@ -356,6 +356,7 @@ variables, then the defaults below.
 | `partialSpans`     | `RIUS_PARTIAL_SPANS`     | `false`                                       |
 | `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
+| `bridgeForeignProvider` | `RIUS_BRIDGE_FOREIGN_PROVIDER` | `false` (also export the spans of another OpenTelemetry SDK that owns the global provider; see below) |
 
 Traces are posted to `<endpoint>/v1/traces`.
 
@@ -418,6 +419,27 @@ scrubbed too.
 optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
+
+### Running next to another OpenTelemetry SDK
+
+OpenTelemetry has one global tracer provider per process, and the first
+registration wins. If another SDK (Langfuse v3, for one) claims it before
+`init()`, your own job and tool spans go to that SDK only, while the LLM spans
+inside them still reach Rius — so Rius receives traces whose parents it never
+gets. Rius detects this whatever you configure: those LLM spans carry
+`rius.parent.foreign=true`, the resource records
+`rius.sdk.global_provider=foreign:<class>`, and the first one logs a warning.
+
+To send the other SDK's spans to Rius as well, opt in with
+`init({ bridgeForeignProvider: true })` or `RIUS_BRIDGE_FOREIGN_PROVIDER=true`.
+Rius then attaches its own pipeline to that provider and exports its spans too,
+subject to Rius's `sampleRate`, `captureContent` and `mask`, under the Rius
+resource identity. It never modifies what the other SDK exports: that vendor
+receives exactly what it would without Rius.
+
+```typescript
+init({ bridgeForeignProvider: true }) // export the other SDK's spans as well
+```
 
 ## Agent liveness
 

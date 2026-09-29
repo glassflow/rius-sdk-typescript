@@ -22,6 +22,7 @@
 import { randomUUID } from "node:crypto";
 import { type Context, context as apiContext, createContextKey, trace } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { twinOf } from "./foreign.js";
 import { SESSION_ID } from "./semconv.js";
 
 const SESSION_KEY = createContextKey("rius-session-id");
@@ -73,7 +74,10 @@ export class SessionSpanProcessor implements SpanProcessor {
     const value = parentContext.getValue(SESSION_KEY);
     // Scope, then the parent span's own stamp (a callback that lost the
     // async context and re-parented by hand), then the init-level default.
-    const parent = trace.getSpan(parentContext) as unknown as ReadableSpan | undefined;
+    // Through twinOf: with a bridge to another SDK's provider, Rius's pipeline
+    // sees that SDK's spans as private twins, and the twin is where the session
+    // id was stamped. See foreign.ts.
+    const parent = twinOf(trace.getSpan(parentContext)) as unknown as ReadableSpan | undefined;
     const inherited = parent?.attributes?.[SESSION_ID];
     const sessionId =
       typeof value === "string"
