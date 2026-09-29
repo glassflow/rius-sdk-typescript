@@ -766,6 +766,14 @@ export const THIRD_PARTY_CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "mcp.completion.context.arguments",
   "mcp.completion.values",
   "mcp.error.message",
+  // lmnr 0.7.64 (Laminar; the TypeScript SDK writes the same wire keys): the
+  // observed function's arguments and return value, the caller's metadata
+  // (one key per member, see the prefixes below), and the provider's whole
+  // reply its Anthropic and LiteLLM instrumentations write.
+  "lmnr.span.input",
+  "lmnr.span.output",
+  "lmnr.association.properties.metadata",
+  "lmnr.sdk.raw.response",
 ]);
 
 /** Attribute keys carrying user content: masked or stripped at export. */
@@ -863,7 +871,20 @@ export const CONTENT_ATTRIBUTE_PREFIXES: readonly string[] = [
   "langfuse.observation.metadata.",
   "langfuse.trace.metadata.",
   "traceloop.prompt.template_variables.",
+  "lmnr.association.properties.metadata.",
 ];
+
+/**
+ * Members of a content prefix that carry identity, not content. Laminar's
+ * metadata is the caller's arbitrary payload, but the sink reads these three
+ * as the tool call id and the agent name; masking them would cost a
+ * captureContent: false trace its tool linkage and its agent.
+ */
+export const CONTENT_PREFIX_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "lmnr.association.properties.metadata.tool_call_id",
+  "lmnr.association.properties.metadata.agent.name",
+  "lmnr.association.properties.metadata.service.name",
+]);
 
 export const CONTENT_ATTRIBUTE_SUFFIXES: readonly string[] = [
   ".document.content",
