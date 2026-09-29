@@ -2,6 +2,32 @@
 
 ## [1.0.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.8.0...v1.0.0) (2026-09-29)
 
+### Upgrading from 0.x
+
+Version 1.0.0 finishes the move from the GlassFlow name to Rius and brings span names in line with the OpenTelemetry GenAI conventions. It needs the Rius platform release of 2026-09-29 or later, which accepts `rius.span.pending`.
+
+**Breaking changes and how to migrate**
+
+| What changed | What to do |
+|---|---|
+| The pending-span attribute is now `rius.span.pending`, not `glassflow.span.pending` (#67) | Update any code that imports the constant. |
+| The tracer scope is now `rius`, not `glassflow` (#67) | Update any collector or processor rule that filters on the instrumentation scope. |
+| Span names follow the GenAI conventions: `chat {model}`, `embeddings {model}`, `execute_tool {tool}`, `invoke_agent {agent}`, `retrieval {data_source}`. CHAIN spans keep the function name, and an explicit name still wins (#72) | Update saved searches, alerts and dashboards that are keyed on span name, or pass an explicit name. |
+| RETRIEVER spans carry `gen_ai.operation.name="retrieval"` and accept `dataSourceId` (#69) | Update any filter on the old operation name. |
+| `modelParameters` maps 43 aliases onto 15 standard `gen_ai.request.*` keys, and unknown keys go under `rius.request.*` (#85) | Filter on the standard keys. |
+| The `@arizeai/openinference-instrumentation-anthropic` peer now needs `^0.2.7`, the first version that reports prompt-cache tokens (#96) | Upgrade that peer dependency. |
+
+**Behaviour changes**
+
+- The span helpers take `toolName`, so the tool name no longer has to come from the span name (#68).
+- A span can carry up to 4096 attributes, up from 128, so long agent calls keep their usage and output (#95).
+- With `captureContent: false`, the OpenInference request-parameter bag (`llm.invocation_parameters`) is treated as content and is not sent (#87).
+- **Other OpenTelemetry SDKs in the same process** (Langfuse, Traceloop, Logfire, MLflow, OpenLIT, Laminar): when one of them owns the global tracer provider, Rius can now bridge it, so that their spans (your LLM calls' parents) reach Rius too. The bridge is off by default. Turn it on with `bridgeForeignProvider: true` or `RIUS_BRIDGE_FOREIGN_PROVIDER=1`. Spans whose parent Rius never saw are flagged `rius.parent.foreign` either way (#104).
+- With `captureContent: false`, the Laminar `lmnr.*` content keys are stripped too (#105).
+
+Node 18+ is still supported, and the package name (`@glassflow-ai/rius`) is unchanged.
+
+
 
 ### ⚠ BREAKING CHANGES
 
