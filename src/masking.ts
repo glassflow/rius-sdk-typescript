@@ -7,6 +7,7 @@ import {
   CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES,
   CONTENT_ATTRIBUTE_PREFIXES,
   CONTENT_ATTRIBUTE_SUFFIXES,
+  CONTENT_PREFIX_IDENTITY_ATTRIBUTES,
   EXCEPTION_EVENT,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
@@ -16,7 +17,11 @@ const METADATA_PREFIX = "metadata.";
 
 export function isContentKey(key: string): boolean {
   if (CONTENT_ATTRIBUTES.has(key)) return true;
-  if (CONTENT_ATTRIBUTE_PREFIXES.some((p) => key.startsWith(p))) return true;
+  if (
+    CONTENT_ATTRIBUTE_PREFIXES.some((p) => key.startsWith(p)) &&
+    !CONTENT_PREFIX_IDENTITY_ATTRIBUTES.has(key)
+  )
+    return true;
   if (CONTENT_ATTRIBUTE_SUFFIXES.some((s) => key.endsWith(s))) return true;
   if (
     CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES.some(
