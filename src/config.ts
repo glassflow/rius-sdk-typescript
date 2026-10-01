@@ -24,8 +24,9 @@ export function namedAgent(agentName: string | undefined): string | undefined {
   return agentName === undefined || agentName === DEFAULT_SERVICE_NAME ? undefined : agentName;
 }
 
-// The backend expresses staleness as multiples of the interval, so the clamp
-// bounds are part of the heartbeat wire contract.
+// The server, not this interval, decides when an agent is stale (30s since
+// its last ping) or gone (60s). The interval only sets how often the SDK
+// pings, so it must stay well under 30s for an agent to show as live.
 const HEARTBEAT_INTERVAL_MIN = 5;
 const HEARTBEAT_INTERVAL_MAX = 300;
 const DEFAULT_HEARTBEAT_INTERVAL = 15;
