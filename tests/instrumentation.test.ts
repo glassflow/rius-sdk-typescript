@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { TracerProvider } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -13,6 +14,7 @@ import {
   type RegistryEntry,
   enableInstrumentations,
   isUnresolved,
+  readDeclaredDependencies,
 } from "../src/instrumentation.js";
 
 // init() hands back the existing client while one is active, so a client that
@@ -108,6 +110,29 @@ describe("REGISTRY", () => {
 
   it("marks vercel-ai for insertion first, so masking still sees what it adds", () => {
     expect(REGISTRY.find((e) => e.name === "vercel-ai")?.insert).toBe("first");
+  });
+
+  it("names the package whose listing in package.json means the user wants anthropic or openai", () => {
+    expect(REGISTRY.find((e) => e.name === "anthropic")?.optInPackage).toBe(
+      "@arizeai/openinference-instrumentation-anthropic",
+    );
+    expect(REGISTRY.find((e) => e.name === "openai")?.optInPackage).toBe(
+      "@arizeai/openinference-instrumentation-openai",
+    );
+  });
+});
+
+describe("readDeclaredDependencies", () => {
+  it("reads the dependency names listed in the package.json of the given directory", () => {
+    // vitest runs from the repo root, where this instrumentation is a devDependency.
+    expect(readDeclaredDependencies(process.cwd())).toContain(
+      "@arizeai/openinference-instrumentation-anthropic",
+    );
+  });
+
+  it("returns an empty set, without throwing, when there is no package.json", () => {
+    const declared = readDeclaredDependencies(join(process.cwd(), "no-such-dir"));
+    expect(declared.size).toBe(0);
   });
 });
 
@@ -331,6 +356,132 @@ describe("enableInstrumentations diagnostics", () => {
           warn.mockRestore();
         }
       },
+    );
+  });
+
+  it("warns once when load() resolves undefined for a package the app lists in package.json", async () => {
+    const sink = makeSink();
+    await withEntry(
+      {
+        name: "test-declared-entry",
+        kind: "instrumentation",
+        optInPackage: "test-declared-pkg",
+        load: async () => undefined,
+      },
+      async () => {
+        const warn = spyOnWarn();
+        try {
+          const enabled = await enableInstrumentations(
+            sink,
+            tracerProvider,
+            ["test-declared-entry"],
+            undefined,
+            { declaredDependencies: () => new Set(["test-declared-pkg"]) },
+          );
+          expect(enabled).toEqual([]);
+          expect(warn).toHaveBeenCalledTimes(1);
+          const message = String(warn.mock.calls[0]?.[0]);
+          expect(message).toContain("test-declared-entry");
+          expect(message).toContain("test-declared-pkg");
+          expect(message).toContain("instrumentModules");
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("stays quiet when the unloaded package is not listed in package.json", async () => {
+    const sink = makeSink();
+    await withEntry(
+      {
+        name: "test-declared-entry",
+        kind: "instrumentation",
+        optInPackage: "test-declared-pkg",
+        load: async () => undefined,
+      },
+      async () => {
+        const warn = spyOnWarn();
+        try {
+          const enabled = await enableInstrumentations(
+            sink,
+            tracerProvider,
+            ["test-declared-entry"],
+            undefined,
+            { declaredDependencies: () => new Set() },
+          );
+          expect(enabled).toEqual([]);
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("does not warn for a listed package that loaded", async () => {
+    const sink = makeSink();
+    await withEntry(
+      {
+        name: "test-declared-entry",
+        kind: "processor",
+        optInPackage: "test-declared-pkg",
+        load: async () => inertProcessor,
+      },
+      async () => {
+        const warn = spyOnWarn();
+        try {
+          const enabled = await enableInstrumentations(
+            sink,
+            tracerProvider,
+            ["test-declared-entry"],
+            undefined,
+            { declaredDependencies: () => new Set(["test-declared-pkg"]) },
+          );
+          expect(enabled).toEqual(["test-declared-entry"]);
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("reads the declared set at most once per call, and only when an entry needs it", async () => {
+    const sink = makeSink();
+    const entry = (name: string): RegistryEntry => ({
+      name,
+      kind: "instrumentation",
+      optInPackage: `${name}-pkg`,
+      load: async () => undefined,
+    });
+    await withEntry(entry("test-declared-a"), () =>
+      withEntry(entry("test-declared-b"), async () => {
+        const warn = spyOnWarn();
+        try {
+          const declaredDependencies = vi.fn(
+            () => new Set(["test-declared-a-pkg", "test-declared-b-pkg"]),
+          );
+          await enableInstrumentations(
+            sink,
+            tracerProvider,
+            ["test-declared-a", "test-declared-b"],
+            undefined,
+            { declaredDependencies },
+          );
+          expect(declaredDependencies).toHaveBeenCalledTimes(1);
+          expect(warn).toHaveBeenCalledTimes(2);
+
+          // Nothing unloaded, or nothing carrying an opt-in package: never read.
+          declaredDependencies.mockClear();
+          await enableInstrumentations(sink, tracerProvider, [], undefined, {
+            declaredDependencies,
+          });
+          expect(declaredDependencies).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      }),
     );
   });
 
