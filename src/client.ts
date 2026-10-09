@@ -31,7 +31,7 @@ import {
   rememberOwnProvider,
 } from "./foreign.js";
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
-import { enableInstrumentations } from "./instrumentation.js";
+import { type InstrumentModules, enableInstrumentations } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
@@ -61,6 +61,18 @@ export interface InitOptions extends RiusOptions {
   spanExporter?: SpanExporter;
   /** Override the heartbeat HTTP transport. The test seam; prefer this to mocking fetch. */
   heartbeatTransport?: HeartbeatTransport;
+  /**
+   * Modules your app imported itself, for the `anthropic` and `openai`
+   * integrations: `{ anthropic: { instrumentation, sdk } }`, each field an
+   * `import * as` namespace of `@arizeai/openinference-instrumentation-anthropic`
+   * and `@anthropic-ai/sdk` (or their `openai` counterparts). An integration
+   * given here is enabled from these modules and nothing is resolved for it.
+   * For deployments where the SDK cannot load its optional peers itself, such
+   * as a pnpm app on a file-tracing host. The `sdk` must be the copy your own
+   * client calls use. A module of the wrong shape logs one warning and leaves
+   * that integration off.
+   */
+  instrumentModules?: InstrumentModules;
   /**
    * Enable multi-workspace routing: a map of alias to API key. Spans started
    * inside `withWorkspace(alias, fn)` are exported with that workspace's
@@ -477,7 +489,9 @@ export function init(options: InitOptions = {}): RiusClient {
   const teardown: Array<() => void> = [];
   const ready = config.disabled
     ? Promise.resolve<string[]>([])
-    : enableInstrumentations(processors, provider, undefined, teardown);
+    : enableInstrumentations(processors, provider, undefined, teardown, {
+        instrumentModules: options.instrumentModules,
+      });
 
   // Registered even when disabled: a provider whose only processor has no
   // delegates costs nothing, and it keeps getTracer() returning a real tracer,

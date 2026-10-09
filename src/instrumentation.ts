@@ -48,8 +48,49 @@ export interface RegistryEntry {
    * patches afresh. Self-applying entries push their uninstall functions
    * here; conventional instrumentations are disabled by
    * `enableInstrumentations` and need not.
+   *
+   * `modules` carries the modules the app passed to `init()` itself; an entry
+   * that has one uses it instead of resolving its packages.
    */
-  load(tracerProvider?: TracerProvider, teardown?: Array<() => void>): Promise<unknown | undefined>;
+  load(
+    tracerProvider?: TracerProvider,
+    teardown?: Array<() => void>,
+    modules?: InstrumentModules,
+  ): Promise<unknown | undefined>;
+}
+
+/**
+ * One provider integration, handed over by the app rather than resolved by the
+ * SDK. Both fields are module namespaces, as produced by `import * as`.
+ */
+export interface InjectedIntegration {
+  /**
+   * The module namespace of the OpenInference instrumentation package for this
+   * provider (`import * as instrumentation from
+   * "@arizeai/openinference-instrumentation-anthropic"`).
+   */
+  instrumentation: object;
+  /**
+   * The module namespace of the provider SDK (`import * as sdk from
+   * "@anthropic-ai/sdk"`). It must be the copy the app's own client calls go
+   * through, since that is the one that gets patched.
+   */
+  sdk: object;
+}
+
+/**
+ * The integrations an app can hand to `init()` directly. Only the provider SDK
+ * integrations take part; the others are always resolved by the SDK.
+ */
+export interface InstrumentModules {
+  anthropic?: InjectedIntegration;
+  openai?: InjectedIntegration;
+}
+
+/** Inputs to {@link enableInstrumentations} beyond the entries themselves. */
+export interface EnableOptions {
+  /** Modules the app imported itself; see {@link InstrumentModules}. */
+  instrumentModules?: InstrumentModules;
 }
 
 /**
@@ -444,6 +485,47 @@ export function mcpClientPatchable(exports: Record<string, unknown>): object | u
 }
 
 /**
+ * Enables a provider integration from modules the app injected, resolving
+ * nothing: the app's own static imports are what a file tracer deploys, so this
+ * path does not depend on the installed `node_modules` layout the way the
+ * SDK's runtime-built imports do.
+ *
+ * Throws on a wrongly shaped module so `enableInstrumentations` logs its one
+ * warning for the entry. The app passed the module on purpose, so a silent skip
+ * would hide a mistake it can fix.
+ */
+function loadInjected(
+  option: string,
+  injected: InjectedIntegration,
+  exportName: string,
+  toPatchable: (exports: Record<string, unknown>) => object | undefined,
+  construct: (Ctor: new () => PatchingInstrumentation) => ManuallyInstrumentable,
+): ManuallyInstrumentable {
+  const Ctor = (injected.instrumentation as Record<string, unknown>)[exportName];
+  if (typeof Ctor !== "function") {
+    throw new Error(`instrumentModules.${option}.instrumentation does not export ${exportName}`);
+  }
+  const instrumentation = construct(Ctor as new () => PatchingInstrumentation);
+  const patchable = toPatchable(injected.sdk as Record<string, unknown>);
+  if (patchable === undefined) {
+    throw new Error(
+      `instrumentModules.${option}.sdk is not the ${option === "openai" ? "openai" : "@anthropic-ai/sdk"} module namespace`,
+    );
+  }
+  instrumentation.manuallyInstrument(patchable);
+  return instrumentation;
+}
+
+/** The injected integration for `name`, only when the app set it as its own property. */
+function injectedFor(
+  modules: InstrumentModules | undefined,
+  name: keyof InstrumentModules,
+): InjectedIntegration | undefined {
+  if (modules === undefined || !Object.hasOwn(modules, name)) return undefined;
+  return modules[name];
+}
+
+/**
  * Bundled integrations. Packages are imported lazily so none is a hard
  * dependency; install them as optional peers and init() enables what it finds.
  *
@@ -588,7 +670,21 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "openai",
     kind: "instrumentation",
-    async load() {
+    async load(
+      _tracerProvider?: TracerProvider,
+      _teardown?: Array<() => void>,
+      modules?: InstrumentModules,
+    ) {
+      const injected = injectedFor(modules, "openai");
+      if (injected !== undefined) {
+        return loadInjected(
+          "openai",
+          injected,
+          "OpenAIInstrumentation",
+          openaiPatchable,
+          (Ctor) => new (withRejectedCallsEnded(Ctor))(),
+        );
+      }
       const mod = await optional("@arizeai/openinference-instrumentation-openai");
       const Ctor = mod?.OpenAIInstrumentation as (new () => PatchingInstrumentation) | undefined;
       if (Ctor === undefined) return undefined;
@@ -608,7 +704,21 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "anthropic",
     kind: "instrumentation",
-    async load() {
+    async load(
+      _tracerProvider?: TracerProvider,
+      _teardown?: Array<() => void>,
+      modules?: InstrumentModules,
+    ) {
+      const injected = injectedFor(modules, "anthropic");
+      if (injected !== undefined) {
+        return loadInjected(
+          "anthropic",
+          injected,
+          "AnthropicInstrumentation",
+          anthropicPatchable,
+          (Ctor) => new Ctor(),
+        );
+      }
       const mod = await optional("@arizeai/openinference-instrumentation-anthropic");
       const Ctor = mod?.AnthropicInstrumentation as (new () => ManuallyInstrumentable) | undefined;
       if (Ctor === undefined) return undefined;
@@ -698,13 +808,14 @@ export async function enableInstrumentations(
   tracerProvider: TracerProvider,
   names?: string[],
   teardown?: Array<() => void>,
+  options?: EnableOptions,
 ): Promise<string[]> {
   const wanted = names ? REGISTRY.filter((e) => names.includes(e.name)) : REGISTRY;
   const enabled: string[] = [];
 
   for (const entry of wanted) {
     try {
-      const loaded = await entry.load(tracerProvider, teardown);
+      const loaded = await entry.load(tracerProvider, teardown, options?.instrumentModules);
       if (loaded === undefined) continue;
 
       if (entry.kind === "processor") {
