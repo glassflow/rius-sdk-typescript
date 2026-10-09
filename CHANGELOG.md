@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.0.0...v1.1.0) (2026-10-09)
+
+
+### Features
+
+* accept app-imported anthropic and openai modules in init() ([#107](https://github.com/glassflow/rius-sdk-typescript/issues/107)) ([83ee444](https://github.com/glassflow/rius-sdk-typescript/commit/83ee444a506329a9995f2ede85353e0a34fd30a8))
+
+
+### Bug Fixes
+
+* warn when a declared anthropic or openai integration cannot load ([#109](https://github.com/glassflow/rius-sdk-typescript/issues/109)) ([d1ad014](https://github.com/glassflow/rius-sdk-typescript/commit/d1ad01409b1c20af7329a578147ba4c151cab909))
+
 ## [1.0.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.8.0...v1.0.0) (2026-09-29)
 
 ### Upgrading from 0.x
