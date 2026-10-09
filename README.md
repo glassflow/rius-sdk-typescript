@@ -303,9 +303,12 @@ modules you pass in (see "pnpm and serverless deployments" below).
 `client.ready` resolves with the
 names that attached (for example `["openai", "mcp"]`) and never rejects,
 even if every peer is missing or one of them is broken. A package that
-is not installed stays quiet; a package that is installed but fails to
-load logs a warning naming the integration and the underlying error, and
-the SDK continues without it.
+is not installed stays quiet, unless it is an `openai` or `anthropic`
+instrumentation package that your `package.json` lists: then the SDK
+logs one warning, because the package is there but the SDK could not
+load it. A package that is installed but fails to load logs a warning
+naming the integration and the underlying error. In every case the SDK
+continues without the integration.
 
 ### pnpm and serverless deployments
 
@@ -313,7 +316,14 @@ The SDK finds its optional peers by importing them at runtime, relative to
 its own files. A file-tracing deployment of a pnpm app (a serverless
 function on Vercel, for example) may not ship the links that import
 follows, so the integration stays off: `client.ready` leaves out
-`anthropic` or `openai` and no LLM spans are recorded. Your own `import`
+`anthropic` or `openai` and no LLM spans are recorded. When your
+`package.json` lists the integration's instrumentation package
+(`@arizeai/openinference-instrumentation-anthropic` or
+`@arizeai/openinference-instrumentation-openai`) but the SDK cannot load
+it, `init()` logs one warning that names the integration and points at
+`instrumentModules`. The check is best effort: it reads the
+`package.json` in the working directory, and if that file is not
+there, the integration is skipped without a warning. Your own `import`
 statements are what the tracer does follow, so hand the modules to
 `init()` and it patches those instead of looking for them:
 

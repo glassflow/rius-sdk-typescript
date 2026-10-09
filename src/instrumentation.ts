@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, sep } from "node:path";
 import {
@@ -33,6 +34,13 @@ export interface RegistryEntry {
    * `instrumentation` and `self-applying` entries. Defaults to `"last"`.
    */
   insert?: "first" | "last";
+  /**
+   * The package whose listing in the app's `package.json` means the user wants
+   * this integration. When `load()` resolves undefined and this package is
+   * listed, the SDK warns instead of staying quiet, since "listed but not
+   * loadable" is a different situation from "never installed".
+   */
+  optInPackage?: string;
   /**
    * Resolves undefined when the optional package is not installed.
    * For a `self-applying` entry, resolving to anything other than undefined
@@ -91,6 +99,37 @@ export interface InstrumentModules {
 export interface EnableOptions {
   /** Modules the app imported itself; see {@link InstrumentModules}. */
   instrumentModules?: InstrumentModules;
+  /**
+   * The package names the app's `package.json` lists. Defaults to reading the
+   * `package.json` in `process.cwd()`; a test passes its own.
+   */
+  declaredDependencies?: () => ReadonlySet<string>;
+}
+
+const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+
+/**
+ * The package names listed in the `package.json` of `dir`, across dependencies,
+ * devDependencies and optionalDependencies. Best effort: a missing, unreadable
+ * or malformed file gives an empty set, never an error.
+ *
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export function readDeclaredDependencies(dir: string): ReadonlySet<string> {
+  const names = new Set<string>();
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    if (typeof manifest !== "object" || manifest === null) return names;
+    for (const field of DEPENDENCY_FIELDS) {
+      if (!Object.hasOwn(manifest, field)) continue;
+      const listed = (manifest as Record<string, unknown>)[field];
+      if (typeof listed !== "object" || listed === null || Array.isArray(listed)) continue;
+      for (const name of Object.keys(listed)) names.add(name);
+    }
+  } catch {
+    return new Set();
+  }
+  return names;
 }
 
 /**
@@ -160,7 +199,10 @@ export function isUnresolved(error: unknown, specifier: string): boolean {
   ).test(message);
 }
 
-async function optional(specifier: string): Promise<Record<string, unknown> | undefined> {
+/**
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export async function optional(specifier: string): Promise<Record<string, unknown> | undefined> {
   try {
     return await dynamicImport(specifier);
   } catch (error) {
@@ -190,13 +232,46 @@ async function optional(specifier: string): Promise<Record<string, unknown> | un
 }
 
 /**
+ * How many "present but broken" warnings have been logged. A load() that
+ * resolves undefined after this moved was not absent: the import already
+ * reported why, so the listed-but-unreachable warning must not repeat it.
+ */
+let brokenReports = 0;
+
+/**
  * The single warn path for "present but broken". `subject` is a module specifier
  * when an import failed and an entry name when enabling one failed. Accepts an
  * unknown throwable and never throws itself, so it is safe on any error path.
  */
 function warnBroken(subject: string, error: unknown): void {
+  brokenReports++;
   const message = error instanceof Error ? error.message : String(error);
   console.warn(`[rius] integration "${subject}" is installed but failed to load: ${message}`);
+}
+
+/**
+ * The warn path for "the app lists this package but the SDK could not load it".
+ * Never throws.
+ */
+function warnDeclaredUnloaded(entryName: string, pkg: string): void {
+  const what = `integration "${entryName}" is not instrumented: ${pkg} is listed in package.json`;
+  console.warn(
+    `[rius] ${what} but the SDK could not load it. Pass the modules your app imports to init({ instrumentModules }) to enable it.`,
+  );
+}
+
+/**
+ * The packages the app lists, or none when they cannot be read. The warning
+ * this feeds is best effort, so a failing reader (a working directory that no
+ * longer exists, say) must stay quiet rather than be reported as a broken
+ * integration.
+ */
+function declaredDependenciesOf(read?: () => ReadonlySet<string>): ReadonlySet<string> {
+  try {
+    return (read ?? (() => readDeclaredDependencies(process.cwd())))();
+  } catch {
+    return new Set();
+  }
 }
 
 interface ManuallyInstrumentable {
@@ -670,6 +745,7 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "openai",
     kind: "instrumentation",
+    optInPackage: "@arizeai/openinference-instrumentation-openai",
     async load(
       _tracerProvider?: TracerProvider,
       _teardown?: Array<() => void>,
@@ -704,6 +780,7 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "anthropic",
     kind: "instrumentation",
+    optInPackage: "@arizeai/openinference-instrumentation-anthropic",
     async load(
       _tracerProvider?: TracerProvider,
       _teardown?: Array<() => void>,
@@ -812,11 +889,22 @@ export async function enableInstrumentations(
 ): Promise<string[]> {
   const wanted = names ? REGISTRY.filter((e) => names.includes(e.name)) : REGISTRY;
   const enabled: string[] = [];
+  // Read lazily and at most once: most runs never have an unloaded entry that
+  // carries an opt-in package, and the read touches the filesystem.
+  let declared: ReadonlySet<string> | undefined;
 
   for (const entry of wanted) {
     try {
+      const reportedBefore = brokenReports;
       const loaded = await entry.load(tracerProvider, teardown, options?.instrumentModules);
-      if (loaded === undefined) continue;
+      if (loaded === undefined) {
+        if (entry.optInPackage !== undefined && brokenReports === reportedBefore) {
+          declared ??= declaredDependenciesOf(options?.declaredDependencies);
+          if (declared.has(entry.optInPackage))
+            warnDeclaredUnloaded(entry.name, entry.optInPackage);
+        }
+        continue;
+      }
 
       if (entry.kind === "processor") {
         if (entry.insert === "first") sink.addFirst(loaded as SpanProcessor);
@@ -842,8 +930,11 @@ export async function enableInstrumentations(
       // onto a prototype that is no longer writable. The user installed this
       // optional peer deliberately and expects instrumentation, so a silent skip
       // would leave them with nothing and no explanation. An ABSENT package
-      // returns undefined above and stays quiet, which is the distinction this
-      // whole loud/quiet split exists to preserve.
+      // returns undefined above. That stays quiet too, unless the app's
+      // package.json lists the entry's package: then the user wanted it and the
+      // SDK just could not reach it, which gets its own warning there. Only a
+      // package that is neither installed nor listed is skipped without a word,
+      // which is the distinction this whole loud/quiet split exists to preserve.
       //
       // Still not fatal: warn, then carry on to the next entry so one broken
       // integration cannot block the others.
