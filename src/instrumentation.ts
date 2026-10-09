@@ -199,7 +199,10 @@ export function isUnresolved(error: unknown, specifier: string): boolean {
   ).test(message);
 }
 
-async function optional(specifier: string): Promise<Record<string, unknown> | undefined> {
+/**
+ * @internal Exported for tests. Not re-exported from the package entry point.
+ */
+export async function optional(specifier: string): Promise<Record<string, unknown> | undefined> {
   try {
     return await dynamicImport(specifier);
   } catch (error) {
@@ -229,11 +232,19 @@ async function optional(specifier: string): Promise<Record<string, unknown> | un
 }
 
 /**
+ * How many "present but broken" warnings have been logged. A load() that
+ * resolves undefined after this moved was not absent: the import already
+ * reported why, so the listed-but-unreachable warning must not repeat it.
+ */
+let brokenReports = 0;
+
+/**
  * The single warn path for "present but broken". `subject` is a module specifier
  * when an import failed and an entry name when enabling one failed. Accepts an
  * unknown throwable and never throws itself, so it is safe on any error path.
  */
 function warnBroken(subject: string, error: unknown): void {
+  brokenReports++;
   const message = error instanceof Error ? error.message : String(error);
   console.warn(`[rius] integration "${subject}" is installed but failed to load: ${message}`);
 }
@@ -247,6 +258,20 @@ function warnDeclaredUnloaded(entryName: string, pkg: string): void {
   console.warn(
     `[rius] ${what} but the SDK could not load it. Pass the modules your app imports to init({ instrumentModules }) to enable it.`,
   );
+}
+
+/**
+ * The packages the app lists, or none when they cannot be read. The warning
+ * this feeds is best effort, so a failing reader (a working directory that no
+ * longer exists, say) must stay quiet rather than be reported as a broken
+ * integration.
+ */
+function declaredDependenciesOf(read?: () => ReadonlySet<string>): ReadonlySet<string> {
+  try {
+    return (read ?? (() => readDeclaredDependencies(process.cwd())))();
+  } catch {
+    return new Set();
+  }
 }
 
 interface ManuallyInstrumentable {
@@ -870,12 +895,11 @@ export async function enableInstrumentations(
 
   for (const entry of wanted) {
     try {
+      const reportedBefore = brokenReports;
       const loaded = await entry.load(tracerProvider, teardown, options?.instrumentModules);
       if (loaded === undefined) {
-        if (entry.optInPackage !== undefined) {
-          declared ??= (
-            options?.declaredDependencies ?? (() => readDeclaredDependencies(process.cwd()))
-          )();
+        if (entry.optInPackage !== undefined && brokenReports === reportedBefore) {
+          declared ??= declaredDependenciesOf(options?.declaredDependencies);
           if (declared.has(entry.optInPackage))
             warnDeclaredUnloaded(entry.name, entry.optInPackage);
         }

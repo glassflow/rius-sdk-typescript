@@ -1,4 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { TracerProvider } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -14,6 +17,7 @@ import {
   type RegistryEntry,
   enableInstrumentations,
   isUnresolved,
+  optional,
   readDeclaredDependencies,
 } from "../src/instrumentation.js";
 
@@ -66,6 +70,13 @@ async function withEntry(entry: RegistryEntry, body: () => Promise<void>): Promi
       1,
     );
   }
+}
+
+/** A scratch directory holding the given files, removed by the returned cleanup. */
+function scratchDir(files: Record<string, string>): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "rius-instrumentation-"));
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 /** Attributes as the Vercel AI SDK sets them on a generateText span. */
@@ -133,6 +144,41 @@ describe("readDeclaredDependencies", () => {
   it("returns an empty set, without throwing, when there is no package.json", () => {
     const declared = readDeclaredDependencies(join(process.cwd(), "no-such-dir"));
     expect(declared.size).toBe(0);
+  });
+
+  it("collects dependencies, devDependencies and optionalDependencies, and nothing else", () => {
+    const { dir, cleanup } = scratchDir({
+      "package.json": JSON.stringify({
+        dependencies: { "pkg-dep": "1" },
+        devDependencies: { "pkg-dev": "1" },
+        optionalDependencies: { "pkg-optional": "1" },
+        peerDependencies: { "pkg-peer": "1" },
+      }),
+    });
+    try {
+      expect([...readDeclaredDependencies(dir)].sort()).toEqual([
+        "pkg-dep",
+        "pkg-dev",
+        "pkg-optional",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("ignores a dependency field that is not a plain object", () => {
+    const { dir, cleanup } = scratchDir({
+      "package.json": JSON.stringify({
+        dependencies: ["pkg-in-array"],
+        devDependencies: "pkg-in-string",
+        optionalDependencies: null,
+      }),
+    });
+    try {
+      expect(readDeclaredDependencies(dir).size).toBe(0);
+    } finally {
+      cleanup();
+    }
   });
 });
 
@@ -445,6 +491,134 @@ describe("enableInstrumentations diagnostics", () => {
         }
       },
     );
+  });
+
+  it("warns once, not twice, when the listed package is installed but broken", async () => {
+    // optional() already reports a package that is present but fails to load, so
+    // the listed-but-unreachable warning on top of it would be a second line for
+    // one problem.
+    const { dir, cleanup } = scratchDir({ "broken.mjs": 'throw new Error("broken on import");' });
+    try {
+      const specifier = pathToFileURL(join(dir, "broken.mjs")).href;
+      await withEntry(
+        {
+          name: "test-declared-entry",
+          kind: "instrumentation",
+          optInPackage: "test-declared-pkg",
+          load: () => optional(specifier),
+        },
+        async () => {
+          const warn = spyOnWarn();
+          try {
+            const enabled = await enableInstrumentations(
+              makeSink(),
+              tracerProvider,
+              ["test-declared-entry"],
+              undefined,
+              { declaredDependencies: () => new Set(["test-declared-pkg"]) },
+            );
+            expect(enabled).toEqual([]);
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0]?.[0])).toContain("broken on import");
+          } finally {
+            warn.mockRestore();
+          }
+        },
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("stays quiet when reading the declared set throws, and reads it only once", async () => {
+    const entry = (name: string): RegistryEntry => ({
+      name,
+      kind: "instrumentation",
+      optInPackage: `${name}-pkg`,
+      load: async () => undefined,
+    });
+    await withEntry(entry("test-declared-a"), () =>
+      withEntry(entry("test-declared-b"), async () => {
+        const warn = spyOnWarn();
+        try {
+          const declaredDependencies = vi.fn((): ReadonlySet<string> => {
+            throw new Error("cannot read the working directory");
+          });
+          const enabled = await enableInstrumentations(
+            makeSink(),
+            tracerProvider,
+            ["test-declared-a", "test-declared-b"],
+            undefined,
+            { declaredDependencies },
+          );
+          expect(enabled).toEqual([]);
+          expect(warn).not.toHaveBeenCalled();
+          expect(declaredDependencies).toHaveBeenCalledTimes(1);
+        } finally {
+          warn.mockRestore();
+        }
+      }),
+    );
+  });
+
+  it("reads package.json at the working directory by default", async () => {
+    const { dir, cleanup } = scratchDir({
+      "package.json": JSON.stringify({ dependencies: { "test-declared-pkg": "1" } }),
+    });
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(dir);
+    try {
+      await withEntry(
+        {
+          name: "test-declared-entry",
+          kind: "instrumentation",
+          optInPackage: "test-declared-pkg",
+          load: async () => undefined,
+        },
+        async () => {
+          const warn = spyOnWarn();
+          try {
+            await enableInstrumentations(makeSink(), tracerProvider, ["test-declared-entry"]);
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0]?.[0])).toContain("test-declared-pkg");
+          } finally {
+            warn.mockRestore();
+          }
+        },
+      );
+    } finally {
+      cwd.mockRestore();
+      cleanup();
+    }
+  });
+
+  it("stays quiet by default when the working directory is gone", async () => {
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory, uv_cwd");
+    });
+    try {
+      await withEntry(
+        {
+          name: "test-declared-entry",
+          kind: "instrumentation",
+          optInPackage: "test-declared-pkg",
+          load: async () => undefined,
+        },
+        async () => {
+          const warn = spyOnWarn();
+          try {
+            const enabled = await enableInstrumentations(makeSink(), tracerProvider, [
+              "test-declared-entry",
+            ]);
+            expect(enabled).toEqual([]);
+            expect(warn).not.toHaveBeenCalled();
+          } finally {
+            warn.mockRestore();
+          }
+        },
+      );
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("reads the declared set at most once per call, and only when an entry needs it", async () => {
