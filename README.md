@@ -296,14 +296,57 @@ Install only the ones you use:
 - **`vercel-ai`** attaches to spans the Vercel AI SDK's own OpenTelemetry integration produces, via `@arizeai/openinference-vercel`, adding OpenInference attributes to them. It touches only spans in the AI SDK's `ai.*` dialect (v5/v6, recognised by their `ai.operationId`): your own spans, other instrumentations' spans and the GenAI-native spans of AI SDK v7's `@ai-sdk/otel` integration are exported exactly as they would be without it. This package requires Node 22 or newer.
 - **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span named `execute_tool <tool>`, carrying the tool name, arguments, result, latency, and error status. The span follows the OpenTelemetry MCP conventions: OTel `SpanKind` CLIENT, `mcp.method.name` set to `tools/call`, `mcp.protocol.version` set to the negotiated version when the transport exposes it (Streamable HTTP does; stdio and SSE do not), and `error.type` set to `tool_error` when the server returns an `isError` result.
 
-There is no selection option: `init()` always attempts every bundled
-integration, so which ones actually attach is determined entirely by
-which optional peers are installed. `client.ready` resolves with the
+There is no option to select integrations: `init()` always attempts every
+bundled integration, so which ones actually attach is determined by which
+optional peers it can find, or, for `openai` and `anthropic`, by the
+modules you pass in (see "pnpm and serverless deployments" below).
+`client.ready` resolves with the
 names that attached (for example `["openai", "mcp"]`) and never rejects,
 even if every peer is missing or one of them is broken. A package that
 is not installed stays quiet; a package that is installed but fails to
 load logs a warning naming the integration and the underlying error, and
 the SDK continues without it.
+
+### pnpm and serverless deployments
+
+The SDK finds its optional peers by importing them at runtime, relative to
+its own files. A file-tracing deployment of a pnpm app (a serverless
+function on Vercel, for example) may not ship the links that import
+follows, so the integration stays off: `client.ready` leaves out
+`anthropic` or `openai` and no LLM spans are recorded. Your own `import`
+statements are what the tracer does follow, so hand the modules to
+`init()` and it patches those instead of looking for them:
+
+```ts
+import * as anthropicSdk from "@anthropic-ai/sdk";
+import * as anthropicInstrumentation from "@arizeai/openinference-instrumentation-anthropic";
+import { init } from "@glassflow-ai/rius";
+
+init({
+  instrumentModules: {
+    anthropic: { instrumentation: anthropicInstrumentation, sdk: anthropicSdk },
+  },
+});
+```
+
+The `openai` integration takes the same shape:
+
+```ts
+import * as openaiSdk from "openai";
+import * as openaiInstrumentation from "@arizeai/openinference-instrumentation-openai";
+
+init({
+  instrumentModules: {
+    openai: { instrumentation: openaiInstrumentation, sdk: openaiSdk },
+  },
+});
+```
+
+The SDK module you pass must be the copy your own client calls go
+through; patching a different copy records nothing. An integration passed
+this way resolves no package. If a module has the wrong shape, `init()`
+logs one warning naming the integration and leaves it out of
+`client.ready`. Only `openai` and `anthropic` accept modules.
 
 The `openai` and `anthropic` integrations work in both module systems:
 CommonJS applications that `require` the provider SDK and pure-ESM
