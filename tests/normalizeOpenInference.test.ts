@@ -133,8 +133,8 @@ describe("a whole anthropic messages span", () => {
       "gen_ai.usage.output_tokens": 150,
       "gen_ai.usage.cache_read.input_tokens": 1_500,
       "gen_ai.usage.cache_write.input_tokens": 300,
-      // NOT the provider: for Azure OpenAI the two differ (provider = azure,
-      // system = openai).
+      // Kept, and only a fallback for the provider: for Azure OpenAI the two
+      // differ (provider = azure, system = openai).
       "llm.system": "anthropic",
     });
   });
@@ -188,6 +188,7 @@ describe("the provider value", () => {
     expect(PROVIDER_NAME_ALIASES).toEqual({
       mistralai: "mistral_ai",
       xai: "x_ai",
+      vertexai: "gcp.vertex_ai",
       vertex_ai: "gcp.vertex_ai",
       gemini: "gcp.gemini",
       "az.ai.inference": "azure.ai.inference",
@@ -222,6 +223,54 @@ describe("the provider value", () => {
     // Both sources go: keeping the loser would put the dialect on the wire.
     expect(out["llm.provider"]).toBeUndefined();
     expect(out["gen_ai.system"]).toBeUndefined();
+  });
+
+  /**
+   * An OpenAI client pointed at a gateway (Vercel AI Gateway, OpenRouter, a
+   * LiteLLM proxy) gets no llm.provider: the instrumentation sets it only for
+   * hosts it recognizes. llm.system names the API the client speaks, which is
+   * what the registry asks of the provider: the instrumentation's best
+   * knowledge, a discriminator for the telemetry flavor, allowed to differ
+   * from whoever served the request behind a proxy.
+   */
+  it.each([
+    ["openai", "openai"],
+    ["anthropic", "anthropic"],
+    ["cohere", "cohere"],
+    ["mistralai", "mistral_ai"],
+    ["vertexai", "gcp.vertex_ai"],
+  ])("falls back to llm.system %s when the host is unknown, and keeps it", (source, expected) => {
+    expect(normalized({ "llm.system": source })).toEqual({
+      "llm.system": source,
+      "gen_ai.provider.name": expected,
+    });
+  });
+
+  it("prefers llm.provider over llm.system, keeping the system (Azure OpenAI)", () => {
+    expect(normalized({ "llm.provider": "azure", "llm.system": "openai" })).toEqual({
+      "llm.system": "openai",
+      "gen_ai.provider.name": "azure",
+    });
+  });
+
+  it("prefers the deprecated gen_ai.system over llm.system", () => {
+    expect(normalized({ "gen_ai.system": "az.ai.openai", "llm.system": "openai" })).toEqual({
+      "llm.system": "openai",
+      "gen_ai.provider.name": "azure.ai.openai",
+    });
+  });
+
+  it("lets a native provider win over llm.system", () => {
+    expect(normalized({ "gen_ai.provider.name": "groq", "llm.system": "openai" })).toEqual({
+      "gen_ai.provider.name": "groq",
+      "llm.system": "openai",
+    });
+  });
+
+  it("names the provider at start, so a still-running gateway call is classifiable", () => {
+    const attributes: Attributes = { "llm.system": "openai" };
+    new NormalizingSpanProcessor().onStart(startingSpan(attributes), {} as never);
+    expect(attributes["gen_ai.provider.name"]).toBe("openai");
   });
 });
 

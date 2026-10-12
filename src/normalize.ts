@@ -265,6 +265,7 @@ export const PROVIDER_NAME_ALIASES: Readonly<Record<string, string>> = {
   // OpenInference enum values
   mistralai: "mistral_ai",
   xai: "x_ai",
+  vertexai: "gcp.vertex_ai",
   // legacy gen_ai.system values
   vertex_ai: "gcp.vertex_ai",
   gemini: "gcp.gemini",
@@ -279,6 +280,33 @@ export const providerName: Converter = (values) => {
   const key = value.trim().toLowerCase();
   return Object.hasOwn(PROVIDER_NAME_ALIASES, key) ? PROVIDER_NAME_ALIASES[key] : value;
 };
+
+/**
+ * OpenInference's name for the API a client speaks. A source spelling, like
+ * gen_ai.system: mapped, never emitted, so it is spelled here rather than in
+ * semconv.ts.
+ */
+const LLM_SYSTEM = "llm.system";
+
+/**
+ * `llm.system` kept, plus the provider it implies.
+ *
+ * The fallback for a span with no llm.provider: an OpenAI client pointed at a
+ * gateway, whose host the instrumentation does not recognize. The registry
+ * defines the provider as the instrumentation's best knowledge, allowed to
+ * differ from whoever served the request behind a proxy, and as the
+ * discriminator for the telemetry flavor; the API the client speaks is both.
+ *
+ * Kept rather than consumed: on Azure llm.system (openai) differs from
+ * llm.provider (azure), so it is a fact of its own, not a duplicate.
+ */
+export function providerFromSystem(raw: AttributeValue | undefined): Expansion {
+  if (typeof raw !== "string" || raw.trim() === "") return {};
+  const produced: Expansion = { [LLM_SYSTEM]: raw };
+  const provider = providerName([raw]);
+  if (provider !== undefined) produced[GEN_AI_PROVIDER_NAME] = provider;
+  return produced;
+}
 
 /** A double, or nothing. Booleans are not numbers here. */
 function asNumber(value: unknown): AttributeValue | undefined {
@@ -558,8 +586,10 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  *   request key for a call that never got a response. The request model is
  *   recovered from the request bag's `model` member instead, which is
  *   unambiguous.
- * - `llm.system`. NOT the provider: OpenInference emits both, and for Azure
- *   OpenAI they differ (llm.provider = azure, llm.system = openai).
+ * - `llm.system` as a consumed source. OpenInference emits both, and for
+ *   Azure OpenAI they differ (llm.provider = azure, llm.system = openai), so
+ *   it is only a fallback for the provider and stays on the span (see
+ *   providerFromSystem).
  * - `llm.token_count.total`. No canonical key: the conventions record input
  *   and output and leave the sum to the reader.
  * - `llm.token_count.prompt_details.cache_input` ("input tokens in the prompt
@@ -587,6 +617,9 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     convert: providerName,
     identity: true,
   },
+  // Last resort, AFTER the rule above so a known host always wins: the API
+  // the client speaks. Covers OpenAI clients pointed at a gateway.
+  { source: LLM_SYSTEM, expand: providerFromSystem, identity: true },
   // Model. Only the anthropic instrumentation emits this unambiguous pair;
   // see the omission note on llm.model_name.
   {
