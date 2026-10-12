@@ -828,7 +828,7 @@ function applyRules(
  * streaming attribute and no time-to-first-chunk of their own.
  *
  * NO TYPESCRIPT INSTRUMENTATION EMITS IT TODAY. At the pinned peer versions
- * (`@arizeai/openinference-instrumentation-openai` 4.2.1, `-anthropic` 0.2.7,
+ * (`@arizeai/openinference-instrumentation-openai` 4.4.1, `-anthropic` 0.2.7,
  * `-langchain` 4.0.17) the string appears nowhere in the packages, and
  * `addEvent` is called only by openinference-core's span wrapper. The mapping
  * is carried anyway so the two SDKs' tables stay identical, and it costs a

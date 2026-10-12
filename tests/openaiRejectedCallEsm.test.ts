@@ -7,10 +7,9 @@ import { ERROR_TYPE, EXCEPTION_EVENT } from "../src/semconv.js";
 
 // The ESM half of openaiRejectedCall.test.ts. It matters on its own: only when
 // the app's `openai` is the same build the instrumentation imported does the
-// instrumentation recognise the returned APIPromise and re-parse the raw
-// response through `_thenUnwrap`. There, observing the APIPromise itself (its
-// `then` parses too) would read the body twice and fail every SUCCESSFUL call,
-// which is why the guard observes the unparsed `responsePromise` instead.
+// instrumentation recognise the returned APIPromise and chain through
+// `_thenUnwrap`, a different path from the plain promise the CJS test covers.
+// Both must end a rejected call's span, and leave a successful call parsed once.
 //
 // Nothing here requires `openai` through CJS, so init() patches the ESM build,
 // the one the dynamic import below returns. A file of its own for the
