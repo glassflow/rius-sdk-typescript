@@ -186,6 +186,7 @@ describe("the shipped table", () => {
       "openinference.span.kind",
       "gen_ai.operation.name",
       ["llm.provider", "gen_ai.system"],
+      "llm.system",
       "llm.request.model_name",
       "llm.response.model_name",
       "tool.name",
