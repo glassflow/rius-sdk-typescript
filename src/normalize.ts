@@ -531,7 +531,7 @@ export const REQUEST_PARAMETER_GUARDS: Readonly<
  * OpenInference's run-metadata attribute. Read to recognise a LangChain run,
  * never emitted, so spelled here rather than in semconv.ts.
  */
-export const METADATA = "metadata";
+const METADATA = "metadata";
 
 /**
  * The prefix LangChain gives its own run-metadata keys (ls_provider,
