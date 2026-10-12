@@ -587,6 +587,14 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
 ];
 
 /**
+ * The GenAI conventions' METRIC name for time to first chunk. @ai-sdk/otel and
+ * pydantic-ai write it onto the chat span as an attribute, in seconds, with no
+ * first-token event. Spelled here rather than in semconv.ts for the reason
+ * gen_ai.system is: a source spelling we map and never emit.
+ */
+export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk";
+
+/**
  * The OpenInference model-call and usage families.
  *
  * ORDER MATTERS where two sources share a target: the first rule to produce
@@ -732,6 +740,10 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
+  // Time to first chunk under the conventions' metric name, which @ai-sdk/otel
+  // and pydantic-ai write as a span attribute. onEnd then gives such a span
+  // the first-token event it lacks (firstTokenEventFromDuration).
+  { source: GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK, expand: firstChunkFromMetric },
   // The request bag, last: the dedicated model rules above take precedence
   // over its `model` member. Identity, because what it promotes is.
   { source: LLM_INVOCATION_PARAMETERS, expand: invocationParameters, identity: true },
@@ -959,6 +971,58 @@ export function normalizeFirstTokenEvent(span: ReadableSpan): Record<string, Att
     added[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] = Math.max(elapsedNanos, 0) / 1e9;
   }
   return added;
+}
+
+/**
+ * The span attribute the metric spelling stands for (same unit, seconds), plus
+ * the stream flag: only a streamed response has a first chunk, the inference
+ * recordFirstToken makes.
+ */
+export function firstChunkFromMetric(raw: AttributeValue | undefined): Expansion {
+  const seconds = asNumber(raw);
+  if (seconds === undefined || (seconds as number) < 0) return {};
+  return { [GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK]: seconds, [GEN_AI_REQUEST_STREAM]: true };
+}
+
+/**
+ * A `gen_ai.first_token` event for a span that measured time to first chunk
+ * but has no first-token event.
+ *
+ * The backend reads time to first chunk from the first-token event alone, so a
+ * span carrying only the measured duration (@ai-sdk/otel, pydantic-ai) would
+ * show none. The event is placed at the span's start plus that duration, so
+ * the event and the attribute agree, and never later than the span's end: a
+ * duration measured on another clock can overshoot a span that ended right
+ * after its first chunk. A span that already has a first-token event, of
+ * either spelling, is left alone.
+ */
+export function firstTokenEventFromDuration(
+  span: ReadableSpan,
+  attributes: Record<string, AttributeValue | undefined>,
+): void {
+  const events = span.events as TimedEvent[] | undefined;
+  if (
+    events === undefined ||
+    events.some(
+      (event) =>
+        event.name === GEN_AI_FIRST_TOKEN_EVENT || event.name === OPENINFERENCE_FIRST_TOKEN_EVENT,
+    )
+  ) {
+    return;
+  }
+  const seconds = asNumber(attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK]) as number | undefined;
+  if (seconds === undefined || seconds < 0) return;
+  // On [seconds, nanos] pairs, not one nanosecond count: a timestamp near
+  // 1.7e18 ns is past a double's exact range and would lose tens of nanos.
+  const nanos = span.startTime[1] + Math.round(seconds * 1e9);
+  let time: TimedEvent["time"] = [span.startTime[0] + Math.floor(nanos / 1e9), nanos % 1e9];
+  const end = span.endTime;
+  if (end !== undefined && (end[0] !== 0 || end[1] !== 0) && isAfter(time, end)) time = end;
+  events.push({ name: GEN_AI_FIRST_TOKEN_EVENT, attributes: {}, time });
+}
+
+function isAfter(a: TimedEvent["time"], b: TimedEvent["time"]): boolean {
+  return a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]);
 }
 
 /** An OTel `HrTime` ([seconds, nanos]) as a single nanosecond count. */
@@ -1631,6 +1695,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }
+    // After the passes above, on the final attributes: the duration may come
+    // from the table (the metric spelling) or from the span itself.
+    firstTokenEventFromDuration(span, attributes);
     // Export-stage only, like the event passes, and for a reason of its own:
     // messages are content, so they must never be written at span start, where
     // a pending snapshot could carry them. The sources are an indexed family,
