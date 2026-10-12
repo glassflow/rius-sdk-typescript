@@ -282,6 +282,27 @@ export const providerName: Converter = (values) => {
 };
 
 /**
+ * The model without a leading `<provider>/` that names the span's own provider.
+ *
+ * LiteLLM routes on a prefix (`openai/gpt-4o-mini`) and its instrumentation
+ * records the model exactly as passed, so the same model would otherwise carry
+ * two names depending on whether LiteLLM was in the path. The prefix is dropped
+ * only when it IS the provider (compared under the registry's spelling, so
+ * `vertex_ai/...` matches `gcp.vertex_ai`): then it says nothing
+ * gen_ai.provider.name does not, and the routed string can be rebuilt from the
+ * two. Any other prefix is part of the name, as in
+ * `openai/google/gemini-2.5-flash` routed through an OpenAI-compatible
+ * gateway, and stays.
+ */
+export function withoutProviderRoute(model: string, provider: AttributeValue | undefined): string {
+  if (typeof provider !== "string" || provider === "") return model;
+  const slash = model.indexOf("/");
+  if (slash === -1 || slash === model.length - 1) return model;
+  if (providerName([model.slice(0, slash)]) !== provider) return model;
+  return model.slice(slash + 1);
+}
+
+/**
  * OpenInference's name for the API a client speaks. A source spelling, like
  * gen_ai.system: mapped, never emitted, so it is spelled here rather than in
  * semconv.ts.
@@ -800,6 +821,7 @@ function applyRules(
 ): { mapped: Consumption[]; rewritten: string[] } {
   const mapped: Consumption[] = [];
   const rewritten: string[] = [];
+  const nativeModel = attributes[GEN_AI_REQUEST_MODEL] !== undefined;
   for (const rule of rules) {
     const keys = sourceKeys(rule);
     const present = keys.filter((key) => attributes[key] !== undefined);
@@ -840,6 +862,16 @@ function applyRules(
     if (value === undefined) continue;
     attributes[rule.target] = value;
     mapped.push({ sources: present, targets: [rule.target] });
+  }
+  // Only a model the rules produced: a native one is the producer's own
+  // choice of name. Here, not only at end, because onStart writes the result
+  // onto the live span, and by onEnd the model already counts as native.
+  const model = attributes[GEN_AI_REQUEST_MODEL];
+  if (!nativeModel && typeof model === "string") {
+    attributes[GEN_AI_REQUEST_MODEL] = withoutProviderRoute(
+      model,
+      attributes[GEN_AI_PROVIDER_NAME],
+    );
   }
   return { mapped, rewritten };
 }

@@ -274,6 +274,62 @@ describe("the provider value", () => {
   });
 });
 
+describe("a routed model name", () => {
+  const routed = (provider: string, model: string): Attributes => ({
+    "llm.provider": provider,
+    "llm.invocation_parameters": JSON.stringify({ model }),
+  });
+
+  it.each([
+    // LiteLLM records the model as routed: the prefix is the provider.
+    ["openai", "openai/gpt-4o-mini", "gpt-4o-mini"],
+    ["anthropic", "anthropic/claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"],
+    // compared under the registry's spelling
+    ["vertex_ai", "vertex_ai/gemini-2.5-flash", "gemini-2.5-flash"],
+    // a prefix naming anyone else is part of the name
+    ["openai", "openai/google/gemini-2.5-flash", "google/gemini-2.5-flash"],
+    ["openai", "google/gemini-2.5-flash", "google/gemini-2.5-flash"],
+    ["anthropic", "openai/gpt-4o-mini", "openai/gpt-4o-mini"],
+    // nothing after the slash, or no slash
+    ["openai", "openai/", "openai/"],
+    ["openai", "gpt-4o-mini", "gpt-4o-mini"],
+  ])("with provider %s turns %s into %s", (provider, model, expected) => {
+    expect(normalized(routed(provider, model))["gen_ai.request.model"]).toBe(expected);
+  });
+
+  it("keeps its prefix without a provider", () => {
+    const attributes = {
+      "llm.invocation_parameters": JSON.stringify({ model: "openai/gpt-4o-mini" }),
+    };
+    expect(normalized(attributes)["gen_ai.request.model"]).toBe("openai/gpt-4o-mini");
+  });
+
+  it("is stripped against a native provider", () => {
+    const attributes = {
+      "gen_ai.provider.name": "openai",
+      "llm.invocation_parameters": JSON.stringify({ model: "openai/gpt-4o-mini" }),
+    };
+    expect(normalized(attributes)["gen_ai.request.model"]).toBe("gpt-4o-mini");
+  });
+
+  it("is never stripped when the producer set it natively", () => {
+    expect(
+      normalized({
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "openai/gpt-4o-mini",
+      }),
+    ).toEqual({ "gen_ai.provider.name": "openai", "gen_ai.request.model": "openai/gpt-4o-mini" });
+  });
+
+  it("is already bare at start, since by onEnd the model counts as native", () => {
+    const attributes = routed("openai", "openai/gpt-4o-mini");
+    new NormalizingSpanProcessor().onStart(startingSpan(attributes), {} as never);
+    expect(attributes["gen_ai.request.model"]).toBe("gpt-4o-mini");
+    new NormalizingSpanProcessor().onEnd(endedSpan(attributes));
+    expect(attributes["gen_ai.request.model"]).toBe("gpt-4o-mini");
+  });
+});
+
 describe("the invocation-parameter bag", () => {
   it("promotes the spec members in the documented order, with their targets", () => {
     expect(INVOCATION_PARAMETER_MEMBERS.map(([member, target]) => [member, target])).toEqual([
