@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.0.0...v1.1.0) (2026-10-12)
+
+
+### Features
+
+* accept app-imported anthropic and openai modules in init() ([#107](https://github.com/glassflow/rius-sdk-typescript/issues/107)) ([83ee444](https://github.com/glassflow/rius-sdk-typescript/commit/83ee444a506329a9995f2ede85353e0a34fd30a8))
+
+
+### Bug Fixes
+
+* drop a LiteLLM routing prefix that names the span's provider from gen_ai.request.model ([#115](https://github.com/glassflow/rius-sdk-typescript/issues/115)) ([f9e751b](https://github.com/glassflow/rius-sdk-typescript/commit/f9e751b354dd86dfa0cffb39eac6d5b703df6106))
+* map time to first chunk under its metric name, and give such spans a first-token event ([#116](https://github.com/glassflow/rius-sdk-typescript/issues/116)) ([6c533ee](https://github.com/glassflow/rius-sdk-typescript/commit/6c533eec31b395ab4474cab03952f1b71f32abfe))
+* name the provider from llm.system when the host is unknown ([#111](https://github.com/glassflow/rius-sdk-typescript/issues/111)) ([1fe2b68](https://github.com/glassflow/rius-sdk-typescript/commit/1fe2b685d185adce56425d9629ed565d837648f6))
+* never take a LangChain bag's stream member as the request's stream flag ([#117](https://github.com/glassflow/rius-sdk-typescript/issues/117)) ([b222300](https://github.com/glassflow/rius-sdk-typescript/commit/b2223004925e2862580a1838e30fd8f23dacdb9d))
+* read the request model and max tokens from LlamaIndex's model metadata ([#118](https://github.com/glassflow/rius-sdk-typescript/issues/118)) ([451aecd](https://github.com/glassflow/rius-sdk-typescript/commit/451aecdf3cd67d82b310082d0981d1c0154eb956))
+* require openinference-instrumentation-openai 4.4.1 and drop the rejected-call guard ([#112](https://github.com/glassflow/rius-sdk-typescript/issues/112)) ([7128b7c](https://github.com/glassflow/rius-sdk-typescript/commit/7128b7c61beaeabb00f96a499895e3cb7e8de80b))
+* stop double-counting AI SDK v7 usage on the invoke_agent span ([#110](https://github.com/glassflow/rius-sdk-typescript/issues/110)) ([0e2d98b](https://github.com/glassflow/rius-sdk-typescript/commit/0e2d98b9445f5efa18523d2b732950b5a6387951))
+* warn when a declared anthropic or openai integration cannot load ([#109](https://github.com/glassflow/rius-sdk-typescript/issues/109)) ([d1ad014](https://github.com/glassflow/rius-sdk-typescript/commit/d1ad01409b1c20af7329a578147ba4c151cab909))
+
 ## [1.0.0](https://github.com/glassflow/rius-sdk-typescript/compare/v0.8.0...v1.0.0) (2026-09-29)
 
 ### Upgrading from 0.x
