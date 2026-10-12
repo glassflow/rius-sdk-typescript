@@ -1,0 +1,25 @@
+{
+  "about": "Where this SDK, replaying a shared recording from rius-semconv, produces something other than the recording's stored expected result. For the families both SDKs cover the expected result is the Python SDK's, so these are the places the two SDKs disagree. Each entry is reviewed and says why. tests/conformance.test.ts fails on any difference not listed here and on a listed one that no longer occurs, so fixing a difference means deleting its entry in the same change. `key` is an attribute key, or one of `events`, `status`, `name`, `kind`; \"*\" covers every difference in the family.",
+  "differences": [
+    {
+      "family": "openinference-js-anthropic",
+      "key": "gen_ai.input.messages",
+      "reason": "JS OpenInference's Anthropic instrumentor records the system prompt only in the request bag (llm.invocation_parameters.system), never as an input message (the Python instrumentor records it as message 0). This SDK lifts it into gen_ai.input.messages and out of the bag; the Python SDK, which is the reference, does neither, so its expected result keeps the system prompt in the bag and leaves it out of the messages. The gap is on the Python side."
+    },
+    {
+      "family": "openinference-js-anthropic",
+      "key": "llm.invocation_parameters",
+      "reason": "As gen_ai.input.messages: the system prompt leaves the bag here and stays in it in the Python SDK's result."
+    },
+    {
+      "family": "openinference-openai",
+      "key": "gen_ai.response.time_to_first_chunk",
+      "reason": "A rounding difference, not a normalization one: this SDK computes time to first chunk from the span's start and the event's time as JavaScript numbers, and nanosecond timestamps near 1.7e18 lose about 64 ns as doubles (0.000999936 here against the Python SDK's exact 0.001)."
+    },
+    {
+      "family": "openinference-llama-index",
+      "key": "gen_ai.response.time_to_first_chunk",
+      "reason": "As openinference-openai."
+    }
+  ]
+}
