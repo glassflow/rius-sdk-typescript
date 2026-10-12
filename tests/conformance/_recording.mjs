@@ -1,4 +1,4 @@
-// Vendored from rius-semconv 50b5e05b10f1f291a88c8aaf619555fe6bf60bee fixtures/_recording.mjs by
+// Vendored from rius-semconv 55e8830eab518bf6ccc44a2fed7e2a2411ebaef6 fixtures/_recording.mjs by
 // scripts/sync-semconv-fixtures.sh. Do not edit: change it in rius-semconv.
 // Shared helpers for the Node recorders under fixtures/<family>/record.mjs.
 //
