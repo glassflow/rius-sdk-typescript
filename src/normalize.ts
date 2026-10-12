@@ -103,8 +103,14 @@ export type Converter = (values: readonly AttributeValue[]) => AttributeValue | 
  */
 export type Expansion = Record<string, AttributeValue | undefined>;
 
-/** Turns one source value into the whole set of keys that replaces it. */
-export type Expander = (raw: AttributeValue | undefined) => Expansion;
+/**
+ * Turns one source value into the whole set of keys that replaces it. `read`
+ * holds the values of the rule's `reads` keys that the span carries.
+ */
+export type Expander = (
+  raw: AttributeValue | undefined,
+  read: Readonly<Record<string, AttributeValue>>,
+) => Expansion;
 
 /**
  * One mapping. `identity` marks a rule whose source is knowable at span START
@@ -143,6 +149,11 @@ export interface ExpandingRule {
   readonly source: string;
   readonly expand: Expander;
   readonly identity?: boolean;
+  /**
+   * Other keys the expansion depends on without consuming them: they are not
+   * sources, so they are never deleted. Handed to `expand` as `read`.
+   */
+  readonly reads?: readonly string[];
 }
 
 /** A rule of either shape. Both expose `source`. */
@@ -517,6 +528,40 @@ export const REQUEST_PARAMETER_GUARDS: Readonly<
 };
 
 /**
+ * OpenInference's run-metadata attribute. Read to recognise a LangChain run,
+ * never emitted, so spelled here rather than in semconv.ts.
+ */
+export const METADATA = "metadata";
+
+/**
+ * The prefix LangChain gives its own run-metadata keys (ls_provider,
+ * ls_model_name, ls_integration, ...), in both its Python and JS releases.
+ */
+const LANGCHAIN_METADATA_PREFIX = "ls_";
+
+/**
+ * True when the bag came from a LangChain model object. The Python
+ * integration marks its bag with LangChain's `_type`; the JS one does not, but
+ * both write LangChain's `ls_*` keys into the run metadata.
+ */
+function isLangChainRun(
+  payload: Readonly<Record<string, unknown>>,
+  read: Readonly<Record<string, AttributeValue>>,
+): boolean {
+  if (Object.hasOwn(payload, "_type")) return true;
+  const raw = read[METADATA];
+  if (typeof raw !== "string") return false;
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  return Object.keys(metadata).some((key) => key.startsWith(LANGCHAIN_METADATA_PREFIX));
+}
+
+/**
  * Promote the spec-defined members of the request bag; keep the rest.
  *
  * The leftover members go back under `llm.invocation_parameters`, and that is
@@ -537,8 +582,17 @@ export const REQUEST_PARAMETER_GUARDS: Readonly<
  * A member that produced a canonical key leaves the bag even when a native
  * key beat it — at that point it is a duplicate, which is the same reason a
  * mapped source key is deleted.
+ *
+ * LangChain's `stream` member is never promoted. LangChain serializes the
+ * model object's settings into the bag, so `stream` is the model's default,
+ * not what the call did: a `ChatOpenAI.stream()` call records `false` there.
+ * An absent key is honest; that one is not. `read` holds the span's run
+ * metadata, which identifies a LangChain run.
  */
-export function invocationParameters(raw: AttributeValue | undefined): Expansion {
+export function invocationParameters(
+  raw: AttributeValue | undefined,
+  read: Readonly<Record<string, AttributeValue>> = {},
+): Expansion {
   if (typeof raw !== "string") return { [LLM_INVOCATION_PARAMETERS]: raw };
   let payload: unknown;
   try {
@@ -553,6 +607,7 @@ export function invocationParameters(raw: AttributeValue | undefined): Expansion
   }
 
   const leftover: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
+  const langchain = isLangChainRun(leftover, read);
   const produced: Record<string, AttributeValue> = {};
   for (const [member, target, convert] of INVOCATION_PARAMETER_MEMBERS) {
     if (!Object.hasOwn(leftover, member)) continue;
@@ -564,6 +619,7 @@ export function invocationParameters(raw: AttributeValue | undefined): Expansion
       if (sameValue(convert(leftover[member]), produced[target])) delete leftover[member];
       continue;
     }
+    if (langchain && target === GEN_AI_REQUEST_STREAM) continue;
     const value = convert(leftover[member]);
     // Wrong shape for the canonical key; leave it where it was.
     if (value === undefined) continue;
@@ -780,7 +836,12 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   { source: GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK, expand: firstChunkFromMetric },
   // The request bag, last: the dedicated model rules above take precedence
   // over its `model` member. Identity, because what it promotes is.
-  { source: LLM_INVOCATION_PARAMETERS, expand: invocationParameters, identity: true },
+  {
+    source: LLM_INVOCATION_PARAMETERS,
+    expand: invocationParameters,
+    identity: true,
+    reads: [METADATA],
+  },
   // The embedding model: OpenInference's EMBEDDING spans name it here. A
   // non-empty string only, like the tool name. LAST, as in the Python SDK, so
   // it only fills the key when no LLM spelling above produced one. Identity,
@@ -876,7 +937,12 @@ function applyRules(
     if (isExpanding(rule)) {
       let expansion: Expansion;
       try {
-        expansion = rule.expand(attributes[rule.source]);
+        const read: Record<string, AttributeValue> = {};
+        for (const key of rule.reads ?? []) {
+          const value = attributes[key];
+          if (value !== undefined) read[key] = value;
+        }
+        expansion = rule.expand(attributes[rule.source], read);
       } catch {
         // Fail safe: one bad expander must not cost the other rules or the
         // span.
