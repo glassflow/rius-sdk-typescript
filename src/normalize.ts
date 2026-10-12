@@ -5,6 +5,7 @@ import {
   SpanStatusCode,
 } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor, TimedEvent } from "@opentelemetry/sdk-trace-base";
+import { moveAggregatedUsage } from "./aggregatedUsage.js";
 import { qualifyRecordedExceptions } from "./errorType.js";
 import {
   ERROR_TYPE,
@@ -1573,6 +1574,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // After the reassembly, whose messages it extends; end-only for the same
     // reason, since a system prompt is content.
     promoteSystemInstruction(attributes);
+    // Last, so the table has already renamed legacy usage spellings, and
+    // end-only because a run's usage is only known once it ends.
+    moveAggregatedUsage(span, attributes);
   }
 
   private normalize(

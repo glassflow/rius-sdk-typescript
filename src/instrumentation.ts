@@ -10,6 +10,7 @@ import {
 } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { aggregatingTracer } from "./aggregatedUsage.js";
 import type { McpClientLike } from "./instrumentationMcp.js";
 import { TRACER_NAME } from "./semconv.js";
 import { SDK_VERSION } from "./version.js";
@@ -648,8 +649,11 @@ async function registerVercelTelemetry(
       (integration) => integration !== vercelTelemetryIntegration,
     );
   }
+  // Wrapped because @ai-sdk/otel reports a run's total usage on its
+  // invoke_agent span as well as each call's on its chat span; the wrapper
+  // lets the normalizer move that total out of gen_ai.usage.*.
   const integration = new OpenTelemetryIntegration({
-    tracer: tracerProvider.getTracer(TRACER_NAME, SDK_VERSION),
+    tracer: aggregatingTracer(tracerProvider.getTracer(TRACER_NAME, SDK_VERSION)),
   });
   vercelTelemetryIntegration = integration;
   register(integration);
