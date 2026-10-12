@@ -647,6 +647,69 @@ describe("the first-token event", () => {
   });
 });
 
+/**
+ * The metric spelling: a measured duration with no first-token event.
+ *
+ * @ai-sdk/otel and pydantic-ai write the conventions' METRIC name onto the chat
+ * span, in seconds, and record no event. The backend reads time to first chunk
+ * from the event alone, so onEnd both maps the attribute and places the event
+ * the span is missing.
+ */
+describe("time to first chunk under its metric name", () => {
+  const METRIC = "gen_ai.client.operation.time_to_first_chunk";
+  const start: [number, number] = [1_700_000_000, 0];
+
+  function ended(attributes: Attributes, events: TimedEvent[] = [], end?: [number, number]) {
+    const span = endedSpan(attributes, { events, startTime: start });
+    if (end !== undefined) (span as unknown as { endTime: [number, number] }).endTime = end;
+    new NormalizingSpanProcessor().onEnd(span);
+    return { attributes, events: span.events.map((event) => [event.name, event.time]) };
+  }
+
+  it("becomes the canonical attribute, the stream flag and a first-token event", () => {
+    const out = ended({ [METRIC]: 1.5 });
+    expect(out.attributes[METRIC]).toBeUndefined();
+    expect(out.attributes["gen_ai.response.time_to_first_chunk"]).toBe(1.5);
+    expect(out.attributes["gen_ai.request.stream"]).toBe(true);
+    expect(out.events).toEqual([["gen_ai.first_token", [1_700_000_001, 500_000_000]]]);
+  });
+
+  it("gives a canonical duration alone its event too", () => {
+    const out = ended({ "gen_ai.response.time_to_first_chunk": 1.5 });
+    expect(out.events).toEqual([["gen_ai.first_token", [1_700_000_001, 500_000_000]]]);
+  });
+
+  it("never duplicates a first-token event the span already has", () => {
+    const event = { name: "gen_ai.first_token", time: [1_700_000_000, 7] } as TimedEvent;
+    expect(ended({ [METRIC]: 0.2 }, [event]).events).toEqual([
+      ["gen_ai.first_token", [1_700_000_000, 7]],
+    ]);
+  });
+
+  it("lets native values win over the metric spelling", () => {
+    const out = ended({
+      [METRIC]: 9,
+      "gen_ai.response.time_to_first_chunk": 1.5,
+      "gen_ai.request.stream": false,
+    });
+    expect(out.attributes["gen_ai.response.time_to_first_chunk"]).toBe(1.5);
+    expect(out.attributes["gen_ai.request.stream"]).toBe(false);
+    expect(out.attributes[METRIC]).toBeUndefined();
+  });
+
+  it("never places the event after the span ends", () => {
+    const out = ended({ [METRIC]: 5 }, [], [1_700_000_000, 1_000_000]);
+    expect(out.events).toEqual([["gen_ai.first_token", [1_700_000_000, 1_000_000]]]);
+  });
+
+  it.each([-1, "1.5", true])("drops an unusable duration (%s) without an event", (value) => {
+    const out = ended({ [METRIC]: value as AttributeValue });
+    expect(out.attributes["gen_ai.response.time_to_first_chunk"]).toBeUndefined();
+    expect(out.attributes["gen_ai.request.stream"]).toBeUndefined();
+    expect(out.events).toEqual([]);
+  });
+});
+
 describe("error.type from the exception event", () => {
   const exception = (type: string): TimedEvent =>
     ({ name: "exception", time: [0, 0], attributes: { "exception.type": type } }) as TimedEvent;
