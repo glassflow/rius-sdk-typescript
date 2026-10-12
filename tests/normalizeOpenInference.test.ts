@@ -334,11 +334,13 @@ describe("the invocation-parameter bag", () => {
   it("promotes the spec members in the documented order, with their targets", () => {
     expect(INVOCATION_PARAMETER_MEMBERS.map(([member, target]) => [member, target])).toEqual([
       ["model", "gen_ai.request.model"],
+      ["model_name", "gen_ai.request.model"],
       ["temperature", "gen_ai.request.temperature"],
       ["top_p", "gen_ai.request.top_p"],
       ["top_k", "gen_ai.request.top_k"],
       ["max_tokens", "gen_ai.request.max_tokens"],
       ["max_completion_tokens", "gen_ai.request.max_tokens"],
+      ["num_output", "gen_ai.request.max_tokens"],
       ["frequency_penalty", "gen_ai.request.frequency_penalty"],
       ["presence_penalty", "gen_ai.request.presence_penalty"],
       ["seed", "gen_ai.request.seed"],
@@ -348,6 +350,60 @@ describe("the invocation-parameter bag", () => {
       ["stream", "gen_ai.request.stream"],
       ["tool_choice", "rius.request.tool_choice"],
     ]);
+  });
+
+  it("reads the model and max tokens from LlamaIndex's model metadata", () => {
+    // LlamaIndex fills the bag with the model's metadata, not the request's
+    // parameters; the rest of the metadata stays in the bag.
+    const out = normalized({
+      "llm.invocation_parameters": JSON.stringify({
+        context_window: 128000,
+        num_output: 64,
+        is_chat_model: true,
+        model_name: "gpt-4o-mini",
+        system_role: "system",
+      }),
+    });
+    expect(out["gen_ai.request.model"]).toBe("gpt-4o-mini");
+    expect(out["gen_ai.request.max_tokens"]).toBe(64);
+    expect(JSON.parse(out["llm.invocation_parameters"] as string)).toEqual({
+      context_window: 128000,
+      is_chat_model: true,
+      system_role: "system",
+    });
+  });
+
+  it("reads LlamaIndex's num_output -1 as no budget", () => {
+    const out = normalized({
+      "llm.invocation_parameters": JSON.stringify({ num_output: -1, model_name: "gpt-4o-mini" }),
+    });
+    expect(out["gen_ai.request.max_tokens"]).toBeUndefined();
+    expect(JSON.parse(out["llm.invocation_parameters"] as string)).toEqual({ num_output: -1 });
+  });
+
+  it("keeps model over a different model_name, which stays in the bag", () => {
+    const out = normalized({
+      "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o", model_name: "gpt-4o-x" }),
+    });
+    expect(out["gen_ai.request.model"]).toBe("gpt-4o");
+    expect(JSON.parse(out["llm.invocation_parameters"] as string)).toEqual({
+      model_name: "gpt-4o-x",
+    });
+  });
+
+  it("drops a second spelling that repeats the promoted value", () => {
+    // LangChain's bag has model_name next to model, with the same value.
+    const out = normalized({
+      "llm.invocation_parameters": JSON.stringify({
+        model: "gpt-4o",
+        model_name: "gpt-4o",
+        _type: "openai-chat",
+      }),
+    });
+    expect(out["gen_ai.request.model"]).toBe("gpt-4o");
+    expect(JSON.parse(out["llm.invocation_parameters"] as string)).toEqual({
+      _type: "openai-chat",
+    });
   });
 
   it("keeps max_tokens when a request carries max_completion_tokens too", () => {
