@@ -151,8 +151,11 @@ describe("the native path and the invocation-parameters rule share one table", (
   it("uses the same guard in the invocation-parameters rule", () => {
     // Only canonical targets have a native counterpart; a member promoted to
     // rius.request.* (tool_choice) has no gen_ai.request.* key to agree with.
-    const canonical = INVOCATION_PARAMETER_MEMBERS.filter(([, target]) =>
-      target.startsWith(GEN_AI_REQUEST_PREFIX),
+    // Bag-only spellings (LlamaIndex's model metadata) have no native
+    // counterpart either, and may read a sentinel the native path never sees.
+    const canonical = INVOCATION_PARAMETER_MEMBERS.filter(
+      ([member, target]) =>
+        target.startsWith(GEN_AI_REQUEST_PREFIX) && member in GEN_AI_REQUEST_PARAMETERS,
     );
     expect(canonical.length).toBeGreaterThan(0);
     for (const [member, target, convert] of canonical) {
@@ -162,8 +165,11 @@ describe("the native path and the invocation-parameters rule share one table", (
 
   it("orders two spellings of one key the same way in both tables", () => {
     const native = Object.keys(GEN_AI_REQUEST_PARAMETERS);
-    INVOCATION_PARAMETER_MEMBERS.forEach(([first, target], i) => {
-      for (const [second, other] of INVOCATION_PARAMETER_MEMBERS.slice(i + 1)) {
+    // Bag-only spellings (LlamaIndex's model metadata) are never a caller's
+    // request parameter, so the native table has nothing to agree on there.
+    const members = INVOCATION_PARAMETER_MEMBERS.filter(([member]) => native.includes(member));
+    members.forEach(([first, target], i) => {
+      for (const [second, other] of members.slice(i + 1)) {
         if (other === target) {
           expect(native.indexOf(first), `${first} before ${second}`).toBeLessThan(
             native.indexOf(second),

@@ -339,6 +339,24 @@ function asCount(value: unknown): AttributeValue | undefined {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
 }
 
+/**
+ * {@link asCount}, with a negative value read as "not configured": LlamaIndex
+ * writes `num_output: -1` when the request sets no output budget, and that is
+ * no value, not a budget of -1.
+ */
+function asConfiguredCount(value: unknown): AttributeValue | undefined {
+  const count = asCount(value);
+  return count === undefined || (count as number) < 0 ? undefined : count;
+}
+
+/** Two converted attribute values are the same value (arrays element-wise). */
+function sameValue(a: AttributeValue | undefined, b: AttributeValue | undefined): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, i) => item === b[i]);
+  }
+  return a !== undefined && a === b;
+}
+
 /** A non-empty string, or nothing. */
 function asText(value: unknown): AttributeValue | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
@@ -437,6 +455,11 @@ export const INVOCATION_PARAMETER_MEMBERS: ReadonlyArray<
   // it is the literal request field — unlike llm.model_name, see the
   // omissions below.
   ["model", GEN_AI_REQUEST_MODEL, asText],
+  // LlamaIndex fills the bag with the model's metadata, not the request's
+  // parameters, and names the model `model_name` there. LangChain's bag has
+  // `model_name` too, next to `model` with the same value; listed after
+  // `model`, it is promoted only where `model` is absent.
+  ["model_name", GEN_AI_REQUEST_MODEL, asText],
   ["temperature", GEN_AI_REQUEST_TEMPERATURE, asNumber],
   ["top_p", GEN_AI_REQUEST_TOP_P, asNumber],
   ["top_k", GEN_AI_REQUEST_TOP_K, asCount],
@@ -446,6 +469,9 @@ export const INVOCATION_PARAMETER_MEMBERS: ReadonlyArray<
   // which is what gen_ai.request.max_tokens means. Listed second so a request
   // carrying both keeps the one the provider would honour.
   ["max_completion_tokens", GEN_AI_REQUEST_MAX_TOKENS, asCount],
+  // LlamaIndex's metadata spelling of the same setting: the number of tokens
+  // the model is configured to generate, -1 when nothing is.
+  ["num_output", GEN_AI_REQUEST_MAX_TOKENS, asConfiguredCount],
   ["frequency_penalty", GEN_AI_REQUEST_FREQUENCY_PENALTY, asNumber],
   ["presence_penalty", GEN_AI_REQUEST_PRESENCE_PENALTY, asNumber],
   ["seed", GEN_AI_REQUEST_SEED, asCount],
@@ -529,7 +555,15 @@ export function invocationParameters(raw: AttributeValue | undefined): Expansion
   const leftover: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
   const produced: Record<string, AttributeValue> = {};
   for (const [member, target, convert] of INVOCATION_PARAMETER_MEMBERS) {
-    if (!Object.hasOwn(leftover, member) || produced[target] !== undefined) continue;
+    if (!Object.hasOwn(leftover, member)) continue;
+    if (produced[target] !== undefined) {
+      // A second spelling with the same value (LangChain's model_name next to
+      // model) is a duplicate, and goes like a promoted member. Left in the
+      // bag, it would be promoted on the next pass, so normalizing twice would
+      // differ from normalizing once.
+      if (sameValue(convert(leftover[member]), produced[target])) delete leftover[member];
+      continue;
+    }
     const value = convert(leftover[member]);
     // Wrong shape for the canonical key; leave it where it was.
     if (value === undefined) continue;
