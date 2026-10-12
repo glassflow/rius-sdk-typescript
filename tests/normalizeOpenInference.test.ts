@@ -487,6 +487,51 @@ describe("the invocation-parameter bag", () => {
     });
   });
 
+  // LangChain serializes the MODEL object's settings into the bag, so `stream`
+  // is the model's default, not what the call did: ChatOpenAI.stream() records
+  // "stream": false (rius-semconv recordings, scenario chat_stream). It is
+  // never promoted, and stays in the bag.
+  it("never takes a Python LangChain bag's stream member (marked by _type)", () => {
+    const out = normalized({
+      "llm.invocation_parameters": JSON.stringify({
+        model: "gpt-4o-mini",
+        stream: false,
+        _type: "openai-chat",
+      }),
+    });
+    expect(out["gen_ai.request.model"]).toBe("gpt-4o-mini");
+    expect(out["gen_ai.request.stream"]).toBeUndefined();
+    expect(JSON.parse(out["llm.invocation_parameters"] as string)).toEqual({
+      stream: false,
+      _type: "openai-chat",
+    });
+  });
+
+  it("never takes a JS LangChain bag's stream member (known by its ls_* run metadata)", () => {
+    const metadata = JSON.stringify({
+      ls_provider: "openai",
+      ls_integration: "langchain_chat_model",
+    });
+    const out = normalized({
+      metadata,
+      "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o-mini", stream: false }),
+    });
+    expect(out["gen_ai.request.model"]).toBe("gpt-4o-mini");
+    expect(out["gen_ai.request.stream"]).toBeUndefined();
+    expect(JSON.parse(out["llm.invocation_parameters"] as string)).toEqual({ stream: false });
+    // Read, not consumed.
+    expect(out.metadata).toBe(metadata);
+  });
+
+  it("still takes stream from a bag that records the request body", () => {
+    const out = normalized({
+      metadata: JSON.stringify({ tenant: "acme" }),
+      "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o-mini", stream: true }),
+    });
+    expect(out["gen_ai.request.stream"]).toBe(true);
+    expect(out["llm.invocation_parameters"]).toBeUndefined();
+  });
+
   it("is idempotent across the start-then-end double pass", () => {
     const attributes: Attributes = {
       "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o", custom: 1 }),
