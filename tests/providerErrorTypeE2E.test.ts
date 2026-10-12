@@ -119,9 +119,9 @@ describe("a provider 404", () => {
           messages: [{ role: "user", content: "hi" }],
         }),
       );
-      // The instrumentation alone leaves a rejected call's span open; the
-      // SDK's guard ends it (see withRejectedCallsEnded), so the span gets the
-      // same assertions as the Anthropic case.
+      // The instrumentation ends a rejected call's span as an ERROR (from
+      // 4.4.1, the pinned floor), so the span gets the same assertions as the
+      // Anthropic case.
       const llm = spans.find((s) => s.attributes["openinference.span.kind"] === "LLM");
       expect(llm).toBeDefined();
       expect(llm?.attributes["error.type"]).toBe("openai.NotFoundError");

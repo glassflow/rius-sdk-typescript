@@ -9,9 +9,10 @@ import { observe } from "../src/observe.js";
 import { ERROR_TYPE, EXCEPTION_EVENT, EXCEPTION_TYPE, SpanKind } from "../src/semconv.js";
 
 // A REJECTED OpenAI call, auto-instrumented by the OpenInference package
-// init() enables. The instrumentation (4.2.1 through 4.2.7) ends its span on a
-// synchronous throw or a resolved call only, so without the SDK's guard a
-// failed call exports no LLM span at all and its trace reads as a success.
+// init() enables. Before 4.4.1 the instrumentation ended its span on a
+// synchronous throw or a resolved call only, so a failed call exported no LLM
+// span at all and its trace read as a success. 4.4.1, the floor package.json
+// pins, ends it as an ERROR; these tests fail against 4.4.0 and earlier.
 // A real OpenAI client against a local server; no network.
 //
 // A file of its own: the OpenInference packages keep module-level patch state,
