@@ -264,6 +264,22 @@ export const GEN_AI_REQUEST_PREFIX = "gen_ai.request.";
  */
 export const RIUS_REQUEST_PREFIX = "rius.request.";
 
+/** Every token-usage key the GenAI conventions define sits under this prefix. */
+export const GEN_AI_USAGE_PREFIX = "gen_ai.usage.";
+/**
+ * Where a whole agent run's usage goes when the same producer also reports each
+ * model call's usage on that call's own span: `gen_ai.usage.<suffix>` becomes
+ * `rius.aggregated_usage.<suffix>`. Left under `gen_ai.usage.*`, the run's
+ * tokens would be counted once per call span AND once more on the agent span by
+ * any backend that sums usage across spans.
+ *
+ * Our namespace, not `gen_ai.aggregated_usage.*` (pydantic-ai's spelling): the
+ * GenAI conventions define no aggregate yet, and an open proposal could define
+ * one with different semantics (sub-agents included or not). Our backend reads
+ * pydantic-ai's spelling as well, for display only.
+ */
+export const RIUS_AGGREGATED_USAGE_PREFIX = "rius.aggregated_usage.";
+
 /**
  * How the request constrained tool use: a mode string (`"auto"`,
  * `"required"`) or, for a forced call, the provider's object as compact JSON.
