@@ -7,6 +7,7 @@ import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base"
 import { aggregatingTracer } from "./aggregatedUsage.js";
 import { installEmbeddingsUsage } from "./embeddingsUsage.js";
 import type { McpClientLike } from "./instrumentationMcp.js";
+import { isNativeVercelSpan } from "./normalize.js";
 import { TRACER_NAME } from "./semconv.js";
 import { SDK_VERSION } from "./version.js";
 
@@ -587,6 +588,12 @@ export const REGISTRY: RegistryEntry[] = [
       // through it, so adding one alongside our exporting processor would send
       // every span twice, once raw and once transformed. Only the attribute
       // transform is wanted, wrapped in a processor of ours that never exports.
+      //
+      // And only for the operations the normalizer does not map itself (see
+      // VERCEL_OPERATIONS in normalize.ts): generate, stream, embed and tool
+      // spans are mapped there straight onto the conventions, the way the
+      // sink maps them, and the transform's OpenInference copy of the same
+      // facts would only ride beside them.
       const utils = await optional("@arizeai/openinference-vercel/utils");
       const add = utils?.addOpenInferenceAttributesToSpan as
         | ((span: ReadableSpan) => void)
@@ -595,7 +602,13 @@ export const REGISTRY: RegistryEntry[] = [
       return {
         onStart() {},
         onEnd(span: ReadableSpan) {
-          if (add !== undefined && isVercelDialectSpan(span)) add(span);
+          if (
+            add !== undefined &&
+            isVercelDialectSpan(span) &&
+            !isNativeVercelSpan(span.attributes)
+          ) {
+            add(span);
+          }
         },
         async forceFlush() {},
         async shutdown() {},
