@@ -360,6 +360,16 @@ describe("GenAI-shaped usage spellings", () => {
       "llm.token_count.completion_details.reasoning",
       GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     ],
+    [
+      "gen_ai.usage.details.thinking_tokens",
+      "llm.token_count.completion_details.reasoning",
+      GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    ],
+    [
+      "gen_ai.usage.details.thoughts_tokens",
+      "llm.token_count.completion_details.reasoning",
+      GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    ],
   ] as const;
 
   describe.each(SPELLINGS)("%s", (alternate, openinference, target) => {
@@ -390,6 +400,27 @@ describe("GenAI-shaped usage spellings", () => {
     it("is not blocked by an OpenInference count that won't parse", () => {
       expect(exported({ [openinference]: "lots", [alternate]: 7 })[target]).toBe(7);
     });
+  });
+
+  // pydantic-ai's three reasoning spellings are one per provider, so a span
+  // should carry one; if it carries several, the sink's order decides.
+  const REASONING = "gen_ai.usage.details.reasoning_tokens";
+  const THINKING = "gen_ai.usage.details.thinking_tokens";
+  const THOUGHTS = "gen_ai.usage.details.thoughts_tokens";
+
+  it("takes the first reasoning spelling in order, and all of them go", () => {
+    expect(exported({ [THOUGHTS]: 3, [THINKING]: 2, [REASONING]: 1 })).toEqual({
+      [GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]: 1,
+    });
+    expect(exported({ [THOUGHTS]: 3, [THINKING]: 2 })).toEqual({
+      [GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]: 2,
+    });
+  });
+
+  it("is not blocked by a reasoning spelling that won't parse", () => {
+    expect(
+      exported({ [THINKING]: "many", [THOUGHTS]: 128 })[GEN_AI_USAGE_REASONING_OUTPUT_TOKENS],
+    ).toBe(128);
   });
 });
 

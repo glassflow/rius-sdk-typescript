@@ -198,6 +198,8 @@ describe("the shipped table", () => {
       "llm.token_count.completion_details.reasoning",
       "gen_ai.usage.cache_creation.input_tokens",
       "gen_ai.usage.details.reasoning_tokens",
+      "gen_ai.usage.details.thinking_tokens",
+      "gen_ai.usage.details.thoughts_tokens",
       "gen_ai.client.operation.time_to_first_chunk",
       "llm.invocation_parameters",
       "embedding.model_name",
