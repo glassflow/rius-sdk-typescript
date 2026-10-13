@@ -103,9 +103,12 @@ jobs:
     needs: [release-please, publish]
     if: ${{ needs.release-please.outputs.released == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Slack
+      - name: Post release summary to Slack
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
           TAG: ${{ needs.release-please.outputs.tag }}
         run: |
@@ -114,7 +117,18 @@ jobs:
             echo "::warning::SLACK_WEBHOOK_RELEASES not configured; no release announcement for ${TAG}"
             exit 0
           fi
-          jq -n --arg t "$TAG" '{text:(":package: *@glassflow-ai/rius \($t)* published to npm")}' \
+          release_json=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body,url)
+          url=$(jq -r .url <<<"$release_json")
+          # release-please changelog markdown -> Slack mrkdwn, as the Python SDK does:
+          # headings to bold, **bold** to *bold*, [text](url) to <url|text>.
+          # Truncated in jq, not with head: under pipefail, head closing the
+          # pipe early would fail the step on a long changelog.
+          body=$(jq -r '.body[:3500]' <<<"$release_json" | sed -E \
+            -e 's/^#{1,6} +(.*)$/*\1*/' \
+            -e 's/\*\*([^*]+)\*\*/*\1*/g' \
+            -e 's/\[([^]]+)\]\(([^)]+)\)/<\2|\1>/g')
+          jq -n --arg tag "$TAG" --arg url "$url" --arg body "$body" \
+            '{text: (":package: *@glassflow-ai/rius \($tag)* is on npm (<\($url)|release notes>)\n\n\($body)")}' \
             | curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK"
 
   # Record this version in Linear Releases (the "TypeScript SDK" pipeline).
