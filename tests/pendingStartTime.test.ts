@@ -41,9 +41,10 @@ import { withSession } from "../src/session.js";
 //   5.0.266 / @ai-sdk/openai 2.0.130 and ai 6.0.291 / @ai-sdk/openai 3.0.118,
 //   which are not dev dependencies, so these two are not re-checked below).
 //   The provider-call span carries gen_ai.system and gen_ai.request.*; the
-//   ai.* dialect's own identity (ai.operationId, ai.model.id,
-//   ai.toolCall.name) is only translated by the OpenInference transform, at
-//   onEnd. Both versions produce the same key sets.
+//   ai.* dialect's own identity (ai.operationId, ai.model.*, ai.settings.*,
+//   ai.toolCall.name and .id) is mapped by the normalizer's start-time rules,
+//   so every span of the run is classified and attributed on its snapshot.
+//   Both versions produce the same key sets.
 const VERCEL_V7_REQUEST = {
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-4o",
@@ -127,17 +128,10 @@ const START_TIME_NOT_IDENTITY: Record<string, string> = {
   "ai.telemetry.metadata.team": "caller context, free-form",
   "ai.settings.maxRetries": "a client setting, not a model parameter",
   "ai.request.headers.user-agent": "transport detail",
-  // The ai.* dialect's identity. The OpenInference Vercel transform
-  // translates it, but only at onEnd, and no start-time rule exists for it.
-  // The provider-call span still reaches the live view with a request model
-  // and provider through the gen_ai.* keys the AI SDK writes alongside.
-  "ai.operationId": "Vercel dialect identity; translated at onEnd only",
-  "ai.model.id": "Vercel dialect identity; translated at onEnd only",
-  "ai.model.provider": "Vercel dialect identity; translated at onEnd only",
-  "ai.settings.temperature": "Vercel dialect identity; translated at onEnd only",
-  "ai.toolCall.name": "Vercel dialect identity; translated at onEnd only",
-  "ai.toolCall.id": "Vercel dialect identity; translated at onEnd only",
-  "ai.prompt.toolChoice": "Vercel dialect request detail; translated at onEnd only",
+  // The ai.* dialect's operation id stays beside the taxonomy keys the
+  // start-time rules derive from it, and those are what the snapshot shows.
+  "ai.operationId": "Vercel dialect identity; the snapshot carries its taxonomy keys",
+  "ai.prompt.toolChoice": "Vercel dialect request detail; mapped at onEnd only",
 };
 
 /**
@@ -174,16 +168,29 @@ const START_TIME_IDENTITY: Record<string, Record<string, Record<string, unknown>
     },
   },
   "vercel v5/v6": {
-    "ai.generateText": {},
-    "ai.generateText.doGenerate": {
-      // The AI SDK's gen_ai.system is the provider-and-API id, and the
-      // provider rule passes it through verbatim. The same value wins at
-      // onEnd, since the transform writes no llm.provider for it.
-      "gen_ai.provider.name": "openai.chat",
+    "ai.generateText": {
+      "openinference.span.kind": "AGENT",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-4o",
       "gen_ai.request.temperature": 0.3,
     },
-    "ai.toolCall": {},
+    "ai.generateText.doGenerate": {
+      // The provider is ai.model.provider's, under the registry's name: the
+      // AI SDK's gen_ai.system is the provider-and-API id (openai.chat).
+      "openinference.span.kind": "LLM",
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-4o",
+      "gen_ai.request.temperature": 0.3,
+    },
+    "ai.toolCall": {
+      "openinference.span.kind": "TOOL",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.type": "function",
+      "gen_ai.tool.name": "get_weather",
+      "gen_ai.tool.call.id": "call_1",
+    },
   },
 };
 

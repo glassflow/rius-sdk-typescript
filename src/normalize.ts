@@ -35,12 +35,15 @@ import {
   GEN_AI_RESPONSE_ID,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+  GEN_AI_TOOL_CALL_ID,
   GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_TOOL_NAME,
+  GEN_AI_TOOL_TYPE,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
+  GEN_AI_USAGE_PREFIX,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   INVOCATION_PARAMETERS_CONTENT_MEMBERS,
   LLM_INPUT_MESSAGES_PREFIX,
@@ -58,6 +61,7 @@ import {
   LLM_TOOL_CALL_PREFIX,
   OPENINFERENCE_SPAN_KIND,
   OUTPUT_VALUE,
+  RIUS_AGGREGATED_USAGE_PREFIX,
   RIUS_REQUEST_TOOL_CHOICE,
   SpanKind,
   kindForOperation,
@@ -906,6 +910,618 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   },
 ];
 
+// --- Vercel AI SDK v5/v6 (ai.*) ---
+//
+// The AI SDK's own telemetry (`experimental_telemetry`) speaks a dialect of
+// its own: an `ai.operationId` on every span, the model and provider under
+// `ai.model.*`, the request settings under `ai.settings.*`, the prompt and the
+// response as JSON under `ai.prompt*` / `ai.response.*`, usage under
+// `ai.usage.*`. Mapped here straight onto the conventions, in the shapes
+// @ai-sdk/otel (the v7 integration) writes for the same calls, so a v5/v6 app
+// and a v7 one store the same row. The sink maps the same dialect the same
+// way, so raw AI SDK traffic that never passed through this SDK stores it too.
+//
+// Source spellings throughout, read from the `ai` package at 5.0.273 and
+// 6.0.304 (the recorded versions) and spelled inline, as for every dialect.
+
+/** The AI SDK's operation id. Kept on the span: it is the dialect's own name for the call. */
+const VERCEL_OPERATION_ID = "ai.operationId";
+
+/**
+ * What an operation id says: its kind, and whether the span is ONE model call
+ * (`call`) rather than the wrapper around a run of them. A wrapper's usage
+ * repeats its calls' (from v6 on, and on v5's streams, it is the run's total),
+ * so it moves to `rius.aggregated_usage.*` and is never counted twice.
+ *
+ * Only these ids are mapped. Any other (`ai.rerank`, `ai.generateImage`, ...)
+ * keeps its `ai.*` keys apart from the identity ones and is left to the
+ * @arizeai/openinference-vercel transform where that is installed.
+ */
+interface VercelOperation {
+  readonly kind: SpanKind;
+  readonly call: boolean;
+}
+
+/**
+ * The operations mapped natively. The generate/stream wrappers are agent runs
+ * (`invoke_agent`, as @ai-sdk/otel classifies them): each owns a loop of
+ * model calls and tool executions.
+ */
+export const VERCEL_OPERATIONS: Readonly<Record<string, VercelOperation>> = {
+  "ai.generateText": { kind: SpanKind.AGENT, call: false },
+  "ai.streamText": { kind: SpanKind.AGENT, call: false },
+  "ai.generateObject": { kind: SpanKind.AGENT, call: false },
+  "ai.streamObject": { kind: SpanKind.AGENT, call: false },
+  "ai.generateText.doGenerate": { kind: SpanKind.LLM, call: true },
+  "ai.streamText.doStream": { kind: SpanKind.LLM, call: true },
+  "ai.generateObject.doGenerate": { kind: SpanKind.LLM, call: true },
+  "ai.streamObject.doStream": { kind: SpanKind.LLM, call: true },
+  "ai.embed": { kind: SpanKind.EMBEDDING, call: false },
+  "ai.embedMany": { kind: SpanKind.EMBEDDING, call: false },
+  "ai.embed.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
+  "ai.embedMany.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
+  "ai.toolCall": { kind: SpanKind.TOOL, call: false },
+};
+
+function vercelOperation(raw: AttributeValue | undefined): VercelOperation | undefined {
+  return typeof raw === "string" && Object.hasOwn(VERCEL_OPERATIONS, raw)
+    ? VERCEL_OPERATIONS[raw]
+    : undefined;
+}
+
+/** Whether this SDK maps the span's `ai.*` dialect itself (see VERCEL_OPERATIONS). */
+export function isNativeVercelSpan(attributes: Readonly<Record<string, unknown>>): boolean {
+  return (
+    vercelOperation(attributes[VERCEL_OPERATION_ID] as AttributeValue | undefined) !== undefined
+  );
+}
+
+/**
+ * `ai.operationId` kept, plus the taxonomy it implies, and `gen_ai.tool.type`
+ * on a tool execution: the AI SDK runs only function tools. An id this table
+ * does not map is kept and implies nothing.
+ */
+export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Expansion {
+  const operation = vercelOperation(raw);
+  if (operation === undefined) return { [VERCEL_OPERATION_ID]: raw };
+  const produced: Expansion = {
+    [VERCEL_OPERATION_ID]: raw,
+    [OPENINFERENCE_SPAN_KIND]: operation.kind,
+    [GEN_AI_OPERATION_NAME]: operationForKind(operation.kind),
+  };
+  if (operation.kind === SpanKind.TOOL) produced[GEN_AI_TOOL_TYPE] = "function";
+  return produced;
+}
+
+/**
+ * The AI SDK's provider ids (`openai.chat`, `google.vertex.chat`,
+ * `amazon-bedrock`) and the registry provider each starts with, first match
+ * wins. The list is @ai-sdk/otel's own (`mapProviderName`), so a v5/v6 span
+ * names the provider exactly as the v7 integration does for the same call.
+ */
+const VERCEL_PROVIDER_PREFIXES: ReadonlyArray<readonly [prefix: string, provider: string]> = [
+  ["google.vertex", "gcp.vertex_ai"],
+  ["google.generative-ai", "gcp.gemini"],
+  ["google-vertex", "gcp.vertex_ai"],
+  ["amazon-bedrock", "aws.bedrock"],
+  ["azure-openai", "azure.ai.openai"],
+  ["anthropic", "anthropic"],
+  ["openai", "openai"],
+  ["azure", "azure.ai.inference"],
+  ["google", "gcp.gemini"],
+  ["mistral", "mistral_ai"],
+  ["cohere", "cohere"],
+  ["bedrock", "aws.bedrock"],
+  ["groq", "groq"],
+  ["deepseek", "deepseek"],
+  ["perplexity", "perplexity"],
+  ["xai", "x_ai"],
+];
+
+/**
+ * The registry provider for an AI SDK provider id: `openai.chat` is `openai`.
+ * An id no prefix matches (a custom provider, a gateway) passes through as it
+ * arrived, which the registry allows: its values are well-known, not closed.
+ */
+export const vercelProviderName: Converter = (values) => {
+  const value = values[0];
+  if (typeof value !== "string" || value === "") return undefined;
+  const lower = value.toLowerCase();
+  for (const [prefix, provider] of VERCEL_PROVIDER_PREFIXES) {
+    if (lower === prefix || lower.startsWith(`${prefix}.`) || lower.startsWith(`${prefix}-`)) {
+      return provider;
+    }
+  }
+  return value;
+};
+
+/**
+ * The identity half of the dialect: what is known when the span starts, so a
+ * pending snapshot of a still-running call is classified, attributed to its
+ * model and provider, and (for a tool) named. Before the OpenInference rules:
+ * the AI SDK also writes the deprecated `gen_ai.system`, spelled as its
+ * provider id (`openai.chat`), and `ai.model.provider` must name the provider
+ * first so that spelling never reaches `gen_ai.provider.name`.
+ *
+ * The settings are copied, not converted: the AI SDK validates each one's type
+ * before the call, and on a model call it writes the same values under
+ * `gen_ai.request.*` itself, which wins as native. `ai.settings.maxRetries` is
+ * the SDK's own retry budget, not a request parameter, and stays.
+ *
+ * Everything else (usage, messages, the response) is known only at the end:
+ * see {@link normalizeVercelSpan}.
+ */
+export const VERCEL_RULES: readonly NormalizationRule[] = [
+  { source: VERCEL_OPERATION_ID, expand: taxonomyFromVercelOperation, identity: true },
+  {
+    source: "ai.model.provider",
+    target: GEN_AI_PROVIDER_NAME,
+    convert: vercelProviderName,
+    identity: true,
+  },
+  { source: "ai.model.id", target: GEN_AI_REQUEST_MODEL, convert: textValue, identity: true },
+  { source: "ai.toolCall.name", target: GEN_AI_TOOL_NAME, convert: textValue, identity: true },
+  { source: "ai.toolCall.id", target: GEN_AI_TOOL_CALL_ID, convert: textValue, identity: true },
+  {
+    source: "ai.settings.maxOutputTokens",
+    target: GEN_AI_REQUEST_MAX_TOKENS,
+    convert: copy,
+    identity: true,
+  },
+  {
+    source: "ai.settings.temperature",
+    target: GEN_AI_REQUEST_TEMPERATURE,
+    convert: copy,
+    identity: true,
+  },
+  { source: "ai.settings.topP", target: GEN_AI_REQUEST_TOP_P, convert: copy, identity: true },
+  { source: "ai.settings.topK", target: GEN_AI_REQUEST_TOP_K, convert: copy, identity: true },
+  {
+    source: "ai.settings.frequencyPenalty",
+    target: GEN_AI_REQUEST_FREQUENCY_PENALTY,
+    convert: copy,
+    identity: true,
+  },
+  {
+    source: "ai.settings.presencePenalty",
+    target: GEN_AI_REQUEST_PRESENCE_PENALTY,
+    convert: copy,
+    identity: true,
+  },
+  { source: "ai.settings.seed", target: GEN_AI_REQUEST_SEED, convert: copy, identity: true },
+  {
+    source: "ai.settings.stopSequences",
+    target: GEN_AI_REQUEST_STOP_SEQUENCES,
+    convert: copy,
+    identity: true,
+  },
+];
+
+/**
+ * Canonical keys the AI SDK path produces that semconv.ts does not name.
+ * Inline, like the dialect's sources: semconv.ts lists them only as content.
+ */
+const GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions";
+const GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments";
+const GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result";
+
+/**
+ * Each usage count and its AI SDK spellings, in precedence order: v6's
+ * detailed spelling, then the one v5 also writes on its streams
+ * (`cachedInputTokens`, `reasoningTokens`). An embedding call reports its
+ * input as `ai.usage.tokens`. Every count is inclusive, as the conventions
+ * define it: `inputTokens` already holds the cached tokens (`noCacheTokens` is
+ * the remainder). The keys without a canonical counterpart (`totalTokens`,
+ * `inputTokenDetails.noCacheTokens`, `outputTokenDetails.textTokens`) stay.
+ *
+ * v5's `promptTokens` / `completionTokens` (generateText and generateObject)
+ * are deliberately NOT read. On a model call the AI SDK writes the same counts
+ * under `gen_ai.usage.*` itself; on the generateText wrapper v5 takes them
+ * from the LAST step's response, not the run's total, so a multi-step run
+ * would carry a short total under a key that promises the whole run. They stay
+ * under their own names, which nothing reads as usage.
+ */
+const VERCEL_USAGE: ReadonlyArray<readonly [suffix: string, sources: readonly string[]]> = [
+  [
+    GEN_AI_USAGE_INPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
+    ["ai.usage.inputTokens", "ai.usage.tokens"],
+  ],
+  [GEN_AI_USAGE_OUTPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length), ["ai.usage.outputTokens"]],
+  [
+    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
+    ["ai.usage.inputTokenDetails.cacheReadTokens", "ai.usage.cachedInputTokens"],
+  ],
+  [
+    GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
+    ["ai.usage.inputTokenDetails.cacheWriteTokens"],
+  ],
+  [
+    GEN_AI_USAGE_REASONING_OUTPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
+    ["ai.usage.outputTokenDetails.reasoningTokens", "ai.usage.reasoningTokens"],
+  ],
+];
+
+/**
+ * The first of `sources` that converts, under `target` unless the span already
+ * carries it; then every present source goes, as for a table rule. Nothing
+ * converting leaves the sources where they were.
+ */
+function mapVercel(
+  attributes: Record<string, AttributeValue | undefined>,
+  target: string,
+  sources: readonly string[],
+  convert: (value: AttributeValue) => AttributeValue | undefined,
+): void {
+  const present = sources.filter((key) => attributes[key] !== undefined);
+  if (present.length === 0) return;
+  if (attributes[target] === undefined) {
+    for (const key of present) {
+      const value = convert(attributes[key] as AttributeValue);
+      if (value === undefined) continue;
+      attributes[target] = value;
+      break;
+    }
+  }
+  if (attributes[target] === undefined) return;
+  for (const key of present) delete attributes[key];
+}
+
+/** A JSON attribute parsed, or undefined when it is not a string of JSON. */
+function parseJson(raw: AttributeValue | undefined): unknown {
+  if (typeof raw !== "string") return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The modality of a file part, as @ai-sdk/otel derives it: image unless the
+ * media type says video or audio.
+ */
+function modality(mediaType: unknown): string {
+  if (typeof mediaType !== "string") return "image";
+  if (mediaType.startsWith("video/")) return "video";
+  if (mediaType.startsWith("audio/")) return "audio";
+  return "image";
+}
+
+/**
+ * A file or image as a `uri` part when its data is a web address, a `blob`
+ * part otherwise. The AI SDK serializes binary data as base64 before it
+ * reaches the span, so data is a string here; any other shape is not one we
+ * can vouch for, and the part keeps only its type.
+ */
+function filePart(type: string, data: unknown, mediaType: unknown, fixed?: string) {
+  let value = data;
+  // v7's tagged file data, which v6 spans may carry from a v7 caller.
+  if (isObject(value) && typeof value.type === "string") {
+    const tag = value.type;
+    value =
+      tag === "data" ? value.data : tag === "url" ? value.url : tag === "text" ? value.text : "";
+  }
+  if (typeof value !== "string") return { type };
+  const kind = fixed ?? modality(mediaType);
+  const mime = mediaType ?? null;
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return { type: "uri", modality: kind, mime_type: mime, uri: value };
+  }
+  return { type: "blob", modality: kind, mime_type: mime, content: value };
+}
+
+/** A tool result's payload, unwrapped from the AI SDK's tagged output. */
+function toolResponse(output: unknown): unknown {
+  if (!isObject(output)) return output === null ? undefined : output;
+  switch (output.type) {
+    case "text":
+    case "error-text":
+    case "json":
+    case "error-json":
+      return output.value;
+    case "execution-denied":
+      return { denied: true, reason: output.reason };
+    default:
+      return output;
+  }
+}
+
+/**
+ * One AI SDK message part as a GenAI message part, as @ai-sdk/otel converts
+ * it. A part with no string type is not a part we can read, and makes the
+ * whole message set unreadable (the caller then leaves the source alone).
+ */
+function vercelPart(part: unknown): Record<string, unknown> | undefined {
+  if (!isObject(part) || typeof part.type !== "string") return undefined;
+  switch (part.type) {
+    case "text":
+      return { type: "text", content: part.text };
+    case "reasoning":
+      return { type: "reasoning", content: part.text };
+    case "tool-call":
+      return {
+        type: "tool_call",
+        id: part.toolCallId ?? null,
+        name: part.toolName,
+        arguments: part.input,
+      };
+    case "tool-result":
+      return {
+        type: "tool_call_response",
+        id: part.toolCallId ?? null,
+        response: toolResponse(part.output),
+      };
+    case "image":
+      return filePart(part.type, part.image, part.mediaType, "image");
+    case "file":
+      return filePart(part.type, part.data, part.mediaType);
+    default:
+      return { type: part.type };
+  }
+}
+
+/** One AI SDK message (a model message or a prompt message) as a GenAI message. */
+function vercelMessage(message: unknown): Record<string, unknown> | undefined {
+  if (!isObject(message) || typeof message.role !== "string") return undefined;
+  const { content } = message;
+  if (typeof content === "string") {
+    return { role: message.role, parts: [{ type: "text", content }] };
+  }
+  if (!Array.isArray(content)) return undefined;
+  const parts: Record<string, unknown>[] = [];
+  for (const item of content) {
+    const part = vercelPart(item);
+    if (part === undefined) return undefined;
+    parts.push(part);
+  }
+  return { role: message.role, parts };
+}
+
+/**
+ * System instructions as text parts: a string, one system message, or a list
+ * of them (`{role: "system", content}`), the shapes `system` takes.
+ */
+function systemParts(system: unknown): Record<string, unknown>[] | undefined {
+  if (typeof system === "string") return [{ type: "text", content: system }];
+  if (isObject(system)) return [{ type: "text", content: system.content }];
+  if (Array.isArray(system) && system.every(isObject)) {
+    return system.map((message) => ({ type: "text", content: message.content }));
+  }
+  return undefined;
+}
+
+/**
+ * A message list read into the input messages and the system instructions:
+ * system messages become instructions, as @ai-sdk/otel separates them.
+ * Undefined when any message cannot be read.
+ */
+function splitMessages(
+  messages: unknown,
+): { input: Record<string, unknown>[]; system: Record<string, unknown>[] } | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  const input: Record<string, unknown>[] = [];
+  const system: Record<string, unknown>[] = [];
+  for (const raw of messages) {
+    if (isObject(raw) && raw.role === "system") {
+      system.push({ type: "text", content: raw.content });
+      continue;
+    }
+    const message = vercelMessage(raw);
+    if (message === undefined) return undefined;
+    input.push(message);
+  }
+  return { input, system };
+}
+
+/**
+ * The prompt a span carries, read into input messages and system
+ * instructions. A model call carries the provider-bound messages
+ * (`ai.prompt.messages`); a wrapper carries the caller's arguments
+ * (`ai.prompt`: `system`, then a `prompt` string or message list, and
+ * `messages`). Undefined when there is no prompt or it cannot be read.
+ */
+function vercelPrompt(
+  attributes: Readonly<Record<string, AttributeValue | undefined>>,
+):
+  | { source: string; input: Record<string, unknown>[]; system: Record<string, unknown>[] }
+  | undefined {
+  if (attributes["ai.prompt.messages"] !== undefined) {
+    const split = splitMessages(parseJson(attributes["ai.prompt.messages"]));
+    return split && { source: "ai.prompt.messages", ...split };
+  }
+  if (attributes["ai.prompt"] === undefined) return undefined;
+  const prompt = parseJson(attributes["ai.prompt"]);
+  if (!isObject(prompt)) return undefined;
+  const input: Record<string, unknown>[] = [];
+  const system: Record<string, unknown>[] = [];
+  if (prompt.system !== undefined && prompt.system !== null) {
+    const parts = systemParts(prompt.system);
+    if (parts === undefined) return undefined;
+    system.push(...parts);
+  }
+  for (const list of [prompt.prompt, prompt.messages]) {
+    if (list === undefined || list === null) continue;
+    if (typeof list === "string") {
+      input.push({ role: "user", parts: [{ type: "text", content: list }] });
+      continue;
+    }
+    const split = splitMessages(list);
+    if (split === undefined) return undefined;
+    input.push(...split.input);
+    system.push(...split.system);
+  }
+  return { source: "ai.prompt", input, system };
+}
+
+/** The AI SDK's finish reasons under the GenAI message schema's names. */
+const VERCEL_FINISH_REASONS: Readonly<Record<string, string>> = {
+  stop: "stop",
+  length: "length",
+  "content-filter": "content_filter",
+  "tool-calls": "tool_call",
+  error: "error",
+  other: "stop",
+  unknown: "stop",
+};
+
+/** The response keys the output message is read from. */
+const VERCEL_RESPONSE_CONTENT = [
+  "ai.response.reasoning",
+  "ai.response.text",
+  "ai.response.object",
+  "ai.response.toolCalls",
+] as const;
+
+/**
+ * The response as one assistant output message: reasoning, text (or the
+ * generated object, as text), then the tool calls, with the finish reason in
+ * the message schema's spelling. Undefined when the span has no response, or
+ * its tool calls cannot be read. A tool call's input is JSON the model wrote;
+ * it is parsed when it parses, as @ai-sdk/otel records it.
+ */
+function vercelOutput(
+  attributes: Readonly<Record<string, AttributeValue | undefined>>,
+): Record<string, unknown> | undefined {
+  const finish = attributes["ai.response.finishReason"];
+  if (finish === undefined && VERCEL_RESPONSE_CONTENT.every((k) => attributes[k] === undefined)) {
+    return undefined;
+  }
+  const parts: Record<string, unknown>[] = [];
+  const reasoning = attributes["ai.response.reasoning"];
+  if (typeof reasoning === "string" && reasoning !== "") {
+    parts.push({ type: "reasoning", content: reasoning });
+  }
+  const text = attributes["ai.response.text"] ?? attributes["ai.response.object"];
+  if (typeof text === "string" && text !== "") parts.push({ type: "text", content: text });
+  if (attributes["ai.response.toolCalls"] !== undefined) {
+    const calls = parseJson(attributes["ai.response.toolCalls"]);
+    if (!Array.isArray(calls) || !calls.every(isObject)) return undefined;
+    for (const call of calls) {
+      const input =
+        typeof call.input === "string" ? (parseJson(call.input) ?? call.input) : call.input;
+      parts.push({ type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input });
+    }
+  }
+  const message: Record<string, unknown> = { role: "assistant", parts };
+  if (typeof finish === "string") {
+    message.finish_reason = Object.hasOwn(VERCEL_FINISH_REASONS, finish)
+      ? VERCEL_FINISH_REASONS[finish]
+      : finish;
+  }
+  return message;
+}
+
+/**
+ * `ai.prompt.toolChoice` as `rius.request.tool_choice`: the AI SDK's
+ * `{"type": "auto"}` (or none, required) as the mode string, a forced tool's
+ * object as compact JSON.
+ */
+function vercelToolChoice(raw: AttributeValue): AttributeValue | undefined {
+  const choice = parseJson(raw);
+  if (!isObject(choice)) return undefined;
+  const mode = choice.type;
+  if (mode === "auto" || mode === "none" || mode === "required") return mode;
+  return compactJson(choice);
+}
+
+/** The end-only half of the dialect; see {@link normalizeVercelSpan}. */
+function vercelUsage(
+  attributes: Record<string, AttributeValue | undefined>,
+  operation: VercelOperation,
+): void {
+  if (operation.kind === SpanKind.TOOL) return;
+  const prefix = operation.call ? GEN_AI_USAGE_PREFIX : RIUS_AGGREGATED_USAGE_PREFIX;
+  for (const [suffix, sources] of VERCEL_USAGE) {
+    mapVercel(attributes, prefix + suffix, sources, (value) => toInt([value]));
+  }
+}
+
+/**
+ * Map what a Vercel AI SDK span says once it has ended, in place: usage, the
+ * prompt and the response as messages, the response's identity, time to first
+ * chunk, a tool execution's input and output, and the tool choice. The
+ * identity keys were mapped by {@link VERCEL_RULES}; the tool definitions
+ * (`ai.prompt.tools`) by {@link normalizeToolDefinitions}.
+ *
+ * - Usage: a model call's counts under `gen_ai.usage.*`; a wrapper's (the
+ *   run's total) under `rius.aggregated_usage.*`, so it is not counted again.
+ *   See VERCEL_USAGE for the v5 spelling that is not read.
+ * - Messages, in the GenAI message schema as @ai-sdk/otel writes them: system
+ *   prompts as `gen_ai.system_instructions`, the rest as
+ *   `gen_ai.input.messages`, the response as one assistant message in
+ *   `gen_ai.output.messages` carrying its finish reason. A prompt or response
+ *   that cannot be read is left where it is, whole.
+ * - `ai.response.msToFirstChunk` (`ai.stream.msToFirstChunk` on streamObject)
+ *   is milliseconds; `time_to_first_chunk` is seconds, and only a stream has
+ *   a first chunk. The backend reads the
+ *   `ai.stream.firstChunk` event, renamed by {@link normalizeFirstTokenEvent}.
+ * - Embedding vectors (`ai.embedding`, `ai.embeddings`) go, as OpenInference's
+ *   do (see dropEmbeddingVectors). The inputs (`ai.value`, `ai.values`) stay:
+ *   the conventions define no embedding input.
+ *
+ * Only on a span whose `ai.operationId` is one of {@link VERCEL_OPERATIONS}.
+ * Every canonical key already present wins, and every mapped source goes.
+ */
+export function normalizeVercelSpan(attributes: Record<string, AttributeValue | undefined>): void {
+  const operation = vercelOperation(attributes[VERCEL_OPERATION_ID]);
+  if (operation === undefined) return;
+  vercelUsage(attributes, operation);
+
+  const prompt = vercelPrompt(attributes);
+  if (prompt !== undefined) {
+    if (prompt.system.length > 0 && attributes[GEN_AI_SYSTEM_INSTRUCTIONS] === undefined) {
+      attributes[GEN_AI_SYSTEM_INSTRUCTIONS] = toAttributeValue(prompt.system);
+    }
+    if (prompt.input.length > 0 && attributes[GEN_AI_INPUT_MESSAGES] === undefined) {
+      attributes[GEN_AI_INPUT_MESSAGES] = toAttributeValue(prompt.input);
+    }
+    delete attributes[prompt.source];
+  }
+  const output = vercelOutput(attributes);
+  if (output !== undefined) {
+    if (attributes[GEN_AI_OUTPUT_MESSAGES] === undefined) {
+      attributes[GEN_AI_OUTPUT_MESSAGES] = toAttributeValue([output]);
+    }
+    for (const key of VERCEL_RESPONSE_CONTENT) delete attributes[key];
+  }
+
+  mapVercel(attributes, GEN_AI_RESPONSE_ID, ["ai.response.id"], (v) => textValue([v]));
+  mapVercel(attributes, GEN_AI_RESPONSE_MODEL, ["ai.response.model"], (v) => textValue([v]));
+  mapVercel(attributes, GEN_AI_RESPONSE_FINISH_REASONS, ["ai.response.finishReason"], (v) =>
+    wrapInList([v]),
+  );
+  mapVercel(attributes, RIUS_REQUEST_TOOL_CHOICE, ["ai.prompt.toolChoice"], vercelToolChoice);
+  mapVercel(attributes, GEN_AI_TOOL_CALL_ARGUMENTS, ["ai.toolCall.args"], (v) => textValue([v]));
+  mapVercel(attributes, GEN_AI_TOOL_CALL_RESULT, ["ai.toolCall.result"], (v) => textValue([v]));
+
+  for (const key of VERCEL_MS_TO_FIRST_CHUNK) {
+    const firstChunk = asNumber(attributes[key]) as number | undefined;
+    if (firstChunk === undefined || firstChunk < 0) continue;
+    attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] ??= firstChunk / 1000;
+    attributes[GEN_AI_REQUEST_STREAM] ??= true;
+    for (const source of VERCEL_MS_TO_FIRST_CHUNK) delete attributes[source];
+    break;
+  }
+
+  for (const key of VERCEL_EMBEDDING_VECTORS) delete attributes[key];
+}
+
+/**
+ * Time to first chunk, in milliseconds, first readable wins: generateText and
+ * streamText write the first, streamObject the second. Source spellings, inline.
+ */
+const VERCEL_MS_TO_FIRST_CHUNK = [
+  "ai.response.msToFirstChunk",
+  "ai.stream.msToFirstChunk",
+] as const;
+
+/** An embedding call's output vectors: one (`embed`) or one per input. */
+const VERCEL_EMBEDDING_VECTORS = ["ai.embedding", "ai.embeddings"] as const;
+
 /**
  * The rules `init()` applies. Live in every process: normalization is always
  * on and has no opt-out, so anything listed here is a production rule the
@@ -918,13 +1534,19 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
  * The omissions, with their reasons, are listed at OPENINFERENCE_RULES.
  *
  * Taxonomy first: it is the only family whose rules are pure additions, and
- * putting it ahead of the mapping rules keeps the order easy to read.
+ * putting it ahead of the mapping rules keeps the order easy to read. The
+ * Vercel AI SDK's rules next, ahead of the OpenInference ones, so its provider
+ * id names the provider before the deprecated gen_ai.system it also writes.
  *
- * Kept byte-identical to the Python SDK's table, including rule ORDER, so the
- * same input produces the same canonical output in both.
+ * The taxonomy and OpenInference rules are kept byte-identical to the Python
+ * SDK's table, including rule ORDER, so the same input produces the same
+ * canonical output in both. The Vercel rules are this SDK's alone: the AI SDK
+ * is JavaScript, and the sink maps the same dialect for traffic that reaches
+ * it directly.
  */
 export const NORMALIZATION_RULES: readonly NormalizationRule[] = [
   ...TAXONOMY_RULES,
+  ...VERCEL_RULES,
   ...OPENINFERENCE_RULES,
 ];
 
@@ -1068,7 +1690,19 @@ function applyRules(
 export const OPENINFERENCE_FIRST_TOKEN_EVENT = "First Token Stream Event";
 
 /**
- * Map the OpenInference first-token event onto the canonical shape: the
+ * The Vercel AI SDK's (v5/v6) first-token event, on a doStream span, with the
+ * measured `ai.response.msToFirstChunk` as its attribute.
+ */
+export const VERCEL_FIRST_CHUNK_EVENT = "ai.stream.firstChunk";
+
+/** A dialect's first-token event: renamed to the canonical one. */
+function isDialectFirstTokenEvent(name: string): boolean {
+  return name === OPENINFERENCE_FIRST_TOKEN_EVENT || name === VERCEL_FIRST_CHUNK_EVENT;
+}
+
+/**
+ * Map a dialect's first-token event (OpenInference's or the Vercel AI SDK's)
+ * onto the canonical shape: the
  * `gen_ai.first_token` event, `gen_ai.request.stream`, and
  * `gen_ai.response.time_to_first_chunk` derived from the span's start.
  *
@@ -1094,14 +1728,14 @@ export const OPENINFERENCE_FIRST_TOKEN_EVENT = "First Token Stream Event";
 export function normalizeFirstTokenEvent(span: ReadableSpan): Record<string, AttributeValue> {
   const events = span.events;
   if (events === undefined || events.length === 0) return {};
-  if (!events.some((event) => event.name === OPENINFERENCE_FIRST_TOKEN_EVENT)) return {};
+  if (!events.some((event) => isDialectFirstTokenEvent(event.name))) return {};
 
   const attributes = span.attributes ?? {};
   let canonicalSeen = events.some((event) => event.name === GEN_AI_FIRST_TOKEN_EVENT);
   let firstTokenTime: TimedEvent["time"] | undefined;
   const rebuilt: TimedEvent[] = [];
   for (const event of events) {
-    if (event.name !== OPENINFERENCE_FIRST_TOKEN_EVENT) {
+    if (!isDialectFirstTokenEvent(event.name)) {
       rebuilt.push(event);
       continue;
     }
@@ -1156,8 +1790,7 @@ export function firstTokenEventFromDuration(
   if (
     events === undefined ||
     events.some(
-      (event) =>
-        event.name === GEN_AI_FIRST_TOKEN_EVENT || event.name === OPENINFERENCE_FIRST_TOKEN_EVENT,
+      (event) => event.name === GEN_AI_FIRST_TOKEN_EVENT || isDialectFirstTokenEvent(event.name),
     )
   ) {
     return;
@@ -1508,7 +2141,7 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  * sources are exact keys. End-only, which is also right on the merits:
  * definitions are content, so they never ride a pending snapshot.
  *
- * Two sources, in order:
+ * Three sources, the first present wins:
  *
  * - `llm.tools.N.tool.json_schema`, which the OpenInference instrumentations
  *   write one per tool. Each value is a JSON string; the schemas are parsed
@@ -1525,6 +2158,8 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  *   leave the bag, and a bag left empty is dropped rather than riding as `{}`.
  *   When the indexed schemas were the source, the bag's members are
  *   duplicates of them and leave the bag all the same.
+ * - Only when neither is there: the Vercel AI SDK's `ai.prompt.tools`, a
+ *   string array of JSON-stringified tools, as the sink reads it.
  *
  * Native wins: a span already carrying `gen_ai.tool.definitions` keeps it,
  * and the sources are removed anyway because they are then duplicates.
@@ -1574,10 +2209,38 @@ export function normalizeToolDefinitions(
   }
 
   const definitions = takeBagDefinitions(attributes);
-  if (definitions !== undefined && !native) {
-    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+  if (definitions !== undefined) {
+    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+    return;
+  }
+
+  // Last, the Vercel AI SDK's ai.prompt.tools: one JSON-stringified tool per
+  // element, each kept as the AI SDK wrote it. Every element must parse, or
+  // the key stays whole.
+  const tools = attributes[VERCEL_PROMPT_TOOLS];
+  if (tools === undefined) return;
+  const elements = Array.isArray(tools) ? tools : parseJson(tools);
+  if (!Array.isArray(elements)) return;
+  const parsed: unknown[] = [];
+  for (const element of elements) {
+    if (typeof element !== "string") {
+      parsed.push(element);
+      continue;
+    }
+    try {
+      parsed.push(JSON.parse(element));
+    } catch {
+      return;
+    }
+  }
+  delete attributes[VERCEL_PROMPT_TOOLS];
+  if (!native && parsed.length > 0) {
+    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(parsed);
   }
 }
+
+/** The Vercel AI SDK's tool definitions. A source spelling, inline. */
+const VERCEL_PROMPT_TOOLS = "ai.prompt.tools";
 
 /**
  * Remove the request bag's tool-definition members and return them, or
@@ -1853,6 +2516,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     this.normalize(attributes, this.rules, (key, value) => {
       attributes[key] = value;
     });
+    // After the table, which mapped the Vercel AI SDK's identity keys; ahead
+    // of every pass below, so their setDefault sees what the dialect said.
+    normalizeVercelSpan(attributes);
     // After the table, on its output: the table has already taken the request
     // knobs out of the bag, so what this pass re-serializes is the remainder.
     normalizeToolDefinitions(attributes);

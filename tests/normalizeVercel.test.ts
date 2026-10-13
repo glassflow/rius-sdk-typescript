@@ -1,0 +1,165 @@
+import type { AttributeValue, Attributes } from "@opentelemetry/api";
+import type { ReadableSpan, Span, TimedEvent } from "@opentelemetry/sdk-trace-base";
+import { describe, expect, it } from "vitest";
+import {
+  NormalizingSpanProcessor,
+  VERCEL_FIRST_CHUNK_EVENT,
+  isNativeVercelSpan,
+} from "../src/normalize.js";
+import { GEN_AI_FIRST_TOKEN_EVENT } from "../src/semconv.js";
+import fixture from "./fixtures/vercel_cases.json" with { type: "json" };
+
+/**
+ * The Vercel AI SDK's own telemetry (v5/v6, the ai.* dialect) mapped straight
+ * onto the conventions.
+ *
+ * The cases are tests/fixtures/vercel_cases.json. The sink carries the same
+ * file and must store the same attributes from the same span, so a change
+ * here is a change there.
+ */
+
+interface Case {
+  name: string;
+  input: Record<string, AttributeValue>;
+  expected: Record<string, AttributeValue>;
+}
+
+const cases = fixture.cases as unknown as Case[];
+
+function ended(attributes: Attributes, events: TimedEvent[] = []): ReadableSpan {
+  return {
+    attributes,
+    events,
+    status: { code: 0 },
+    startTime: [1700000000, 0],
+    endTime: [1700000001, 0],
+  } as unknown as ReadableSpan;
+}
+
+function starting(attributes: Attributes): Span {
+  const bag = attributes as Record<string, AttributeValue>;
+  return {
+    attributes: bag,
+    setAttribute(key: string, value: AttributeValue) {
+      bag[key] = value;
+      return this;
+    },
+  } as unknown as Span;
+}
+
+/** The shipped processor over one bag at onEnd; the keys with a value come back. */
+function normalized(input: Record<string, AttributeValue>): Record<string, AttributeValue> {
+  const attributes: Attributes = structuredClone(input);
+  new NormalizingSpanProcessor().onEnd(ended(attributes));
+  return Object.fromEntries(
+    Object.entries(attributes).filter(([, value]) => value !== undefined),
+  ) as Record<string, AttributeValue>;
+}
+
+describe("the shared cases", () => {
+  it.each(cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    expect(normalized(c.input)).toEqual(c.expected);
+  });
+
+  it.each(cases.map((c) => [c.name, c] as const))("%s: a second pass changes nothing", (_n, c) => {
+    expect(normalized(c.expected)).toEqual(c.expected);
+  });
+});
+
+describe("at span start", () => {
+  it("maps what a pending snapshot shows, and nothing it must not carry", () => {
+    const attributes: Attributes = {
+      "ai.operationId": "ai.streamText.doStream",
+      "ai.model.provider": "openai.chat",
+      "ai.model.id": "gpt-4o-mini",
+      "ai.settings.temperature": 0.2,
+      "ai.prompt.messages": '[{"role":"user","content":"hi"}]',
+    };
+    new NormalizingSpanProcessor().onStart(starting(attributes), {} as never);
+    expect(attributes).toEqual({
+      "ai.operationId": "ai.streamText.doStream",
+      "openinference.span.kind": "LLM",
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-4o-mini",
+      "gen_ai.request.temperature": 0.2,
+      // Content waits for the end, where it is mapped before masking.
+      "ai.prompt.messages": '[{"role":"user","content":"hi"}]',
+    });
+  });
+
+  it("names a still-running tool call", () => {
+    const attributes: Attributes = {
+      "ai.operationId": "ai.toolCall",
+      "ai.toolCall.name": "get_weather",
+      "ai.toolCall.id": "call_1",
+      "ai.toolCall.args": '{"city":"Paris"}',
+    };
+    new NormalizingSpanProcessor().onStart(starting(attributes), {} as never);
+    expect(attributes).toEqual({
+      "ai.operationId": "ai.toolCall",
+      "openinference.span.kind": "TOOL",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.type": "function",
+      "gen_ai.tool.name": "get_weather",
+      "gen_ai.tool.call.id": "call_1",
+      "ai.toolCall.args": '{"city":"Paris"}',
+    });
+  });
+});
+
+describe("the first-chunk event", () => {
+  const firstChunk = (): TimedEvent => ({
+    name: VERCEL_FIRST_CHUNK_EVENT,
+    time: [1700000000, 250_000_000],
+    attributes: { "ai.response.msToFirstChunk": 250 },
+  });
+
+  it("becomes the first-token event the backend reads, and no second one is added", () => {
+    const events = [firstChunk()];
+    const attributes: Attributes = {
+      "ai.operationId": "ai.streamText.doStream",
+      "ai.response.msToFirstChunk": 250,
+    };
+    new NormalizingSpanProcessor().onEnd(ended(attributes, events));
+    expect(events.map((e) => e.name)).toEqual([GEN_AI_FIRST_TOKEN_EVENT]);
+    expect(events[0]?.time).toEqual([1700000000, 250_000_000]);
+    expect(attributes["gen_ai.response.time_to_first_chunk"]).toBe(0.25);
+    expect(attributes["gen_ai.request.stream"]).toBe(true);
+  });
+
+  it("is renamed on a span the table does not map, as the sink renames it", () => {
+    const events = [firstChunk()];
+    new NormalizingSpanProcessor().onEnd(ended({}, events));
+    expect(events.map((e) => e.name)).toEqual([GEN_AI_FIRST_TOKEN_EVENT]);
+  });
+});
+
+describe("isNativeVercelSpan", () => {
+  it("claims the generate, stream, embed and tool operations", () => {
+    for (const id of [
+      "ai.generateText",
+      "ai.generateText.doGenerate",
+      "ai.streamText",
+      "ai.streamText.doStream",
+      "ai.generateObject",
+      "ai.generateObject.doGenerate",
+      "ai.streamObject",
+      "ai.streamObject.doStream",
+      "ai.embed",
+      "ai.embed.doEmbed",
+      "ai.embedMany",
+      "ai.embedMany.doEmbed",
+      "ai.toolCall",
+    ]) {
+      expect(isNativeVercelSpan({ "ai.operationId": id }), id).toBe(true);
+    }
+  });
+
+  it("leaves the rest to the transform", () => {
+    for (const id of ["ai.rerank", "ai.rerank.doRerank", "ai.generateImage", "generateText", 1]) {
+      expect(isNativeVercelSpan({ "ai.operationId": id }), String(id)).toBe(false);
+    }
+    expect(isNativeVercelSpan({})).toBe(false);
+  });
+});

@@ -92,13 +92,13 @@ const VERCEL_SPAN_ATTRIBUTES = {
 };
 
 /** A finished span shaped like one the Vercel AI SDK emits. */
-function vercelSpan(): ReadableSpan {
+function vercelSpan(operationId = "ai.generateText.doGenerate"): ReadableSpan {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
-  const span = provider.getTracer("test").startSpan("ai.generateText.doGenerate", {
-    attributes: VERCEL_SPAN_ATTRIBUTES,
+  const span = provider.getTracer("test").startSpan(operationId, {
+    attributes: { ...VERCEL_SPAN_ATTRIBUTES, "ai.operationId": operationId },
   });
   span.end();
   const finished = exporter.getFinishedSpans()[0];
@@ -701,7 +701,7 @@ describeWithVercelPackage("the vercel-ai entry", () => {
     expect(typeof loaded?.onEnd).toBe("function");
   });
 
-  it("is reported as enabled and adds OpenInference attributes to a Vercel AI span", async () => {
+  it("is reported as enabled and leaves a span the normalizer maps to it", async () => {
     const sink = makeSink();
     const enabled = await enableInstrumentations(sink, tracerProvider, ["vercel-ai"]);
     expect(enabled).toContain("vercel-ai");
@@ -710,7 +710,17 @@ describeWithVercelPackage("the vercel-ai entry", () => {
 
     const processor = sink.addFirst.mock.calls[0]?.[0] as SpanProcessor;
     const span = vercelSpan();
-    expect(span.attributes["openinference.span.kind"]).toBeUndefined();
+    const before = { ...span.attributes };
+    processor.onEnd(span);
+    expect(span.attributes).toEqual(before);
+  });
+
+  it("adds OpenInference attributes to an operation the normalizer does not map", async () => {
+    const sink = makeSink();
+    await enableInstrumentations(sink, tracerProvider, ["vercel-ai"]);
+    const processor = sink.addFirst.mock.calls[0]?.[0] as SpanProcessor;
+    const span = vercelSpan("ai.generateImage");
+    expect(span.attributes["llm.model_name"]).toBeUndefined();
 
     processor.onEnd(span);
 
