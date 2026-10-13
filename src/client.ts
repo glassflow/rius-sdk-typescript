@@ -6,7 +6,7 @@ import { getNumberFromEnv } from "@opentelemetry/core";
 // protobuf and refuses a JSON export with 415 Unsupported Media Type, so the
 // -http (JSON) exporter cannot deliver a single span to it.
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { resourceFromAttributes } from "@opentelemetry/resources";
+import { defaultResource, resourceFromAttributes } from "@opentelemetry/resources";
 import {
   BatchSpanProcessor,
   ParentBasedSampler,
@@ -325,9 +325,14 @@ export function init(options: InitOptions = {}): RiusClient {
   // init() themselves for exact per-worker span identity.
   const instanceId = randomUUID();
 
-  // telemetry.sdk.* is reserved for the OTel SDK itself; we identify as a
-  // distribution via telemetry.distro.*, the same two keys Python stamps.
-  const resource = resourceFromAttributes({
+  // telemetry.sdk.* is reserved for the OTel SDK itself, so it comes from
+  // OpenTelemetry's own default resource (language, name, version), as the
+  // Python SDK's Resource.create adds it; a resource handed to the provider is
+  // used as given, so the defaults have to be merged in here. We identify as a
+  // distribution via telemetry.distro.*, the same two keys Python stamps. Our
+  // attributes are the update in the merge, so service.name replaces the
+  // default `unknown_service:<process>`.
+  const riusAttributes = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: config.serviceName,
     [SERVICE_INSTANCE_ID]: instanceId,
     // The agent name the heartbeats already carry. Without it here, spans
@@ -382,6 +387,7 @@ export function init(options: InitOptions = {}): RiusClient {
       ? {}
       : { [ATTR_SERVICE_VERSION]: config.serviceVersion }),
   });
+  const resource = defaultResource().merge(riusAttributes);
 
   // Shared with the heartbeat sender below: both hit the same managed
   // endpoint under the same API key.
