@@ -589,7 +589,8 @@
         "ai.settings.maxRetries": 0,
         "gen_ai.operation.name": "rerank",
         "gen_ai.provider.name": "cohere",
-        "gen_ai.request.model": "rerank-v3.5"
+        "gen_ai.request.model": "rerank-v3.5",
+        "openinference.span.kind": "RERANKER"
       }
     },
     {
@@ -621,7 +622,8 @@
         "ai.ranking.type": "text",
         "gen_ai.operation.name": "rerank",
         "gen_ai.provider.name": "cohere",
-        "gen_ai.request.model": "rerank-v3.5"
+        "gen_ai.request.model": "rerank-v3.5",
+        "openinference.span.kind": "RERANKER"
       }
     },
     {

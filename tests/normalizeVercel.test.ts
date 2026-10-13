@@ -84,7 +84,7 @@ describe("at span start", () => {
     });
   });
 
-  it("classifies a still-running rerank, which has no kind of ours", () => {
+  it("classifies a still-running rerank", () => {
     const attributes: Attributes = {
       "ai.operationId": "ai.rerank.doRerank",
       "ai.model.provider": "cohere.reranking",
@@ -95,6 +95,7 @@ describe("at span start", () => {
     expect(attributes).toEqual({
       "ai.operationId": "ai.rerank.doRerank",
       "gen_ai.operation.name": "rerank",
+      "openinference.span.kind": "RERANKER",
       "gen_ai.provider.name": "cohere",
       "gen_ai.request.model": "rerank-v3.5",
       "ai.documents": ['"a"', '"b"'],

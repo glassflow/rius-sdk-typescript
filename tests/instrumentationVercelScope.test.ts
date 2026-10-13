@@ -121,6 +121,7 @@ describeV7("the ai.* dialect on real AI SDK spans", () => {
     expect(ids).toContain("ai.rerank");
     for (const attributes of spans) {
       expect(attributes["gen_ai.operation.name"]).toBe("rerank");
+      expect(attributes["openinference.span.kind"]).toBe("RERANKER");
       expect(attributes["gen_ai.provider.name"]).toBe("cohere");
       expect(attributes["gen_ai.request.model"]).toBe("rerank-v3.5");
       expect(Object.keys(attributes).filter((k) => k.startsWith("llm."))).toEqual([]);

@@ -42,16 +42,20 @@ describe("semconv", () => {
     });
   });
 
-  it("emits no operation name for CHAIN, the one kind the conventions do not cover", () => {
+  it("emits no operation name for CHAIN or RERANKER, the kinds the conventions do not cover", () => {
     expect(kindAttributes(SpanKind.CHAIN)).toEqual({
       "openinference.span.kind": "CHAIN",
     });
+    expect(kindAttributes(SpanKind.RERANKER)).toEqual({
+      "openinference.span.kind": "RERANKER",
+    });
   });
 
-  it("gives every kind but CHAIN an operation name", () => {
+  it("gives every kind but CHAIN and RERANKER an operation name", () => {
+    const uncovered: string[] = [SpanKind.CHAIN, SpanKind.RERANKER];
     for (const kind of Object.values(SpanKind)) {
       const operation = kindAttributes(kind)["gen_ai.operation.name"];
-      if (kind === SpanKind.CHAIN) expect(operation).toBeUndefined();
+      if (uncovered.includes(kind)) expect(operation).toBeUndefined();
       else expect(operation, `${kind} has no operation name`).toBeDefined();
     }
   });
@@ -118,6 +122,7 @@ describe("otelSpanKind", () => {
     expect(otelSpanKind(SpanKind.LLM)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.EMBEDDING)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.RETRIEVER)).toBe(OtelSpanKind.CLIENT);
+    expect(otelSpanKind(SpanKind.RERANKER)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.TOOL)).toBe(OtelSpanKind.INTERNAL);
     expect(otelSpanKind(SpanKind.AGENT)).toBe(OtelSpanKind.INTERNAL);
     expect(otelSpanKind(SpanKind.CHAIN)).toBe(OtelSpanKind.INTERNAL);

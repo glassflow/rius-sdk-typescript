@@ -472,14 +472,16 @@ export enum SpanKind {
   TOOL = "TOOL",
   RETRIEVER = "RETRIEVER",
   EMBEDDING = "EMBEDDING",
+  RERANKER = "RERANKER",
   CHAIN = "CHAIN",
 }
 
 /**
  * Partial on purpose. CHAIN has no GenAI operation: the conventions define
  * none for a workflow step, and inventing one would put a value on the wire
- * that no other producer agrees with. Every other kind maps to the operation
- * the conventions define for it.
+ * that no other producer agrees with. RERANKER has none for the same reason:
+ * the conventions define no rerank operation. Every other kind maps to the
+ * operation the conventions define for it.
  */
 const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.LLM]: "chat",
@@ -505,6 +507,9 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
  *   `invoke_workflow` and `plan` are real GenAI operations with no taxonomy
  *   value, CHAIN is the honest home for both, and this direction is the only
  *   one that can say so.
+ * - `rerank` is not a conventions operation but the AI SDK's own value
+ *   (@ai-sdk/otel writes it on a rerank call). RERANKER is its kind, and
+ *   since RERANKER has no conventions operation, only this direction maps it.
  *
  * A test asserts the round-trip where an operation exists, not equality of
  * the two maps: asserting inverses would force one of those four extra
@@ -519,6 +524,7 @@ const KIND_BY_OPERATION: Record<string, SpanKind> = {
   invoke_agent: SpanKind.AGENT,
   create_agent: SpanKind.AGENT,
   retrieval: SpanKind.RETRIEVER,
+  rerank: SpanKind.RERANKER,
   invoke_workflow: SpanKind.CHAIN,
   plan: SpanKind.CHAIN,
 };
@@ -529,8 +535,8 @@ const KIND_BY_OPERATION: Record<string, SpanKind> = {
  *
  * Takes the raw attribute string rather than the enum, because the caller is
  * normalizing a third-party span where the value is whatever the
- * instrumentation wrote — OpenInference's own taxonomy has RERANKER,
- * GUARDRAIL, EVALUATOR and PROMPT, none of which we model. An unrecognised
+ * instrumentation wrote — OpenInference's own taxonomy has GUARDRAIL,
+ * EVALUATOR and PROMPT, none of which we model. An unrecognised
  * value yields `undefined` rather than throwing: a span carrying a kind we do
  * not know is not a reason to lose the span.
  */
@@ -551,7 +557,8 @@ export function kindForOperation(operation: string): string | undefined {
  * operation: inference, embeddings and retrieval call out of the process
  * (CLIENT); execute_tool is INTERNAL; invoke_agent is CLIENT only for a
  * hosted agent. Hence:
- * - LLM / EMBEDDING / RETRIEVER -> CLIENT: a remote model or index is called.
+ * - LLM / EMBEDDING / RETRIEVER / RERANKER -> CLIENT: a remote model or index
+ *   is called.
  * - TOOL -> INTERNAL: a bare TOOL span is an in-process function, and the
  *   execute-tool convention says INTERNAL. The MCP wrapper overrides this to
  *   CLIENT through `SpanOptions.otelKind` because a tools/call crosses a
@@ -566,6 +573,7 @@ const OTEL_KIND_BY_KIND: Record<SpanKind, OtelSpanKind> = {
   [SpanKind.LLM]: OtelSpanKind.CLIENT,
   [SpanKind.EMBEDDING]: OtelSpanKind.CLIENT,
   [SpanKind.RETRIEVER]: OtelSpanKind.CLIENT,
+  [SpanKind.RERANKER]: OtelSpanKind.CLIENT,
   [SpanKind.TOOL]: OtelSpanKind.INTERNAL,
   [SpanKind.AGENT]: OtelSpanKind.INTERNAL,
   [SpanKind.CHAIN]: OtelSpanKind.INTERNAL,
@@ -598,8 +606,8 @@ export function kindAttributes(kind: SpanKind, toolName?: string): Record<string
 /**
  * The attribute whose value completes a span's name, per kind. The GenAI
  * conventions name a span `{operation} {target}`, and each operation has its
- * own target: the model for inference and embeddings, the tool, the agent,
- * the data source. CHAIN is absent because it has no operation to compose
+ * own target: the model for inference, embeddings and reranking, the tool,
+ * the agent, the data source. CHAIN is absent because it has no operation to compose
  * with, and LLM reads the REQUEST model on purpose — the response model can
  * arrive long after the span was named, and a pending snapshot must carry the
  * same name as the final span.
@@ -610,6 +618,7 @@ const NAME_TARGET_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.TOOL]: GEN_AI_TOOL_NAME,
   [SpanKind.AGENT]: GEN_AI_AGENT_NAME,
   [SpanKind.RETRIEVER]: GEN_AI_DATA_SOURCE_ID,
+  [SpanKind.RERANKER]: GEN_AI_REQUEST_MODEL,
 };
 
 /**

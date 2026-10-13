@@ -933,9 +933,8 @@ const VERCEL_OPERATION_ID = "ai.operationId";
  * repeats its calls' (from v6 on, and on v5's streams, it is the run's total),
  * so it moves to `rius.aggregated_usage.*` and is never counted twice.
  *
- * `operation` names the call where no kind of ours does: a rerank is neither a
- * model call nor a retrieval, and the taxonomy has no reranker, so it gets the
- * operation name alone.
+ * `operation` names the call where the kind implies no operation: RERANKER
+ * has none in the conventions, so a rerank carries the AI SDK's own `rerank`.
  *
  * Only these ids are mapped. Any other keeps its `ai.*` keys apart from the
  * identity ones. v5 and v6 trace nothing else: their image, speech and
@@ -969,8 +968,8 @@ export const VERCEL_OPERATIONS: Readonly<Record<string, VercelOperation>> = {
   "ai.embed.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
   "ai.embedMany.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
   "ai.toolCall": { kind: SpanKind.TOOL, call: false },
-  "ai.rerank": { operation: "rerank", call: false },
-  "ai.rerank.doRerank": { operation: "rerank", call: true },
+  "ai.rerank": { kind: SpanKind.RERANKER, operation: "rerank", call: false },
+  "ai.rerank.doRerank": { kind: SpanKind.RERANKER, operation: "rerank", call: true },
 };
 
 function vercelOperation(raw: AttributeValue | undefined): VercelOperation | undefined {
