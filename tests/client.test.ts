@@ -65,6 +65,23 @@ describe("init", () => {
     expect(exporter.getFinishedSpans()[0].resource.attributes["service.name"]).toBe("svc");
   });
 
+  // OpenTelemetry's resource keys for the SDK itself, which the Python SDK's
+  // Resource.create carries too. A resource handed to the provider is used as
+  // given, so they come from merging the default resource.
+  it("carries OpenTelemetry's telemetry.sdk.* keys on the resource", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ serviceName: "svc", spanExporter: exporter });
+    getTracer().startSpan("s").end();
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0].resource.attributes;
+    expect(attributes["telemetry.sdk.language"]).toBe("nodejs");
+    expect(attributes["telemetry.sdk.name"]).toBe("opentelemetry");
+    expect(typeof attributes["telemetry.sdk.version"]).toBe("string");
+    // The default resource's unknown_service:<process> does not win.
+    expect(attributes["service.name"]).toBe("svc");
+    expect(attributes["telemetry.distro.name"]).toBe("glassflow-rius");
+  });
+
   it("stamps the agent name on the resource", async () => {
     const exporter = new InMemorySpanExporter();
     client = testInit({ serviceName: "svc", agentName: "planner", spanExporter: exporter });
