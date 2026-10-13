@@ -490,7 +490,8 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
 };
 
 /**
- * The inverse, for spans that speak only the conventions. A GenAI-native
+ * The inverse, for spans that speak the conventions (and the GenAI-native
+ * vendor operations listed below, such as `agent_step`). A GenAI-native
  * instrumentation sets `gen_ai.operation.name` and has never heard of
  * `openinference.span.kind`, and the contract requires both keys on every
  * span, so the derivation has to run in both directions.

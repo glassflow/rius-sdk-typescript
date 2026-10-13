@@ -1442,7 +1442,9 @@ const VERCEL_OTEL_AGENT_STEP = "agent_step";
  * there by moveAggregatedUsage with the rest of its usage. The other detail
  * keys that option adds have no canonical counterpart and stay.
  *
- * Only on a span naming a GenAI operation: nothing else writes this key.
+ * Only on a span with no `ai.operationId` that names a GenAI operation. The
+ * v6 LegacyOpenTelemetry integration writes this key too, but its spans carry
+ * `ai.operationId`, so normalizeVercelSpan never sends them here.
  */
 function vercelOtelReasoning(attributes: Record<string, AttributeValue | undefined>): void {
   if (attributes[VERCEL_OTEL_REASONING_TOKENS] === undefined) return;
