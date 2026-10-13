@@ -12,6 +12,9 @@ import {
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 
+/** The namespace the OpenInference Vercel transform mirrors unknown attributes into. */
+const METADATA_PREFIX = "metadata.";
+
 export function isContentKey(key: string): boolean {
   if (CONTENT_ATTRIBUTES.has(key)) return true;
   if (
@@ -20,9 +23,21 @@ export function isContentKey(key: string): boolean {
   )
     return true;
   if (CONTENT_ATTRIBUTE_SUFFIXES.some((s) => key.endsWith(s))) return true;
-  return CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES.some(
-    ([prefix, leaves]) => key.startsWith(prefix) && leaves.some((leaf) => key.endsWith(leaf)),
-  );
+  if (
+    CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES.some(
+      ([prefix, leaves]) => key.startsWith(prefix) && leaves.some((leaf) => key.endsWith(leaf)),
+    )
+  )
+    return true;
+  // The SDK no longer runs @arizeai/openinference-vercel, but an app can run
+  // its span processor itself on a provider the SDK bridges onto
+  // (bridgeForeignProvider). That processor rewrites every span's attributes
+  // in place at onEnd and copies the ones it does not translate under
+  // `metadata.<original key>`, so a content key comes through twice. Masking
+  // runs at export, after it, and the mirrored copy is content exactly when
+  // the original is: otherwise metadata.gen_ai.system_instructions carries
+  // the system prompt past captureContent: false.
+  return key.startsWith(METADATA_PREFIX) && isContentKey(key.slice(METADATA_PREFIX.length));
 }
 
 /**
