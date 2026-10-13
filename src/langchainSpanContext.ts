@@ -109,8 +109,10 @@ function queuedCallbacksRan(): Promise<void> | undefined {
   const consume = consumeCallback;
   if (consume === undefined) return undefined;
   return new Promise<void>((resolve) => {
+    // Not unref'd: in the case the bound exists for, this timer is the only
+    // thing that can move the call forward, and nothing else may be keeping a
+    // short-lived process alive. It is cleared once the queue drains.
     const timer = setTimeout(resolve, PENDING_SPAN_WAIT_MS);
-    timer.unref?.();
     const done = () => {
       clearTimeout(timer);
       resolve();
