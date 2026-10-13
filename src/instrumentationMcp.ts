@@ -91,25 +91,75 @@ function recordResult(observation: Observation, result: unknown): void {
 export interface McpClientLike {
   prototype: {
     callTool(params: { name: string; arguments?: unknown }, ...rest: unknown[]): Promise<unknown>;
+    connect?(transport: unknown, ...rest: unknown[]): Promise<unknown>;
   };
 }
 
 type CallTool = McpClientLike["prototype"]["callTool"];
+type Connect = NonNullable<McpClientLike["prototype"]["connect"]>;
 
 /**
- * The protocol version the client's transport negotiated, if it exposes one.
- * Read structurally off the client instance: the SDK's `Client` publishes its
- * transport via a `transport` getter, and only `StreamableHTTPClientTransport`
- * exposes the negotiated version as a public `protocolVersion` getter. The
- * SSE transport keeps it private, and stdio/WebSocket never receive it at
- * all (`Client.connect` forwards it only to transports with a
- * `setProtocolVersion` and retains nothing itself), so on those the
- * attribute is omitted — never guessed from the version we requested. This
- * is narrower than the Python SDK, whose session exposes the version on
- * every transport; a Recommended attribute, accepted for now.
+ * The protocol version each client negotiated, captured while it connects.
+ * Weak keys: the client owns its lifetime, and this must never keep one alive.
+ */
+const negotiatedVersions = new WeakMap<object, string>();
+
+/**
+ * Watch the version `Client.connect` hands its transport, for the duration of
+ * one connect. The SDK's `Client` keeps nothing of the initialize result's
+ * version itself: it validates it, then passes it to the transport's
+ * `setProtocolVersion` only when the transport has one (the HTTP transports
+ * do; stdio, WebSocket and in-memory do not). A temporary own
+ * `setProtocolVersion` on the transport sees the value on every transport,
+ * delegating to the transport's real method when there is one, and is removed
+ * when the connect settles, so the transport is left exactly as it was.
+ *
+ * Returns the restore function. Never throws: a transport that cannot take an
+ * own property (frozen, or not an object) is simply not watched.
+ */
+function watchProtocolVersion(client: object, transport: unknown): () => void {
+  const target = asRecord(transport);
+  if (target === undefined) return () => {};
+  const hadOwn = Object.hasOwn(target, "setProtocolVersion");
+  const previous = target.setProtocolVersion;
+  try {
+    target.setProtocolVersion = function watchedSetProtocolVersion(
+      this: unknown,
+      version: unknown,
+    ): unknown {
+      if (typeof version === "string") negotiatedVersions.set(client, version);
+      return typeof previous === "function" ? previous.call(this, version) : undefined;
+    };
+  } catch {
+    return () => {};
+  }
+  return () => {
+    try {
+      // Deleted, not set to undefined: an own undefined would hide the
+      // transport's real method on its prototype (the HTTP transports').
+      if (hadOwn) target.setProtocolVersion = previous;
+      else Reflect.deleteProperty(target, "setProtocolVersion");
+    } catch {
+      // Nothing to restore on a transport that refused the change.
+    }
+  };
+}
+
+/**
+ * The protocol version the client negotiated, if known. First the value
+ * captured while the client connected (see watchProtocolVersion), which
+ * covers every transport, as the Python SDK's session does. A reconnect that
+ * skips initialize keeps it. Then, for a client connected before
+ * instrumentation, the transport's own public `protocolVersion`, which only
+ * `StreamableHTTPClientTransport` exposes. Otherwise the attribute is omitted,
+ * never guessed from the version we requested.
  */
 function negotiatedProtocolVersion(client: unknown): string | undefined {
-  const version = asRecord(asRecord(client)?.transport)?.protocolVersion;
+  const record = asRecord(client);
+  if (record === undefined) return undefined;
+  const captured = negotiatedVersions.get(record);
+  if (captured !== undefined) return captured;
+  const version = asRecord(record.transport)?.protocolVersion;
   return typeof version === "string" ? version : undefined;
 }
 
@@ -133,6 +183,47 @@ function callAttributes(protocolVersion: string | undefined): Record<string, str
 /** Marks a wrapper with the true original, so a second wrap is detectable. */
 interface InstrumentedCallTool extends CallTool {
   riusOriginal?: CallTool;
+}
+
+/** The same marker on the connect wrapper. */
+interface InstrumentedConnect extends Connect {
+  riusOriginal?: Connect;
+}
+
+/**
+ * Wrap `connect` so the negotiated protocol version is captured. Returns the
+ * restore function, or a no-op when the class has no `connect` (a test double)
+ * or it is already wrapped (the existing wrapper's own restore applies).
+ */
+function instrumentConnect(ClientClass: McpClientLike): () => void {
+  const proto = ClientClass.prototype;
+  const current = proto.connect as InstrumentedConnect | undefined;
+  if (typeof current !== "function") return () => {};
+  const alreadyWrapped = current.riusOriginal;
+  if (alreadyWrapped !== undefined) {
+    return () => {
+      proto.connect = alreadyWrapped;
+    };
+  }
+  const original = current;
+  const instrumented: InstrumentedConnect = async function instrumentedConnect(
+    this: unknown,
+    transport: unknown,
+    ...rest: unknown[]
+  ): Promise<unknown> {
+    const self = asRecord(this);
+    const restore = self === undefined ? () => {} : watchProtocolVersion(self, transport);
+    try {
+      return await original.call(this, transport, ...rest);
+    } finally {
+      restore();
+    }
+  };
+  instrumented.riusOriginal = original;
+  proto.connect = instrumented;
+  return () => {
+    proto.connect = original;
+  };
 }
 
 /**
@@ -168,11 +259,13 @@ interface InstrumentedCallTool extends CallTool {
  * Returns a function that restores the original method.
  */
 export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
+  const uninstallConnect = instrumentConnect(ClientClass);
   const current = ClientClass.prototype.callTool as InstrumentedCallTool;
   const alreadyWrapped = current.riusOriginal;
   if (alreadyWrapped !== undefined) {
     return () => {
       ClientClass.prototype.callTool = alreadyWrapped;
+      uninstallConnect();
     };
   }
 
@@ -213,5 +306,6 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
 
   return () => {
     ClientClass.prototype.callTool = original;
+    uninstallConnect();
   };
 }
