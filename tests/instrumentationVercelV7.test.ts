@@ -117,6 +117,36 @@ describeV7("the vercel-ai entry on ai v7", () => {
     expect(agent).toBeDefined();
   });
 
+  it("classifies @ai-sdk/otel's rerank span as RERANKER", async () => {
+    const { rerank } = await import("ai");
+    const { MockRerankingModelV4 } = await import("ai/test");
+
+    const inner = new InMemorySpanExporter();
+    const client = initTracked({ spanExporter: inner, heartbeatTransport: async () => {} });
+    expect(await client.ready).toContain("vercel-ai");
+    await rerank({
+      model: new MockRerankingModelV4({
+        provider: "cohere.reranking",
+        modelId: "rerank-v3.5",
+        doRerank: async () => ({ ranking: [{ index: 1, relevanceScore: 0.9 }] }),
+      }),
+      query: "capital of France",
+      documents: ["Berlin", "Paris"],
+    });
+    await client.flush();
+
+    const spans = inner.getFinishedSpans();
+    await client.shutdown();
+    const reranks = spans.filter((s) => s.attributes["gen_ai.operation.name"] === "rerank");
+    expect(reranks.length).toBeGreaterThan(0);
+    for (const span of reranks) {
+      // @ai-sdk/otel writes the operation but no OpenInference kind: the
+      // normalizer derives RERANKER from it.
+      expect(span.attributes["openinference.span.kind"]).toBe("RERANKER");
+      expect(span.attributes["gen_ai.request.model"]).toBe("rerank-v3.5");
+    }
+  });
+
   it("re-init replaces the registration instead of stacking a duplicate", async () => {
     const first = initTracked({
       spanExporter: new InMemorySpanExporter(),

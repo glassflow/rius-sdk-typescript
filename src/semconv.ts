@@ -479,9 +479,13 @@ export enum SpanKind {
 /**
  * Partial on purpose. CHAIN has no GenAI operation: the conventions define
  * none for a workflow step, and inventing one would put a value on the wire
- * that no other producer agrees with. RERANKER has none for the same reason:
- * the conventions define no rerank operation. Every other kind maps to the
- * operation the conventions define for it.
+ * that no other producer agrees with. RERANKER maps to `rerank`, which the
+ * conventions do not define either: it is the value @ai-sdk/otel writes on a
+ * rerank call, and the SDK writes it on AI SDK v6 reranks too, so it is
+ * already on the wire. Mapping the kind to it gives every rerank span (AI
+ * SDK, OpenInference RERANKER, `startSpan`) the same operation, so a filter
+ * on either key finds them all. Every other kind maps to the operation the
+ * conventions define for it.
  */
 const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.LLM]: "chat",
@@ -489,6 +493,7 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.EMBEDDING]: "embeddings",
   [SpanKind.AGENT]: "invoke_agent",
   [SpanKind.RETRIEVER]: "retrieval",
+  [SpanKind.RERANKER]: "rerank",
 };
 
 /**
@@ -507,9 +512,6 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
  *   `invoke_workflow` and `plan` are real GenAI operations with no taxonomy
  *   value, CHAIN is the honest home for both, and this direction is the only
  *   one that can say so.
- * - `rerank` is not a conventions operation but the AI SDK's own value
- *   (@ai-sdk/otel writes it on a rerank call). RERANKER is its kind, and
- *   since RERANKER has no conventions operation, only this direction maps it.
  *
  * A test asserts the round-trip where an operation exists, not equality of
  * the two maps: asserting inverses would force one of those four extra
@@ -607,10 +609,11 @@ export function kindAttributes(kind: SpanKind, toolName?: string): Record<string
  * The attribute whose value completes a span's name, per kind. The GenAI
  * conventions name a span `{operation} {target}`, and each operation has its
  * own target: the model for inference, embeddings and reranking, the tool,
- * the agent, the data source. CHAIN is absent because it has no operation to compose
- * with, and LLM reads the REQUEST model on purpose — the response model can
- * arrive long after the span was named, and a pending snapshot must carry the
- * same name as the final span.
+ * the agent, the data source, so a rerank span is named `rerank <model>`.
+ * CHAIN is absent because it has no operation to compose with, and LLM reads
+ * the REQUEST model on purpose — the response model can arrive long after the
+ * span was named, and a pending snapshot must carry the same name as the
+ * final span.
  */
 const NAME_TARGET_BY_KIND: Partial<Record<SpanKind, string>> = {
   [SpanKind.LLM]: GEN_AI_REQUEST_MODEL,

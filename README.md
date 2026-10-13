@@ -163,6 +163,7 @@ valid:
 | TOOL | `execute_tool get_weather` | `execute_tool` |
 | AGENT | `invoke_agent planner` | `invoke_agent` |
 | RETRIEVER | `retrieval docs-index` | `retrieval` |
+| RERANKER | `rerank rerank-v3.5` (`{operation} {gen_ai.request.model}`) | `rerank` |
 | CHAIN | the function name for `observe`, else `chain` | — |
 
 ```ts
@@ -180,7 +181,7 @@ same name as the span that replaces it. CHAIN has no operation to compose
 from, so an unnamed CHAIN span is called `chain`.
 
 `kind` sets the span's taxonomy (`openinference.span.kind`, our `SpanKind`
-enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, AGENT, LLM). A TOOL
+enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, RERANKER, AGENT, LLM). A TOOL
 span also carries `gen_ai.tool.name`, set to the span name unless you pass
 `toolName` (and unset if you pass neither), which both the span helpers and `observe` accept for the case
 where the span name is not the bare tool name. It also takes `toolCallId`
@@ -194,7 +195,7 @@ A RETRIEVER span carries
 collection it searched, and `gen_ai.retrieval.top_k` when you pass `topK`.
 Each kind also
 decides the OpenTelemetry `SpanKind` field the conventions expect: LLM,
-EMBEDDING and RETRIEVER spans are CLIENT, everything else INTERNAL. Pass
+EMBEDDING, RETRIEVER and RERANKER spans are CLIENT, everything else INTERNAL. Pass
 `otelKind` to override it, for example CLIENT for a call to a hosted agent.
 Note the name collision: `SpanKind` exported by this package is the taxonomy
 enum; the value for `otelKind` is `SpanKind` from `@opentelemetry/api`, so
@@ -453,7 +454,10 @@ without touching the first.
 completions, tool arguments) is attached to spans. It defaults to
 `true`. Set it to `false`, or supply a `mask` function, if your spans
 must not carry raw content. Both apply to span attributes and to the
-attributes of span events and links. With `captureContent: false` the
+attributes of span events and links, including the `metadata.*` copies
+`@arizeai/openinference-vercel`'s span processor makes of attributes it does
+not translate, if your app runs it on a provider Rius bridges onto: a
+`metadata.<key>` is content exactly when `<key>` is. With `captureContent: false` the
 message and stacktrace of a recorded exception are stripped as well,
 since provider errors routinely echo the request back; the exception
 event and its `exception.type` are kept, so failures stay visible.

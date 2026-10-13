@@ -695,9 +695,10 @@ describe("taxonomy", () => {
     });
   });
 
-  it("keeps RERANKER and derives no operation: the conventions define none", () => {
+  it("derives the rerank operation from an OpenInference RERANKER span", () => {
     expect(normalized({ "openinference.span.kind": "RERANKER" })).toEqual({
       "openinference.span.kind": "RERANKER",
+      "gen_ai.operation.name": "rerank",
     });
   });
 

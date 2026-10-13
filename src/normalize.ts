@@ -933,26 +933,22 @@ const VERCEL_OPERATION_ID = "ai.operationId";
  * repeats its calls' (from v6 on, and on v5's streams, it is the run's total),
  * so it moves to `rius.aggregated_usage.*` and is never counted twice.
  *
- * `operation` names the call where the kind implies no operation: RERANKER
- * has none in the conventions, so a rerank carries the AI SDK's own `rerank`.
- *
  * Only these ids are mapped. Any other keeps its `ai.*` keys apart from the
  * identity ones. v5 and v6 trace nothing else: their image, speech and
  * transcription calls take no telemetry settings.
  */
 interface VercelOperation {
-  readonly kind?: SpanKind;
-  readonly operation?: string;
+  readonly kind: SpanKind;
   readonly call: boolean;
 }
 
 /**
  * The operations mapped. The generate/stream wrappers are agent runs
  * (`invoke_agent`, as @ai-sdk/otel classifies them): each owns a loop of
- * model calls and tool executions. A rerank is `rerank`, as @ai-sdk/otel
- * names it; its documents (`ai.documents`) and ranking (`ai.ranking`, indices
- * and scores) stay under the AI SDK's keys, where @ai-sdk/otel writes them
- * too: the conventions define neither.
+ * model calls and tool executions. A rerank is RERANKER, whose operation is
+ * `rerank`, as @ai-sdk/otel names it. Its documents (`ai.documents`) and
+ * ranking (`ai.ranking`, indices and scores) stay under the AI SDK's keys,
+ * where @ai-sdk/otel writes them too: the conventions define neither.
  */
 export const VERCEL_OPERATIONS: Readonly<Record<string, VercelOperation>> = {
   "ai.generateText": { kind: SpanKind.AGENT, call: false },
@@ -968,8 +964,8 @@ export const VERCEL_OPERATIONS: Readonly<Record<string, VercelOperation>> = {
   "ai.embed.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
   "ai.embedMany.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
   "ai.toolCall": { kind: SpanKind.TOOL, call: false },
-  "ai.rerank": { kind: SpanKind.RERANKER, operation: "rerank", call: false },
-  "ai.rerank.doRerank": { kind: SpanKind.RERANKER, operation: "rerank", call: true },
+  "ai.rerank": { kind: SpanKind.RERANKER, call: false },
+  "ai.rerank.doRerank": { kind: SpanKind.RERANKER, call: true },
 };
 
 function vercelOperation(raw: AttributeValue | undefined): VercelOperation | undefined {
@@ -986,13 +982,12 @@ function vercelOperation(raw: AttributeValue | undefined): VercelOperation | und
 export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Expansion {
   const operation = vercelOperation(raw);
   if (operation === undefined) return { [VERCEL_OPERATION_ID]: raw };
-  const { kind } = operation;
   const produced: Expansion = {
     [VERCEL_OPERATION_ID]: raw,
-    [GEN_AI_OPERATION_NAME]: operation.operation ?? (kind && operationForKind(kind)),
+    [OPENINFERENCE_SPAN_KIND]: operation.kind,
+    [GEN_AI_OPERATION_NAME]: operationForKind(operation.kind),
   };
-  if (kind !== undefined) produced[OPENINFERENCE_SPAN_KIND] = kind;
-  if (kind === SpanKind.TOOL) produced[GEN_AI_TOOL_TYPE] = "function";
+  if (operation.kind === SpanKind.TOOL) produced[GEN_AI_TOOL_TYPE] = "function";
   return produced;
 }
 

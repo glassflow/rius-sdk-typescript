@@ -42,20 +42,23 @@ describe("semconv", () => {
     });
   });
 
-  it("emits no operation name for CHAIN or RERANKER, the kinds the conventions do not cover", () => {
+  it("emits no operation name for CHAIN, the one kind the conventions do not cover", () => {
     expect(kindAttributes(SpanKind.CHAIN)).toEqual({
       "openinference.span.kind": "CHAIN",
     });
+  });
+
+  it("gives RERANKER the AI SDK's rerank operation", () => {
     expect(kindAttributes(SpanKind.RERANKER)).toEqual({
       "openinference.span.kind": "RERANKER",
+      "gen_ai.operation.name": "rerank",
     });
   });
 
-  it("gives every kind but CHAIN and RERANKER an operation name", () => {
-    const uncovered: string[] = [SpanKind.CHAIN, SpanKind.RERANKER];
+  it("gives every kind but CHAIN an operation name", () => {
     for (const kind of Object.values(SpanKind)) {
       const operation = kindAttributes(kind)["gen_ai.operation.name"];
-      if (uncovered.includes(kind)) expect(operation).toBeUndefined();
+      if (kind === SpanKind.CHAIN) expect(operation).toBeUndefined();
       else expect(operation, `${kind} has no operation name`).toBeDefined();
     }
   });
@@ -237,6 +240,7 @@ describe("composeSpanName", () => {
       [SpanKind.TOOL, { "gen_ai.tool.name": "get_weather" }, "execute_tool get_weather"],
       [SpanKind.AGENT, { "gen_ai.agent.name": "planner" }, "invoke_agent planner"],
       [SpanKind.RETRIEVER, { "gen_ai.data_source.id": "docs-index" }, "retrieval docs-index"],
+      [SpanKind.RERANKER, { "gen_ai.request.model": "rerank-v3.5" }, "rerank rerank-v3.5"],
     ];
     for (const [kind, target, expected] of cases) {
       expect(composeSpanName(kind, { ...kindAttributes(kind), ...target })).toBe(expected);
@@ -250,6 +254,7 @@ describe("composeSpanName", () => {
       [SpanKind.TOOL, "execute_tool"],
       [SpanKind.AGENT, "invoke_agent"],
       [SpanKind.RETRIEVER, "retrieval"],
+      [SpanKind.RERANKER, "rerank"],
     ];
     for (const [kind, name] of expected) {
       expect(composeSpanName(kind, kindAttributes(kind))).toBe(name);

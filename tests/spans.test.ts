@@ -554,6 +554,10 @@ describe("spec-form span names", () => {
       kind: SpanKind.EMBEDDING,
       attributes: { "gen_ai.request.model": "text-embedding-3-small" },
     }).end();
+    startSpan({
+      kind: SpanKind.RERANKER,
+      attributes: { "gen_ai.request.model": "rerank-v3.5" },
+    }).end();
     await startAsCurrentSpan({ kind: SpanKind.TOOL, toolName: "get_weather" }, () => {});
     await startAsCurrentSpan({ kind: SpanKind.AGENT, agentName: "planner" }, () => {});
     await startAsCurrentSpan({ kind: SpanKind.RETRIEVER, dataSourceId: "docs-index" }, () => {});
@@ -564,12 +568,17 @@ describe("spec-form span names", () => {
       },
       () => {},
     );
+    await startAsCurrentSpan(
+      { kind: SpanKind.RERANKER, attributes: { "gen_ai.request.model": "rerank-v3.5" } },
+      () => {},
+    );
     await client.flush();
     const expected = [
       "execute_tool get_weather",
       "invoke_agent planner",
       "retrieval docs-index",
       "embeddings text-embedding-3-small",
+      "rerank rerank-v3.5",
     ];
     expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([...expected, ...expected]);
   });
@@ -579,12 +588,14 @@ describe("spec-form span names", () => {
     startSpan({ kind: SpanKind.RETRIEVER }).end();
     startSpan({ kind: SpanKind.EMBEDDING }).end();
     startSpan({ kind: SpanKind.LLM }).end();
+    startSpan({ kind: SpanKind.RERANKER }).end();
     await client.flush();
     expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual([
       "execute_tool",
       "retrieval",
       "embeddings",
       "chat",
+      "rerank",
     ]);
     // AGENT is absent on purpose: an initialised client always has an agent
     // name (it defaults to the service name), so an AGENT span always has a
