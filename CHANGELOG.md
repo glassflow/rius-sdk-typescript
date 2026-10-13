@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.1.1...v1.2.0) (2026-10-13)
+
+
+### Features
+
+* @arizeai/openinference-vercel is no longer needed and can be uninstalled ([f187227](https://github.com/glassflow/rius-sdk-typescript/commit/f187227b8ec248467da4cee17245e1a6c8cc8be0))
+* client.ready no longer lists vercel-ai on AI SDK v5 and v6; it lists it only where @ai-sdk/otel is registered (AI SDK v7) ([f187227](https://github.com/glassflow/rius-sdk-typescript/commit/f187227b8ec248467da4cee17245e1a6c8cc8be0))
+* map the Vercel AI SDK's ai.* telemetry onto the GenAI conventions natively ([#129](https://github.com/glassflow/rius-sdk-typescript/issues/129)) ([c8d52f0](https://github.com/glassflow/rius-sdk-typescript/commit/c8d52f02ae81e0aa301a7feecf4ea6283924d3eb))
+* map the Vercel AI SDK's rerank spans natively, as the new RERANKER span kind (SpanKind.RERANKER) with the operation rerank ([f187227](https://github.com/glassflow/rius-sdk-typescript/commit/f187227b8ec248467da4cee17245e1a6c8cc8be0))
+* record the reasoning split and classify agent_step on Vercel AI SDK v7 spans ([#133](https://github.com/glassflow/rius-sdk-typescript/issues/133)) ([94d32ba](https://github.com/glassflow/rius-sdk-typescript/commit/94d32bae23e5ed56aadbf6e18030abe8d3d78f60))
+
+
+### Bug Fixes
+
+* carry OpenTelemetry's telemetry.sdk.* keys on the resource ([#128](https://github.com/glassflow/rius-sdk-typescript/issues/128)) ([89761e6](https://github.com/glassflow/rius-sdk-typescript/commit/89761e6a342fbcc753d7a4d43f3123fa2bc81688))
+* count a LangChain call's usage once when the provider span recorded it ([#131](https://github.com/glassflow/rius-sdk-typescript/issues/131)) ([3445882](https://github.com/glassflow/rius-sdk-typescript/commit/3445882a8ba0fdd443e76467a844a2b36181ed1f))
+* record the negotiated MCP protocol version on every transport ([#127](https://github.com/glassflow/rius-sdk-typescript/issues/127)) ([da4323a](https://github.com/glassflow/rius-sdk-typescript/commit/da4323a7123860b3dc8da19a2ed30b28668821f5))
+
 ## [1.1.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.1.0...v1.1.1) (2026-10-13)
 
 
