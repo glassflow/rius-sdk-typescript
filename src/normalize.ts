@@ -5,7 +5,7 @@ import {
   SpanStatusCode,
 } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor, TimedEvent } from "@opentelemetry/sdk-trace-base";
-import { moveAggregatedUsage } from "./aggregatedUsage.js";
+import { moveAggregatedUsage, moveWrappedCallUsage, noteWrapperStart } from "./aggregatedUsage.js";
 import { qualifyRecordedExceptions } from "./errorType.js";
 import {
   ERROR_TYPE,
@@ -1844,6 +1844,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // exception.type (and the error.type derived from it at onEnd) names the
     // error's class rather than the generic "Error" provider SDKs inherit.
     qualifyRecordedExceptions(span);
+    // Remembered so a provider call ending under it can mark it; see
+    // moveWrappedCallUsage.
+    noteWrapperStart(span);
   }
 
   onEnd(span: ReadableSpan): void {
@@ -1882,6 +1885,7 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // Last, so the table has already renamed legacy usage spellings, and
     // end-only because a run's usage is only known once it ends.
     moveAggregatedUsage(span, attributes);
+    moveWrappedCallUsage(span, attributes);
   }
 
   private normalize(
