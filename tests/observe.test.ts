@@ -229,6 +229,7 @@ describe("observe span names", () => {
     await observe(anon, { kind: SpanKind.RETRIEVER })();
     await observe(anon, { kind: SpanKind.EMBEDDING })();
     await observe(anon, { kind: SpanKind.LLM })();
+    await observe(anon, { kind: SpanKind.RERANKER })();
     await client.flush();
     // No AGENT here: an initialised client always knows an agent name, so
     // that fallback is a semconv unit test rather than a wrapper one.
@@ -236,6 +237,7 @@ describe("observe span names", () => {
       "retrieval",
       "embeddings",
       "chat",
+      "rerank",
     ]);
   });
 

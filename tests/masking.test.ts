@@ -444,7 +444,7 @@ describe("span status description", () => {
   });
 });
 
-describe("metadata.* mirrors from the Vercel transform", () => {
+describe("metadata.* mirrors from an app-run OpenInference Vercel processor", () => {
   it("treats metadata.<key> as content exactly when <key> is", () => {
     expect(isContentKey("metadata.gen_ai.system_instructions")).toBe(true);
     expect(isContentKey("metadata.gen_ai.input.messages")).toBe(true);

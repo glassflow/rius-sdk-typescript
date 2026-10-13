@@ -29,11 +29,14 @@ export function isContentKey(key: string): boolean {
     )
   )
     return true;
-  // The Vercel transform copies attributes it does not translate under
-  // `metadata.<original key>`, so a content key comes through twice; the
-  // mirrored copy is content exactly when the original is. Found by the
-  // sentinel test: metadata.gen_ai.system_instructions carried the system
-  // prompt past captureContent: false.
+  // The SDK no longer runs @arizeai/openinference-vercel, but an app can run
+  // its span processor itself on a provider the SDK bridges onto
+  // (bridgeForeignProvider). That processor rewrites every span's attributes
+  // in place at onEnd and copies the ones it does not translate under
+  // `metadata.<original key>`, so a content key comes through twice. Masking
+  // runs at export, after it, and the mirrored copy is content exactly when
+  // the original is: otherwise metadata.gen_ai.system_instructions carries
+  // the system prompt past captureContent: false.
   return key.startsWith(METADATA_PREFIX) && isContentKey(key.slice(METADATA_PREFIX.length));
 }
 

@@ -48,6 +48,13 @@ describe("semconv", () => {
     });
   });
 
+  it("gives RERANKER the AI SDK's rerank operation", () => {
+    expect(kindAttributes(SpanKind.RERANKER)).toEqual({
+      "openinference.span.kind": "RERANKER",
+      "gen_ai.operation.name": "rerank",
+    });
+  });
+
   it("gives every kind but CHAIN an operation name", () => {
     for (const kind of Object.values(SpanKind)) {
       const operation = kindAttributes(kind)["gen_ai.operation.name"];
@@ -118,6 +125,7 @@ describe("otelSpanKind", () => {
     expect(otelSpanKind(SpanKind.LLM)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.EMBEDDING)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.RETRIEVER)).toBe(OtelSpanKind.CLIENT);
+    expect(otelSpanKind(SpanKind.RERANKER)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.TOOL)).toBe(OtelSpanKind.INTERNAL);
     expect(otelSpanKind(SpanKind.AGENT)).toBe(OtelSpanKind.INTERNAL);
     expect(otelSpanKind(SpanKind.CHAIN)).toBe(OtelSpanKind.INTERNAL);
@@ -232,6 +240,7 @@ describe("composeSpanName", () => {
       [SpanKind.TOOL, { "gen_ai.tool.name": "get_weather" }, "execute_tool get_weather"],
       [SpanKind.AGENT, { "gen_ai.agent.name": "planner" }, "invoke_agent planner"],
       [SpanKind.RETRIEVER, { "gen_ai.data_source.id": "docs-index" }, "retrieval docs-index"],
+      [SpanKind.RERANKER, { "gen_ai.request.model": "rerank-v3.5" }, "rerank rerank-v3.5"],
     ];
     for (const [kind, target, expected] of cases) {
       expect(composeSpanName(kind, { ...kindAttributes(kind), ...target })).toBe(expected);
@@ -245,6 +254,7 @@ describe("composeSpanName", () => {
       [SpanKind.TOOL, "execute_tool"],
       [SpanKind.AGENT, "invoke_agent"],
       [SpanKind.RETRIEVER, "retrieval"],
+      [SpanKind.RERANKER, "rerank"],
     ];
     for (const [kind, name] of expected) {
       expect(composeSpanName(kind, kindAttributes(kind))).toBe(name);

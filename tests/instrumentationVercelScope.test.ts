@@ -1,16 +1,11 @@
 import http from "node:http";
-// The vercel-ai processor runs @arizeai/openinference-vercel's attribute
-// transform. That transform translates the Vercel AI SDK's ai.* dialect, but it
-// also converts ANY gen_ai.* span it is handed, so run on every span it rewrote
-// native and third-party spans alike: flattened llm.input_messages.*, llm.system,
-// llm.token_count.total, input/output.mime_type, a duplicated input/output.value,
-// and a gen_ai.response.model invented from the request model even on errors.
-// It must touch only the spans it exists for.
-import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
+// The Vercel AI SDK's ai.* dialect on real AI SDK spans. The normalizer maps
+// it itself, the way the sink maps raw AI SDK traffic, so nothing translates
+// these spans beside it: no OpenInference copy of the same facts (flattened
+// llm.*, input/output.mime_type, a duplicated input/output.value) rides along.
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RiusClient, getTracer, init } from "../src/client.js";
-import { startGeneration } from "../src/generation.js";
-import { REGISTRY, isVercelDialectSpan } from "../src/instrumentation.js";
 
 let live: RiusClient | undefined;
 
@@ -26,122 +21,9 @@ afterEach(async () => {
   (globalThis as { AI_SDK_TELEMETRY_INTEGRATIONS?: unknown[] }).AI_SDK_TELEMETRY_INTEGRATIONS = [];
 });
 
-// @arizeai/openinference-vercel, ai v7 and @ai-sdk/otel declare engines node>=22.
+// ai v7 and @ai-sdk/otel declare engines node>=22.
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
-const describeWithVercelPackage = describe.skipIf(nodeMajor < 22);
-
-/** Everything about a span that reaches the wire, minus ids and clocks. */
-function wireShape(span: ReadableSpan): unknown {
-  return {
-    name: span.name,
-    kind: span.kind,
-    status: span.status,
-    attributes: span.attributes,
-    events: span.events.map((e) => ({ name: e.name, attributes: e.attributes })),
-    scope: span.instrumentationScope.name,
-  };
-}
-
-// One error for both runs, so its stack trace is identical and the comparison
-// below is of what the pipeline did, not of where the test threw.
-const FAILURE = new Error("boom");
-
-/** A successful and a failed native generation, exported through init(). */
-async function nativeGenerations(): Promise<unknown[]> {
-  const exporter = new InMemorySpanExporter();
-  const client = initTracked({ spanExporter: exporter, heartbeatTransport: async () => {} });
-  await client.ready;
-  const ok = startGeneration("chat gpt-4o", {
-    model: "gpt-4o",
-    provider: "openai",
-    input: [{ role: "user", content: "what is 2+2" }],
-    modelParameters: { temperature: 0.2 },
-  });
-  ok.setOutput({ role: "assistant", content: "4" });
-  ok.setUsage({ inputTokens: 5, outputTokens: 1 });
-  ok.setFinishReasons("stop");
-  ok.end();
-  const failed = startGeneration("chat gpt-4o", {
-    model: "gpt-4o",
-    provider: "openai",
-    input: [{ role: "user", content: "hi" }],
-  });
-  failed.recordException(FAILURE);
-  failed.end();
-  await client.flush();
-  const shapes = exporter.getFinishedSpans().map(wireShape);
-  await client.shutdown();
-  live = undefined;
-  return shapes;
-}
-
-describe("isVercelDialectSpan", () => {
-  const span = (attributes: Record<string, unknown>) => ({ attributes }) as unknown as ReadableSpan;
-
-  it("accepts every operation id the AI SDK assigns", () => {
-    for (const id of ["ai.generateText", "ai.streamText.doStream", "ai.toolCall", "ai.embedMany"]) {
-      expect(isVercelDialectSpan(span({ "ai.operationId": id }))).toBe(true);
-    }
-  });
-
-  it("rejects a span without one, or with an id outside the ai. namespace", () => {
-    expect(isVercelDialectSpan(span({}))).toBe(false);
-    expect(isVercelDialectSpan(span({ "operation.name": "ai.generateText" }))).toBe(false);
-    expect(isVercelDialectSpan(span({ "ai.operationId": "generateText" }))).toBe(false);
-    expect(isVercelDialectSpan(span({ "ai.operationId": 1 }))).toBe(false);
-  });
-});
-
-describeWithVercelPackage("the vercel-ai transform's scope", () => {
-  it("leaves a native generation byte-identical to a run without the Vercel package", async () => {
-    const withPackage = await nativeGenerations();
-
-    // The same pipeline with the Vercel package absent: the entry's own load
-    // resolves nothing, exactly as `optional()` does when it is not installed.
-    const index = REGISTRY.findIndex((e) => e.name === "vercel-ai");
-    const entry = REGISTRY[index];
-    if (entry === undefined) throw new Error("test setup: no vercel-ai entry");
-    REGISTRY.splice(index, 1, { ...entry, load: async () => undefined });
-    let withoutPackage: unknown[];
-    try {
-      withoutPackage = await nativeGenerations();
-    } finally {
-      REGISTRY.splice(index, 1, entry);
-    }
-
-    expect(withPackage).toHaveLength(2);
-    expect(JSON.stringify(withPackage)).toBe(JSON.stringify(withoutPackage));
-    // Spelled out, so a failure names the leak rather than a JSON diff.
-    const failed = withPackage[1] as { attributes: Record<string, unknown> };
-    expect(failed.attributes["gen_ai.response.model"]).toBeUndefined();
-    expect(Object.keys(failed.attributes).some((k) => k.startsWith("llm."))).toBe(false);
-  });
-
-  it("leaves a third-party gen_ai span with no ai.operationId untouched", async () => {
-    const exporter = new InMemorySpanExporter();
-    const client = initTracked({ spanExporter: exporter, heartbeatTransport: async () => {} });
-    expect(await client.ready).toContain("vercel-ai");
-    // `operation.name` alone is a display label any producer may set; the
-    // Vercel AI SDK's own fact is ai.operationId.
-    getTracer()
-      .startSpan("chat m", {
-        attributes: {
-          "operation.name": "ai.generateText.doGenerate",
-          "gen_ai.operation.name": "chat",
-          "gen_ai.request.model": "m",
-          "gen_ai.input.messages": JSON.stringify([
-            { role: "user", parts: [{ type: "text", content: "hi" }] },
-          ]),
-        },
-      })
-      .end();
-    await client.flush();
-    const attributes = exporter.getFinishedSpans()[0]?.attributes ?? {};
-    expect(Object.keys(attributes).filter((k) => k.startsWith("llm."))).toEqual([]);
-    expect(attributes["input.mime_type"]).toBeUndefined();
-    expect(attributes["gen_ai.response.model"]).toBeUndefined();
-  });
-});
+const describeV7 = describe.skipIf(nodeMajor < 22);
 
 /** An HTTP server answering every request with an OpenAI chat completion. */
 async function stubServer(): Promise<{ url: string; close: () => void }> {
@@ -169,23 +51,27 @@ async function stubServer(): Promise<{ url: string; close: () => void }> {
   return { url: `http://127.0.0.1:${address.port}/v1`, close: () => server.close() };
 }
 
+/**
+ * Replaces the registered integration with @ai-sdk/otel's LegacyOpenTelemetry:
+ * the ai.* dialect of AI SDK v5/v6, which @ai-sdk/otel still ships for v7.
+ */
+async function useLegacyIntegration(): Promise<void> {
+  const { registerTelemetry } = await import("ai");
+  const { LegacyOpenTelemetry } = await import("@ai-sdk/otel");
+  (globalThis as { AI_SDK_TELEMETRY_INTEGRATIONS?: unknown[] }).AI_SDK_TELEMETRY_INTEGRATIONS = [];
+  registerTelemetry(new LegacyOpenTelemetry({ tracer: getTracer() }));
+}
+
 /** Runs one real generateText with the given telemetry integration registered. */
 async function generateWith(
   integration: "legacy" | "genai",
 ): Promise<Array<Record<string, unknown>>> {
-  const { generateText, registerTelemetry } = await import("ai");
+  const { generateText } = await import("ai");
   const { createOpenAI } = await import("@ai-sdk/openai");
-  const otel = await import("@ai-sdk/otel");
   const exporter = new InMemorySpanExporter();
   const client = initTracked({ spanExporter: exporter, heartbeatTransport: async () => {} });
   expect(await client.ready).toContain("vercel-ai");
-  if (integration === "legacy") {
-    // The ai.* dialect of AI SDK v5/v6, which @ai-sdk/otel still ships for v7
-    // as LegacyOpenTelemetry: the real spans the transform exists for.
-    (globalThis as { AI_SDK_TELEMETRY_INTEGRATIONS?: unknown[] }).AI_SDK_TELEMETRY_INTEGRATIONS =
-      [];
-    registerTelemetry(new otel.LegacyOpenTelemetry({ tracer: getTracer() }));
-  }
+  if (integration === "legacy") await useLegacyIntegration();
   const stub = await stubServer();
   try {
     const openai = createOpenAI({ apiKey: "not-a-real-key", baseURL: stub.url });
@@ -197,8 +83,8 @@ async function generateWith(
   return exporter.getFinishedSpans().map((s) => s.attributes as Record<string, unknown>);
 }
 
-describeWithVercelPackage("the vercel-ai transform on real AI SDK spans", () => {
-  it("maps the ai.* dialect natively, with no OpenInference copy beside it", async () => {
+describeV7("the ai.* dialect on real AI SDK spans", () => {
+  it("maps a model call natively, with no OpenInference copy beside it", async () => {
     const spans = await generateWith("legacy");
     const llm = spans.find((a) => a["ai.operationId"] === "ai.generateText.doGenerate");
     expect(llm).toBeDefined();
@@ -208,26 +94,38 @@ describeWithVercelPackage("the vercel-ai transform on real AI SDK spans", () => 
     expect(JSON.parse(llm?.["gen_ai.output.messages"] as string)).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "4" }], finish_reason: "stop" },
     ]);
-    // The normalizer mapped the span, so the transform left it alone.
     expect(Object.keys(llm ?? {}).filter((k) => k.startsWith("llm."))).toEqual([]);
     expect(llm?.["output.value"]).toBeUndefined();
     expect(llm?.["input.mime_type"]).toBeUndefined();
   });
 
-  it("still translates an operation the normalizer does not map", async () => {
+  it("maps a rerank natively", async () => {
+    const { rerank } = await import("ai");
+    const { MockRerankingModelV4 } = await import("ai/test");
     const exporter = new InMemorySpanExporter();
     const client = initTracked({ spanExporter: exporter, heartbeatTransport: async () => {} });
-    expect(await client.ready).toContain("vercel-ai");
-    getTracer()
-      .startSpan("ai.rerank", {
-        attributes: { "ai.operationId": "ai.rerank", "ai.settings.maxRetries": 2 },
-      })
-      .end();
+    await client.ready;
+    await useLegacyIntegration();
+    await rerank({
+      model: new MockRerankingModelV4({
+        provider: "cohere.reranking",
+        modelId: "rerank-v3.5",
+        doRerank: async () => ({ ranking: [{ index: 1, relevanceScore: 0.9 }] }),
+      }),
+      query: "capital of France",
+      documents: ["Berlin", "Paris"],
+    });
     await client.flush();
-    const attributes = exporter.getFinishedSpans()[0]?.attributes ?? {};
-    expect(attributes["ai.operationId"]).toBe("ai.rerank");
-    // The transform's reading of the AI SDK's settings, which only it makes.
-    expect(attributes["llm.invocation_parameters"]).toBe('{"maxRetries":2}');
+    const spans = exporter.getFinishedSpans().map((s) => s.attributes);
+    const ids = spans.map((a) => a["ai.operationId"]);
+    expect(ids).toContain("ai.rerank");
+    for (const attributes of spans) {
+      expect(attributes["gen_ai.operation.name"]).toBe("rerank");
+      expect(attributes["openinference.span.kind"]).toBe("RERANKER");
+      expect(attributes["gen_ai.provider.name"]).toBe("cohere");
+      expect(attributes["gen_ai.request.model"]).toBe("rerank-v3.5");
+      expect(Object.keys(attributes).filter((k) => k.startsWith("llm."))).toEqual([]);
+    }
   });
 
   it("skips the GenAI-native spans of @ai-sdk/otel's OpenTelemetry integration", async () => {

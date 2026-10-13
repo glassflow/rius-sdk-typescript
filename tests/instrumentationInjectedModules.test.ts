@@ -32,10 +32,6 @@ afterEach(async () => {
   await client?.shutdown().catch(() => {});
 });
 
-function makeSink() {
-  return { add: vi.fn(), addFirst: vi.fn() };
-}
-
 function recordingProvider() {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({
@@ -139,7 +135,7 @@ describe("instrumentModules through enableInstrumentations", () => {
     const { patched, FakeAnthropic, modules } = anthropicDoubles();
     const { provider } = recordingProvider();
     await withTeardown(async (teardown) => {
-      const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"], teardown, {
+      const enabled = await enableInstrumentations(provider, ["anthropic"], teardown, {
         instrumentModules: { anthropic: modules },
       });
       expect(enabled).toEqual(["anthropic"]);
@@ -152,7 +148,7 @@ describe("instrumentModules through enableInstrumentations", () => {
     const { patched, FakeOpenAI, modules } = openaiDoubles();
     const { provider } = recordingProvider();
     await withTeardown(async (teardown) => {
-      const enabled = await enableInstrumentations(makeSink(), provider, ["openai"], teardown, {
+      const enabled = await enableInstrumentations(provider, ["openai"], teardown, {
         instrumentModules: { openai: modules },
       });
       expect(enabled).toEqual(["openai"]);
@@ -167,15 +163,9 @@ describe("instrumentModules through enableInstrumentations", () => {
     const warn = spyOnWarn();
     try {
       await withTeardown(async (teardown) => {
-        const enabled = await enableInstrumentations(
-          makeSink(),
-          provider,
-          ["anthropic"],
-          teardown,
-          {
-            instrumentModules: { anthropic: { ...modules, sdk: {} } },
-          },
-        );
+        const enabled = await enableInstrumentations(provider, ["anthropic"], teardown, {
+          instrumentModules: { anthropic: { ...modules, sdk: {} } },
+        });
         expect(enabled).toEqual([]);
       });
       expect(patched).toHaveLength(0);
@@ -192,15 +182,9 @@ describe("instrumentModules through enableInstrumentations", () => {
     const warn = spyOnWarn();
     try {
       await withTeardown(async (teardown) => {
-        const enabled = await enableInstrumentations(
-          makeSink(),
-          provider,
-          ["anthropic"],
-          teardown,
-          {
-            instrumentModules: { anthropic: { ...modules, instrumentation: {} } },
-          },
-        );
+        const enabled = await enableInstrumentations(provider, ["anthropic"], teardown, {
+          instrumentModules: { anthropic: { ...modules, instrumentation: {} } },
+        });
         expect(enabled).toEqual([]);
       });
       expect(warn).toHaveBeenCalledTimes(1);
@@ -229,7 +213,7 @@ describe("real modules through instrumentModules", () => {
   it("turns a real client call into an LLM span", async () => {
     const { exporter, provider } = recordingProvider();
     await withTeardown(async (teardown) => {
-      const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"], teardown, {
+      const enabled = await enableInstrumentations(provider, ["anthropic"], teardown, {
         instrumentModules: {
           anthropic: { instrumentation: anthropicInstrumentation, sdk: anthropicSdk },
         },

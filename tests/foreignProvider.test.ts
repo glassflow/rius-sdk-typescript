@@ -663,6 +663,41 @@ describe("content capture on bridged spans", () => {
     expect(spans.bridged).toEqual(spans.own);
     expect(spans.own["langfuse.observation.input"]).toBe("masked:langfuse.observation.input");
   });
+
+  it("strips the metadata.* copies an app-run OpenInference Vercel processor makes", async () => {
+    // A stand-in for @arizeai/openinference-vercel's OpenInferenceSimpleSpanProcessor,
+    // which the app installs on its own provider: at onEnd it rewrites the
+    // span's attribute bag in place, mirroring each attribute it does not
+    // translate under `metadata.<key>`.
+    const mirrorUntranslated: SpanProcessor = {
+      onStart() {},
+      onEnd(span) {
+        const attributes = span.attributes as Record<string, unknown>;
+        for (const [key, value] of Object.entries(attributes)) {
+          if (key.startsWith("gen_ai.")) attributes[`metadata.${key}`] = value;
+        }
+      },
+      async forceFlush() {},
+      async shutdown() {},
+    };
+    foreign = new ForeignProvider({
+      spanProcessors: [mirrorUntranslated, new SimpleSpanProcessor(new InMemorySpanExporter())],
+    });
+    foreign.register();
+    const riusExporter = initBridged({ captureContent: false });
+
+    const span = other().getTracer("ai").startSpan("chat gpt-4o");
+    span.setAttribute("gen_ai.operation.name", "chat");
+    span.setAttribute("gen_ai.system_instructions", "SECRET SYSTEM");
+    span.end();
+    await rius().flush();
+
+    const attributes = attributesByName(riusExporter)["chat gpt-4o"];
+    expect(attributes["gen_ai.system_instructions"]).toBeUndefined();
+    expect(attributes["metadata.gen_ai.system_instructions"]).toBeUndefined();
+    // The mirror of a non-content key is kept, so the processor really ran.
+    expect(attributes["metadata.gen_ai.operation.name"]).toBe("chat");
+  });
 });
 
 // --- Rius never writes to a span it did not create ------------------------------

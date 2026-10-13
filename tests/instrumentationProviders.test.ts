@@ -22,10 +22,6 @@ import { reassembleOpenInferenceMessages } from "../src/normalize.js";
 
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
 
-function makeSink() {
-  return { add: vi.fn(), addFirst: vi.fn() };
-}
-
 /** Records spans through a provider of our own, as init() would. */
 function recordingProvider() {
   const exporter = new InMemorySpanExporter();
@@ -82,7 +78,7 @@ describe("the anthropic entry", () => {
     ) as AnthropicModule;
 
     const { exporter, provider } = recordingProvider();
-    const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"]);
+    const enabled = await enableInstrumentations(provider, ["anthropic"]);
     expect(enabled).toContain("anthropic");
 
     // A local stub rather than api.anthropic.com: the assertion is about the
@@ -157,7 +153,7 @@ describe("the langchain entry", () => {
     "is reported as enabled and turns a real chain invocation into a CHAIN span",
     async () => {
       const { exporter, provider } = recordingProvider();
-      const enabled = await enableInstrumentations(makeSink(), provider, ["langchain"]);
+      const enabled = await enableInstrumentations(provider, ["langchain"]);
       expect(enabled).toContain("langchain");
 
       // A plain lambda rather than a model: it goes through the same callback

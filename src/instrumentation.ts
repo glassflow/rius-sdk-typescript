@@ -3,11 +3,9 @@ import { createRequire } from "node:module";
 import { join, sep } from "node:path";
 import type { TracerProvider } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
-import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { aggregatingTracer } from "./aggregatedUsage.js";
 import { installEmbeddingsUsage } from "./embeddingsUsage.js";
 import type { McpClientLike } from "./instrumentationMcp.js";
-import { isNativeVercelSpan } from "./normalize.js";
 import { TRACER_NAME } from "./semconv.js";
 import { SDK_VERSION } from "./version.js";
 
@@ -15,22 +13,16 @@ import { SDK_VERSION } from "./version.js";
  * `"self-applying"` is for an entry whose `load()` has already taken full
  * effect by the time it resolves (e.g. by monkey-patching a prototype)
  * rather than returning something for `enableInstrumentations` to attach.
- * There is nothing to hand to `registerInstrumentations` or a processor
- * sink, so it is a distinct kind rather than a marker on the loaded value:
+ * There is nothing to hand to `registerInstrumentations`, so it is a
+ * distinct kind rather than a marker on the loaded value:
  * dispatch stays a single switch on `kind`, and the loaded value's shape
  * does not have to double as a signal.
  */
-export type EntryKind = "instrumentation" | "processor" | "self-applying";
+export type EntryKind = "instrumentation" | "self-applying";
 
 export interface RegistryEntry {
   name: string;
   kind: EntryKind;
-  /**
-   * Where a `processor` entry goes in the sink. `"first"` for a processor that
-   * must see a span before the exporting processor queues it. Ignored by
-   * `instrumentation` and `self-applying` entries. Defaults to `"last"`.
-   */
-  insert?: "first" | "last";
   /**
    * The package whose listing in the app's `package.json` means the user wants
    * this integration. When `load()` resolves undefined and this package is
@@ -129,21 +121,10 @@ export function readDeclaredDependencies(dir: string): ReadonlySet<string> {
   return names;
 }
 
-/**
- * Anything that accepts a span processor after the fact. The provider itself is
- * not usable here: OpenTelemetry JS 2.x accepts `spanProcessors` at provider
- * construction only and has no `addSpanProcessor`, so `init()` passes its
- * delegating processor instead.
- */
-export interface ProcessorSink {
-  add(processor: SpanProcessor): void;
-  addFirst(processor: SpanProcessor): void;
-}
-
 // esbuild rewrites a bare `import()` into `require()` in the CJS build, and
-// @arizeai/openinference-vercel is ESM-only (type: module, no require
-// condition), so a rewritten call throws ERR_PACKAGE_PATH_NOT_EXPORTED and the
-// integration would silently vanish for every CommonJS consumer. Building the
+// `ai` v7 and @ai-sdk/otel are ESM-only (type: module, no require condition),
+// so a rewritten call throws ERR_PACKAGE_PATH_NOT_EXPORTED and the integration
+// would silently vanish for every CommonJS consumer. Building the
 // function at runtime keeps a real dynamic import in both output formats.
 //
 // Do not "simplify" this to a literal import(): it is the only thing keeping the
@@ -462,9 +443,9 @@ function injectedFor(
  * Bundled integrations. Packages are imported lazily so none is a hard
  * dependency; install them as optional peers and init() enables what it finds.
  *
- * Two kinds on purpose: the Vercel AI SDK support is contributed as a SPAN
- * PROCESSOR, while the OpenAI, Anthropic and LangChain support are conventional
- * instrumentations.
+ * The OpenAI, Anthropic and LangChain support are conventional
+ * instrumentations; the Vercel AI SDK and MCP support apply themselves (a
+ * telemetry registration, a prototype patch).
  */
 // The Vercel AI SDK v7 removed the per-call `experimental_telemetry.tracer`
 // hook: spans exist only if something calls its `registerTelemetry()` with an
@@ -530,92 +511,18 @@ async function registerVercelTelemetry(
   return true;
 }
 
-/**
- * The Vercel AI SDK's own operation id. A SOURCE spelling of a dialect this SDK
- * never emits, so it stays here rather than in semconv.ts, the set of keys we
- * write — the same reason normalize.ts spells its dialect sources inline.
- */
-const VERCEL_OPERATION_ID = "ai.operationId";
-
-/**
- * Whether a span speaks the Vercel AI SDK's `ai.*` dialect, the one
- * @arizeai/openinference-vercel's transform exists to translate.
- *
- * The transform is not scoped by itself: it also converts ANY `gen_ai.*` span,
- * so run on every span it rewrote native and third-party spans alike —
- * flattened `llm.input_messages.*`, `llm.system`, `llm.token_count.total`,
- * `input/output.mime_type`, the messages duplicated into
- * `input.value`/`output.value`. So it runs only on a span carrying a string
- * `ai.operationId` that starts with `ai.`.
- *
- * That attribute, not the instrumentation scope, because the scope proves
- * nothing either way. AI SDK v5/v6 default to a tracer named `ai` but take
- * whatever tracer the caller passes in `experimental_telemetry.tracer`, and
- * the v7 integration registered above is bound to OUR tracer. Every v5/v6 span
- * sets `ai.operationId` (their `assembleOperationName`, on all of
- * `ai.generateText`, `.doGenerate`, `ai.streamText`, `ai.toolCall`, `ai.embed`,
- * `ai.rerank` and the rest), as does @ai-sdk/otel's `LegacyOpenTelemetry`, the
- * v7 integration that still emits that dialect. `operation.name` is not used:
- * it is a display label any producer may set. @ai-sdk/otel's `OpenTelemetry`
- * integration, the one this SDK registers for v7, never sets
- * `ai.operationId`: its spans are GenAI-native, the normalizer already derives
- * their taxonomy from `gen_ai.operation.name`, and the transform would only
- * duplicate them.
- */
-export function isVercelDialectSpan(span: ReadableSpan): boolean {
-  const operationId = span.attributes[VERCEL_OPERATION_ID];
-  return typeof operationId === "string" && operationId.startsWith("ai.");
-}
-
 export const REGISTRY: RegistryEntry[] = [
   {
     name: "vercel-ai",
-    kind: "processor",
-    // The transform can ADD content attributes such as input.value. Masking
-    // runs in the exporter chain, which executes after a span is queued, so the
-    // transform has to run before the exporting processor sees the span or the
-    // attributes it added would never be sanitised.
-    insert: "first",
+    // Self-applying: on ai v7 the registration IS the integration (see
+    // registerVercelTelemetry above). v5/v6 apps need nothing here: their
+    // spans come from per-call `experimental_telemetry`, and the normalizer
+    // maps their ai.* dialect itself, the way the sink does, so this entry
+    // reports them as nothing to enable.
+    kind: "self-applying",
     async load(tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
-      // ai v7: span creation itself must be registered (see
-      // registerVercelTelemetry above). Done before the transform lookup, so a
-      // v7 app without @arizeai/openinference-vercel is still traced — its
-      // spans are GenAI-native and need no translation.
-      const registered =
-        tracerProvider === undefined
-          ? false
-          : await registerVercelTelemetry(tracerProvider, teardown);
-
-      // Deliberately NOT the package's own OpenInferenceBatchSpanProcessor /
-      // OpenInferenceSimpleSpanProcessor: both require an exporter and export
-      // through it, so adding one alongside our exporting processor would send
-      // every span twice, once raw and once transformed. Only the attribute
-      // transform is wanted, wrapped in a processor of ours that never exports.
-      //
-      // And only for the operations the normalizer does not map itself (see
-      // VERCEL_OPERATIONS in normalize.ts): generate, stream, embed and tool
-      // spans are mapped there straight onto the conventions, the way the
-      // sink maps them, and the transform's OpenInference copy of the same
-      // facts would only ride beside them.
-      const utils = await optional("@arizeai/openinference-vercel/utils");
-      const add = utils?.addOpenInferenceAttributesToSpan as
-        | ((span: ReadableSpan) => void)
-        | undefined;
-      if (add === undefined && !registered) return undefined;
-      return {
-        onStart() {},
-        onEnd(span: ReadableSpan) {
-          if (
-            add !== undefined &&
-            isVercelDialectSpan(span) &&
-            !isNativeVercelSpan(span.attributes)
-          ) {
-            add(span);
-          }
-        },
-        async forceFlush() {},
-        async shutdown() {},
-      } satisfies SpanProcessor;
+      if (tracerProvider === undefined) return undefined;
+      return (await registerVercelTelemetry(tracerProvider, teardown)) ? true : undefined;
     },
   },
   {
@@ -769,13 +676,12 @@ export const REGISTRY: RegistryEntry[] = [
 ];
 
 /**
- * Enable every registry entry whose package is present. Processors go to
- * `sink`; instrumentations are registered against `tracerProvider`. Returns the
- * names enabled. Never throws: a broken optional integration must not break
- * init().
+ * Enable every registry entry whose package is present. Instrumentations are
+ * registered against `tracerProvider`; self-applying entries take effect in
+ * their own `load()`. Returns the names enabled. Never throws: a broken
+ * optional integration must not break init().
  */
 export async function enableInstrumentations(
-  sink: ProcessorSink,
   tracerProvider: TracerProvider,
   names?: string[],
   teardown?: Array<() => void>,
@@ -800,10 +706,7 @@ export async function enableInstrumentations(
         continue;
       }
 
-      if (entry.kind === "processor") {
-        if (entry.insert === "first") sink.addFirst(loaded as SpanProcessor);
-        else sink.add(loaded as SpanProcessor);
-      } else if (entry.kind === "instrumentation") {
+      if (entry.kind === "instrumentation") {
         // The disable function is what makes a later init() work: the
         // OpenInference instrumentations guard against double patching, so
         // unless shutdown() disables this one, its patches stay bound to the

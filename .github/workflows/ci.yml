@@ -359,28 +359,28 @@ jobs:
           await run(init, InMemorySpanExporter, { Client, McpServer, InMemoryTransport });
           EOF
           node mcp-check.mjs
-      - name: vercel-ai turns a mock generateText into OpenInference spans (CJS consumer)
+      - name: vercel-ai registers @ai-sdk/otel for an ai v7 app (CJS consumer)
         env:
           NODE_MAJOR: ${{ matrix.node-version }}
         run: |
-          # @arizeai/openinference-vercel declares engines.node >=22; only
-          # install and assert it on legs at or above that. Numeric comparison
-          # (-lt), not string comparison: "8" >= "22" lexicographically but
-          # 8 < 22 numerically, and every value here is a plain integer string.
+          # ai v7 and @ai-sdk/otel declare engines.node >=22; only install and
+          # assert them on legs at or above that. Numeric comparison (-lt), not
+          # string comparison: "8" >= "22" lexicographically but 8 < 22
+          # numerically, and every value here is a plain integer string.
           #
           # The functional shape on ai v7: the OTel spans come from the
           # @ai-sdk/otel telemetry integration (ai itself no longer depends on
-          # @opentelemetry/api), and our processor entry transforms them with
-          # OpenInference attributes. Asserting on openinference.span.kind
-          # proves the PROCESSOR ran; "reports enabled" alone proves nothing.
-          # The ai package is ESM-only, so the CJS consumer reaches it through
-          # dynamic import, the way a real CJS app would.
+          # @opentelemetry/api), which the vercel-ai entry registers at init().
+          # The call passes no telemetry options, so a span at all proves the
+          # registration ran; "reports enabled" alone proves nothing. Both
+          # packages are ESM-only, so the SDK reaches them through its runtime
+          # dynamic import, which must survive the CJS build.
           if [ "$NODE_MAJOR" -lt 22 ]; then
             echo "skipping vercel-ai assertion on Node $NODE_MAJOR (requires >=22)"
             exit 0
           fi
           cd /tmp/consumer
-          npm i @arizeai/openinference-vercel ai @ai-sdk/otel >/dev/null
+          npm i ai @ai-sdk/otel >/dev/null
           cat > vercel-check.cjs <<'EOF'
           const { init } = require("@glassflow-ai/rius");
           const { InMemorySpanExporter } = require("@opentelemetry/sdk-trace-base");
@@ -394,7 +394,6 @@ jobs:
             }
             const { generateText } = await import("ai");
             const { MockLanguageModelV3 } = await import("ai/test");
-            const { OpenTelemetry } = await import("@ai-sdk/otel");
             const mock = new MockLanguageModelV3({
               doGenerate: async () => ({
                 content: [{ type: "text", text: "4" }],
@@ -403,17 +402,13 @@ jobs:
                 warnings: [],
               }),
             });
-            await generateText({
-              model: mock,
-              prompt: "2+2",
-              experimental_telemetry: { isEnabled: true, integrations: [new OpenTelemetry()] },
-            });
+            await generateText({ model: mock, prompt: "2+2" });
             await client.flush();
             const spans = exporter.getFinishedSpans();
             const kinds = spans.map((s) => s.attributes["openinference.span.kind"]);
             if (!kinds.includes("LLM")) {
               throw new Error(
-                "no OpenInference LLM span; the processor did not transform: " +
+                "no LLM span; @ai-sdk/otel was not registered: " +
                 JSON.stringify(spans.map((s) => [s.name, s.attributes["openinference.span.kind"]])),
               );
             }

@@ -687,10 +687,24 @@ describe("taxonomy", () => {
   });
 
   it("keeps an unrecognised kind and derives nothing from it", () => {
-    // RERANKER is real: the TypeScript OpenInference taxonomy has RERANKER,
-    // GUARDRAIL, EVALUATOR and PROMPT, none of which this SDK models. A kind
-    // we do not know is not a reason to lose the span.
+    // GUARDRAIL is real: the TypeScript OpenInference taxonomy has GUARDRAIL,
+    // EVALUATOR and PROMPT, none of which this SDK models. A kind we do not
+    // know is not a reason to lose the span.
+    expect(normalized({ "openinference.span.kind": "GUARDRAIL" })).toEqual({
+      "openinference.span.kind": "GUARDRAIL",
+    });
+  });
+
+  it("derives the rerank operation from an OpenInference RERANKER span", () => {
     expect(normalized({ "openinference.span.kind": "RERANKER" })).toEqual({
+      "openinference.span.kind": "RERANKER",
+      "gen_ai.operation.name": "rerank",
+    });
+  });
+
+  it("derives RERANKER from the AI SDK's rerank operation", () => {
+    expect(normalized({ "gen_ai.operation.name": "rerank" })).toEqual({
+      "gen_ai.operation.name": "rerank",
       "openinference.span.kind": "RERANKER",
     });
   });

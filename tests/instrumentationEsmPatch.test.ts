@@ -15,10 +15,6 @@ import { enableInstrumentations } from "../src/instrumentation.js";
 // per file is all we get, and the CJS-first scenario owns
 // instrumentationProviders.test.ts.
 
-function makeSink() {
-  return { add: vi.fn(), addFirst: vi.fn() };
-}
-
 function recordingProvider() {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({
@@ -60,7 +56,7 @@ const OPENAI_REPLY = {
 describe("the openai entry in a pure-ESM consumer", () => {
   it("patches the ESM build and turns a real client call into an LLM span", async () => {
     const { exporter, provider } = recordingProvider();
-    const enabled = await enableInstrumentations(makeSink(), provider, ["openai"]);
+    const enabled = await enableInstrumentations(provider, ["openai"]);
     expect(enabled).toContain("openai");
 
     // Imported the way a pure-ESM app does, and never require()d anywhere in
@@ -110,7 +106,7 @@ describe("the openai entry in a pure-ESM consumer", () => {
 describe("the anthropic entry in a pure-ESM consumer", () => {
   it("patches the ESM build, and a later CJS require is patched too", async () => {
     const { provider } = recordingProvider();
-    const enabled = await enableInstrumentations(makeSink(), provider, ["anthropic"]);
+    const enabled = await enableInstrumentations(provider, ["anthropic"]);
     expect(enabled).toContain("anthropic");
 
     const { isWrapped } = await import("@opentelemetry/instrumentation");

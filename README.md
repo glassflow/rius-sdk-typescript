@@ -163,6 +163,7 @@ valid:
 | TOOL | `execute_tool get_weather` | `execute_tool` |
 | AGENT | `invoke_agent planner` | `invoke_agent` |
 | RETRIEVER | `retrieval docs-index` | `retrieval` |
+| RERANKER | `rerank rerank-v3.5` (`{operation} {gen_ai.request.model}`) | `rerank` |
 | CHAIN | the function name for `observe`, else `chain` | — |
 
 ```ts
@@ -180,7 +181,7 @@ same name as the span that replaces it. CHAIN has no operation to compose
 from, so an unnamed CHAIN span is called `chain`.
 
 `kind` sets the span's taxonomy (`openinference.span.kind`, our `SpanKind`
-enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, AGENT, LLM). A TOOL
+enum: CHAIN by default, or TOOL, RETRIEVER, EMBEDDING, RERANKER, AGENT, LLM). A TOOL
 span also carries `gen_ai.tool.name`, set to the span name unless you pass
 `toolName` (and unset if you pass neither), which both the span helpers and `observe` accept for the case
 where the span name is not the bare tool name. It also takes `toolCallId`
@@ -194,7 +195,7 @@ A RETRIEVER span carries
 collection it searched, and `gen_ai.retrieval.top_k` when you pass `topK`.
 Each kind also
 decides the OpenTelemetry `SpanKind` field the conventions expect: LLM,
-EMBEDDING and RETRIEVER spans are CLIENT, everything else INTERNAL. Pass
+EMBEDDING, RETRIEVER and RERANKER spans are CLIENT, everything else INTERNAL. Pass
 `otelKind` to override it, for example CLIENT for a call to a hosted agent.
 Note the name collision: `SpanKind` exported by this package is the taxonomy
 enum; the value for `otelKind` is `SpanKind` from `@opentelemetry/api`, so
@@ -280,12 +281,12 @@ names it after that operation instead (`embeddings text-embedding-3-small`).
 
 ## Auto-instrumentation
 
-The SDK bundles five integrations. Each one is an optional peer
+The SDK bundles five integrations. Each one attaches to an optional peer
 dependency: install the packages you need and `init()` enables whatever
 it finds, so a plain `npm install @glassflow-ai/rius` patches nothing.
 
 ```bash
-npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference-instrumentation-anthropic @arizeai/openinference-instrumentation-langchain @arizeai/openinference-vercel @modelcontextprotocol/sdk
+npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference-instrumentation-anthropic @arizeai/openinference-instrumentation-langchain @modelcontextprotocol/sdk
 ```
 
 Install only the ones you use:
@@ -293,7 +294,7 @@ Install only the ones you use:
 - **`openai`** wraps the OpenAI SDK, via `@arizeai/openinference-instrumentation-openai`, turning provider calls into spans.
 - **`anthropic`** wraps the Anthropic SDK, via `@arizeai/openinference-instrumentation-anthropic`, turning Messages calls into LLM spans with model, messages and token counts.
 - **`langchain`** traces LangChain.js chains, models, tools and retrievers, via `@arizeai/openinference-instrumentation-langchain`. It patches the callback manager in `@langchain/core`, which every LangChain.js application already has, and the SDK resolves that module for you so nothing has to be passed in at `init()`.
-- **`vercel-ai`** attaches to spans the Vercel AI SDK's own OpenTelemetry integration produces, via `@arizeai/openinference-vercel`, adding OpenInference attributes to them. It touches only spans in the AI SDK's `ai.*` dialect (v5/v6, recognised by their `ai.operationId`) that the SDK does not map itself: generate, stream, embed and tool-call spans are mapped onto the GenAI conventions by the normalizer, with or without this package, on any Node version, so the package only translates the rest (rerank, image and speech calls). Your own spans, other instrumentations' spans and the GenAI-native spans of AI SDK v7's `@ai-sdk/otel` integration are exported exactly as they would be without it. This package requires Node 22 or newer.
+- **`vercel-ai`** traces the Vercel AI SDK. On AI SDK v7 it registers `@ai-sdk/otel`'s OpenTelemetry integration with the SDK's tracer, so calls are traced with no telemetry code; install `@ai-sdk/otel` beside `ai` (both require Node 22 or newer). AI SDK v5 and v6 trace the calls you pass `experimental_telemetry: { isEnabled: true }`, and the SDK maps their `ai.*` spans (generate, stream, object, embed, rerank and tool calls) onto the GenAI conventions itself, on any Node version, with nothing else to install. v5 and v6 do not trace image, speech or transcription calls.
 - **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span named `execute_tool <tool>`, carrying the tool name, arguments, result, latency, and error status. The span follows the OpenTelemetry MCP conventions: OTel `SpanKind` CLIENT, `mcp.method.name` set to `tools/call`, `mcp.protocol.version` set to the negotiated version when the transport exposes it (Streamable HTTP does; stdio and SSE do not), and `error.type` set to `tool_error` when the server returns an `isError` result.
 
 There is no option to select integrations: `init()` always attempts every
@@ -453,8 +454,9 @@ without touching the first.
 completions, tool arguments) is attached to spans. It defaults to
 `true`. Set it to `false`, or supply a `mask` function, if your spans
 must not carry raw content. Both apply to span attributes and to the
-attributes of span events and links, including the `metadata.*` copies the
-Vercel AI SDK transform makes of attributes it does not translate: a
+attributes of span events and links, including the `metadata.*` copies
+`@arizeai/openinference-vercel`'s span processor makes of attributes it does
+not translate, if your app runs it on a provider Rius bridges onto: a
 `metadata.<key>` is content exactly when `<key>` is. With `captureContent: false` the
 message and stacktrace of a recorded exception are stripped as well,
 since provider errors routinely echo the request back; the exception
