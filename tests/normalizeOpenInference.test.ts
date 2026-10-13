@@ -669,7 +669,7 @@ describe("taxonomy", () => {
     });
   });
 
-  it.each(["invoke_workflow", "plan"])(
+  it.each(["invoke_workflow", "plan", "agent_step"])(
     "places %s on CHAIN, which only the reverse direction can do",
     (operation) => {
       expect(normalized({ "gen_ai.operation.name": operation })["openinference.span.kind"]).toBe(

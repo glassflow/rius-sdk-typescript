@@ -117,6 +117,51 @@ describeV7("the vercel-ai entry on ai v7", () => {
     expect(agent).toBeDefined();
   });
 
+  it("records a model call's reasoning split, and a run's beside its other totals", async () => {
+    const { generateText } = await import("ai");
+    const { createOpenAI } = await import("@ai-sdk/openai");
+
+    const inner = new InMemorySpanExporter();
+    const client = initTracked({ spanExporter: inner, heartbeatTransport: async () => {} });
+    await client.ready;
+    const stub = await stubServer({
+      ...OPENAI_REPLY,
+      usage: {
+        prompt_tokens: 5,
+        completion_tokens: 4,
+        total_tokens: 9,
+        completion_tokens_details: { reasoning_tokens: 3 },
+      },
+    });
+    try {
+      const openai = createOpenAI({ apiKey: "not-a-real-key", baseURL: stub.url });
+      await generateText({ model: openai.chat("gpt-test"), prompt: "what is 2+2" });
+      await client.flush();
+    } finally {
+      stub.close();
+    }
+
+    const spans = inner.getFinishedSpans();
+    await client.shutdown();
+    const byOperation = (operation: string) =>
+      spans
+        .map((s) => s.attributes as Record<string, unknown>)
+        .find((a) => a["gen_ai.operation.name"] === operation);
+
+    // @ai-sdk/otel writes this count only under ai.usage.* and only with its
+    // `usage` option: without both, a reasoning model's split never arrives.
+    const llm = byOperation("chat");
+    expect(llm?.["gen_ai.usage.reasoning.output_tokens"]).toBe(3);
+    expect(llm?.["ai.usage.outputTokenDetails.reasoningTokens"]).toBeUndefined();
+    // The run and its step repeat the call's count, so neither is counted again.
+    const agent = byOperation("invoke_agent");
+    expect(agent?.["rius.aggregated_usage.reasoning.output_tokens"]).toBe(3);
+    expect(agent?.["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
+    const step = byOperation("agent_step");
+    expect(step?.["rius.aggregated_usage.reasoning.output_tokens"]).toBe(3);
+    expect(step?.["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
+  });
+
   it("re-init replaces the registration instead of stacking a duplicate", async () => {
     const first = initTracked({
       spanExporter: new InMemorySpanExporter(),
