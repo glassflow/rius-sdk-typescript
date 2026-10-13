@@ -18,6 +18,9 @@ import { installLangchainSpanContext } from "../src/langchainSpanContext.js";
 const { ChatOpenAI } = await import("@langchain/openai");
 const { HumanMessage } = await import("@langchain/core/messages");
 const { BaseCallbackHandler } = await import("@langchain/core/callbacks/base");
+const { awaitAllCallbacks } = await import("@langchain/core/callbacks/promises");
+const { BaseChatModel } = await import("@langchain/core/language_models/chat_models");
+const { AIMessage } = await import("@langchain/core/messages");
 const { ChatPromptTemplate } = await import("@langchain/core/prompts");
 // The ESM namespace @langchain/openai imports, handed to init() so the openai
 // instrumentation patches the same module the model calls through.
@@ -25,6 +28,27 @@ const openaiSdk = await import("openai");
 const openaiInstrumentation = await import("@arizeai/openinference-instrumentation-openai");
 
 const USAGE = { prompt_tokens: 42, completion_tokens: 9, total_tokens: 51 };
+
+/**
+ * A chat model that calls no provider client and reports usage itself, so its
+ * LangChain span is the only record of the call. Notes the span active while
+ * it runs.
+ */
+class UsageOnlyModel extends BaseChatModel {
+  activeDuringCall: unknown[] = [];
+
+  _llmType(): string {
+    return "usage-only";
+  }
+
+  async _generate(..._args: unknown[]) {
+    this.activeDuringCall.push(trace.getActiveSpan());
+    return {
+      generations: [{ text: "Paris.", message: new AIMessage("Paris.") }],
+      llmOutput: { tokenUsage: { promptTokens: 42, completionTokens: 9, totalTokens: 51 } },
+    };
+  }
+}
 
 function completion(): unknown {
   return {
@@ -226,6 +250,70 @@ describeLangChain("LangChain with the openai instrumentation", () => {
       });
       expect(result.content).toBe("Paris.");
       await finished();
+    });
+
+    it("a model call made inside a running callback does not wait forever", async () => {
+      // An evaluator or guardrail handler that calls a model from handleLLMEnd
+      // runs on LangChain's one-at-a-time callback queue. The inner call's
+      // start callback is queued behind it, so waiting for that callback
+      // can never finish: the wait gives up and the call runs un-nested.
+      const chat = model();
+      let inner: unknown;
+      let once = false;
+      const evaluator = BaseCallbackHandler.fromMethods({
+        async handleLLMEnd() {
+          if (once) return;
+          once = true;
+          inner = await chat.invoke([new HumanMessage("Was that right?")]);
+        },
+      });
+      await chat.invoke([new HumanMessage("Capital of France?")], { callbacks: [evaluator] });
+      await awaitAllCallbacks();
+      expect((inner as { content?: unknown } | undefined)?.content).toBe("Paris.");
+      await finished();
+    }, 5_000);
+
+    it("a LangChain call with no provider span under it keeps its usage", async () => {
+      const result = await new UsageOnlyModel({}).invoke([new HumanMessage("Capital of France?")]);
+      expect(result.content).toBe("Paris.");
+      const spans = await finished();
+      const outer = spans.find((span) => span.instrumentationScope.name === LANGCHAIN);
+      expect(outer?.name).toBe("UsageOnlyModel");
+      expect(outer?.attributes["gen_ai.usage.input_tokens"]).toBe(42);
+      expect(outer?.attributes["gen_ai.usage.output_tokens"]).toBe(9);
+      expect(outer?.attributes["rius.aggregated_usage.input_tokens"]).toBeUndefined();
+    });
+
+    it("runs un-nested at once when the run is unknown (the @langchain/core 0.3 shape)", async () => {
+      // 0.3 creates the run inside the queued callback, so a tracer may not
+      // know it yet when the model is called: there is nothing to wait for.
+      const usage = new UsageOnlyModel({});
+      await usage.invoke([new HumanMessage("warm up")]);
+      await finished();
+      const handler = { runs: {} as Record<string, unknown> };
+      const before = usage.activeDuringCall.length;
+      const call = usage._generate([new HumanMessage("x")], {}, {
+        runId: "unknown-run",
+        handlers: [handler],
+      } as never);
+      // The model's own call started synchronously: nothing was waited for.
+      expect(usage.activeDuringCall.length).toBe(before + 1);
+      await call;
+      expect(usage.activeDuringCall.at(-1)).toBeUndefined();
+    });
+
+    it("gives up waiting for a span that never starts", async () => {
+      const usage = new UsageOnlyModel({});
+      await usage.invoke([new HumanMessage("warm up")]);
+      await finished();
+      // The run is known, its span never arrives: a start callback that was
+      // dropped, or one stuck behind the caller.
+      const handler = { runs: {} as Record<string, unknown>, getRunById: () => ({}) };
+      await usage._generate([new HumanMessage("x")], {}, {
+        runId: "stuck-run",
+        handlers: [handler],
+      } as never);
+      expect(usage.activeDuringCall.at(-1)).toBeUndefined();
     });
 
     it("the caller's code between stream chunks does not run under the span", async () => {

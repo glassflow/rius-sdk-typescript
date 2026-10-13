@@ -32,10 +32,20 @@ import { type Span, context, trace } from "@opentelemetry/api";
  * called (it has not when other calls keep the queue busy). When the run is
  * known but its span is not, the call first waits for a no-op queued behind
  * that callback, through LangChain's public `consumeCallback`, so the span is
- * there by the time the call starts.
+ * there by the time the call starts. The wait is bounded: a call made from a
+ * callback that is itself running on that queue (an evaluator calling a model
+ * from handleLLMEnd) would otherwise wait for its own caller, forever.
  */
 
 const WRAPPED = Symbol.for("rius.langchainSpanContext");
+
+/**
+ * How long a call waits for its pending span before running un-nested. The
+ * queue normally drains in well under a millisecond; the bound covers a queue
+ * that cannot drain before this call ends (the call is made from a callback
+ * running on that queue) and caps what a busy queue adds to each call.
+ */
+export const PENDING_SPAN_WAIT_MS = 50;
 
 type AnyFunction = (this: unknown, ...args: unknown[]) => unknown;
 type Wrapped = AnyFunction & { [WRAPPED]?: AnyFunction };
@@ -91,21 +101,26 @@ function lookUp(runManager: unknown): Lookup {
   }
 }
 
-/** Resolves once every callback LangChain queued before now has run. */
+/**
+ * Resolves once every callback LangChain queued before now has run, or after
+ * {@link PENDING_SPAN_WAIT_MS}, whichever comes first.
+ */
 function queuedCallbacksRan(): Promise<void> | undefined {
   const consume = consumeCallback;
   if (consume === undefined) return undefined;
-  try {
-    return new Promise<void>((resolve, reject) => {
-      try {
-        consume(async () => resolve(), false);
-      } catch (error) {
-        reject(error);
-      }
-    });
-  } catch {
-    return undefined;
-  }
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, PENDING_SPAN_WAIT_MS);
+    timer.unref?.();
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    try {
+      consume(async () => done(), false);
+    } catch {
+      done();
+    }
+  });
 }
 
 function contextOf(span: Span | undefined) {
@@ -117,11 +132,9 @@ function contextOf(span: Span | undefined) {
 async function contextFor(runManager: unknown) {
   let found = lookUp(runManager);
   if (found !== undefined && "pending" in found) {
-    try {
-      await queuedCallbacksRan();
-    } catch {
-      return undefined;
-    }
+    // Still pending after the wait: the call runs un-nested, as it would
+    // without this module.
+    await queuedCallbacksRan();
     found = lookUp(runManager);
   }
   return found !== undefined && "span" in found ? contextOf(found.span) : undefined;
