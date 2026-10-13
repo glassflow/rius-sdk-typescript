@@ -265,16 +265,27 @@ describe("gen_ai.tool.definitions from the request bag", () => {
     });
   });
 
-  it("leaves bag tools alone when llm.tools is present", () => {
-    const bag = JSON.stringify({ tools: [{ name: "from-bag" }], tool_choice: "auto" });
+  it("lets llm.tools win over the bag, and the bag member still goes", () => {
+    // litellm and langchain write both; the bag's copy is a duplicate.
+    const bag = JSON.stringify({ tools: [{ name: "from-bag" }], tool_choice: "auto", seed: 1 });
     const out = exported({
       [LLM_INVOCATION_PARAMETERS]: bag,
       ...indexed([{ name: "from-llm-tools" }]),
     });
     expect(definitions(out)).toEqual([{ name: "from-llm-tools" }]);
-    // tools stays in the bag; tool_choice is promoted out of it regardless.
-    expect(out[LLM_INVOCATION_PARAMETERS]).toBe(JSON.stringify({ tools: [{ name: "from-bag" }] }));
     expect(out[RIUS_REQUEST_TOOL_CHOICE]).toBe("auto");
+    expect(out[LLM_INVOCATION_PARAMETERS]).toBeUndefined();
+  });
+
+  it("normalizes both tool sources twice the same as once", () => {
+    // The sink normalizes what the SDK exported, so a second pass must find
+    // nothing left to do.
+    const once = exported({
+      [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ tools: [{ name: "a" }], custom: 1 }),
+      ...indexed([{ name: "a" }]),
+    });
+    expect(once[LLM_INVOCATION_PARAMETERS]).toBe('{"custom":1}');
+    expect(exported(once)).toEqual(once);
   });
 
   it("lets a native definitions key win over the bag, and the member still goes", () => {
