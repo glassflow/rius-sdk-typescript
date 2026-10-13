@@ -501,13 +501,16 @@ const OPERATION_BY_KIND: Partial<Record<SpanKind, string>> = {
  *   `generate_content` are LLM calls the same way `chat` is, and
  *   `create_agent` is an AGENT span just as `invoke_agent` is, so the mapping
  *   is many-to-one and only the chat / invoke_agent entries round-trip.
- * - CHAIN has no operation of its own, but two operations land on it.
+ * - CHAIN has no operation of its own, but three operations land on it.
  *   `invoke_workflow` and `plan` are real GenAI operations with no taxonomy
  *   value, CHAIN is the honest home for both, and this direction is the only
- *   one that can say so.
+ *   one that can say so. `agent_step` is not a conventions operation:
+ *   @ai-sdk/otel writes it on each step of an agent run (one model call and
+ *   the tools it asked for), a step within the run rather than an agent
+ *   invocation, so CHAIN as well.
  *
  * A test asserts the round-trip where an operation exists, not equality of
- * the two maps: asserting inverses would force one of those four extra
+ * the two maps: asserting inverses would force one of those five extra
  * operations to be dropped. Mirrors the console's deriveSpanKind.
  */
 const KIND_BY_OPERATION: Record<string, SpanKind> = {
@@ -521,6 +524,7 @@ const KIND_BY_OPERATION: Record<string, SpanKind> = {
   retrieval: SpanKind.RETRIEVER,
   invoke_workflow: SpanKind.CHAIN,
   plan: SpanKind.CHAIN,
+  agent_step: SpanKind.CHAIN,
 };
 
 /**

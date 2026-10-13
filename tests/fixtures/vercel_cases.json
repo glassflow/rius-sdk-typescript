@@ -495,6 +495,7 @@
       },
       "expected": {
         "gen_ai.operation.name": "agent_step",
+        "openinference.span.kind": "CHAIN",
         "rius.aggregated_usage.reasoning.output_tokens": 3
       }
     },
