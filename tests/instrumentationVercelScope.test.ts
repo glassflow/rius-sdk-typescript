@@ -198,13 +198,36 @@ async function generateWith(
 }
 
 describeWithVercelPackage("the vercel-ai transform on real AI SDK spans", () => {
-  it("still translates the ai.* dialect", async () => {
+  it("maps the ai.* dialect natively, with no OpenInference copy beside it", async () => {
     const spans = await generateWith("legacy");
     const llm = spans.find((a) => a["ai.operationId"] === "ai.generateText.doGenerate");
     expect(llm).toBeDefined();
     expect(llm?.["openinference.span.kind"]).toBe("LLM");
-    expect(llm?.["llm.model_name"]).toBe("gpt-test");
-    expect(llm?.["output.value"]).toBe("4");
+    expect(llm?.["gen_ai.provider.name"]).toBe("openai");
+    expect(llm?.["gen_ai.response.model"]).toBe("gpt-test");
+    expect(JSON.parse(llm?.["gen_ai.output.messages"] as string)).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "4" }], finish_reason: "stop" },
+    ]);
+    // The normalizer mapped the span, so the transform left it alone.
+    expect(Object.keys(llm ?? {}).filter((k) => k.startsWith("llm."))).toEqual([]);
+    expect(llm?.["output.value"]).toBeUndefined();
+    expect(llm?.["input.mime_type"]).toBeUndefined();
+  });
+
+  it("still translates an operation the normalizer does not map", async () => {
+    const exporter = new InMemorySpanExporter();
+    const client = initTracked({ spanExporter: exporter, heartbeatTransport: async () => {} });
+    expect(await client.ready).toContain("vercel-ai");
+    getTracer()
+      .startSpan("ai.rerank", {
+        attributes: { "ai.operationId": "ai.rerank", "ai.settings.maxRetries": 2 },
+      })
+      .end();
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0]?.attributes ?? {};
+    expect(attributes["ai.operationId"]).toBe("ai.rerank");
+    // The transform's reading of the AI SDK's settings, which only it makes.
+    expect(attributes["llm.invocation_parameters"]).toBe('{"maxRetries":2}');
   });
 
   it("skips the GenAI-native spans of @ai-sdk/otel's OpenTelemetry integration", async () => {

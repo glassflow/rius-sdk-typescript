@@ -1,0 +1,624 @@
+{
+  "about": "The Vercel AI SDK's ai.* dialect, case by case: each input is one ended span's attributes, each expected result what normalization leaves on it. Shared with the sink (argus-core apps/sink/internal/normalize/testdata/vercel_cases.json), which must store the same attributes from the same span; a number there is the attribute's string form, a list its JSON.",
+  "cases": [
+    {
+      "name": "a model call's prompt messages, every part shape",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"system\",\"content\":\"Be brief.\"},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Look:\"},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":\"https://example.com/a.png\"},{\"type\":\"file\",\"mediaType\":\"audio/wav\",\"data\":\"UklGRg==\"},{\"type\":\"file\",\"data\":{\"type\":\"url\",\"url\":\"https://example.com/b.pdf\"}},{\"type\":\"file\",\"mediaType\":\"video/mp4\",\"data\":{\"type\":\"data\",\"data\":\"AAAA\"}},{\"type\":\"file\",\"mediaType\":\"text/plain\",\"data\":{\"type\":\"text\",\"text\":\"notes\"}},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":{\"0\":1}},{\"type\":\"image\",\"image\":\"iVBORw0=\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"reasoning\",\"text\":\"Thinking.\"},{\"type\":\"tool-call\",\"toolName\":\"lookup\",\"input\":{\"q\":1.5}},{\"type\":\"custom-part\"}]},{\"role\":\"tool\",\"content\":[{\"type\":\"tool-result\",\"toolCallId\":\"c1\",\"output\":{\"type\":\"json\",\"value\":{\"ok\":true}}},{\"type\":\"tool-result\",\"toolCallId\":\"c2\",\"output\":{\"type\":\"error-text\",\"value\":\"boom\"}},{\"type\":\"tool-result\",\"toolCallId\":\"c3\",\"output\":{\"type\":\"execution-denied\",\"reason\":\"no\"}},{\"type\":\"tool-result\",\"toolCallId\":\"c4\",\"output\":{\"type\":\"content\",\"value\":[]}},{\"type\":\"tool-result\",\"toolCallId\":\"c5\"}]}]"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look:\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"https://example.com/a.png\"},{\"type\":\"blob\",\"modality\":\"audio\",\"mime_type\":\"audio/wav\",\"content\":\"UklGRg==\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":null,\"uri\":\"https://example.com/b.pdf\"},{\"type\":\"blob\",\"modality\":\"video\",\"mime_type\":\"video/mp4\",\"content\":\"AAAA\"},{\"type\":\"blob\",\"modality\":\"image\",\"mime_type\":\"text/plain\",\"content\":\"notes\"},{\"type\":\"file\"},{\"type\":\"blob\",\"modality\":\"image\",\"mime_type\":null,\"content\":\"iVBORw0=\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"content\":\"Thinking.\"},{\"type\":\"tool_call\",\"id\":null,\"name\":\"lookup\",\"arguments\":{\"q\":1.5}},{\"type\":\"custom-part\"}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"c1\",\"response\":{\"ok\":true}},{\"type\":\"tool_call_response\",\"id\":\"c2\",\"response\":\"boom\"},{\"type\":\"tool_call_response\",\"id\":\"c3\",\"response\":{\"denied\":true,\"reason\":\"no\"}},{\"type\":\"tool_call_response\",\"id\":\"c4\",\"response\":{\"type\":\"content\",\"value\":[]}},{\"type\":\"tool_call_response\",\"id\":\"c5\"}]}]",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.system_instructions": "[{\"type\":\"text\",\"content\":\"Be brief.\"}]",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a wrapper's prompt: system, a prompt list and messages",
+      "input": {
+        "ai.operationId": "ai.streamText",
+        "ai.prompt": "{\"system\":[{\"role\":\"system\",\"content\":\"One.\"},{\"role\":\"system\",\"content\":\"Two.\"}],\"prompt\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"messages\":[{\"role\":\"system\",\"content\":\"Three.\"},{\"role\":\"assistant\",\"content\":\"Hello\"}]}"
+      },
+      "expected": {
+        "ai.operationId": "ai.streamText",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hello\"}]}]",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.system_instructions": "[{\"type\":\"text\",\"content\":\"One.\"},{\"type\":\"text\",\"content\":\"Two.\"},{\"type\":\"text\",\"content\":\"Three.\"}]",
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "a wrapper's system message as one object",
+      "input": {
+        "ai.operationId": "ai.generateObject",
+        "ai.prompt": "{\"system\":{\"role\":\"system\",\"content\":\"Only JSON.\"},\"prompt\":\"Make one\"}",
+        "ai.response.object": "{\"a\":1}",
+        "ai.response.finishReason": "other"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateObject",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Make one\"}]}]",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.output.messages": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"{\\\"a\\\":1}\"}],\"finish_reason\":\"stop\"}]",
+        "gen_ai.response.finish_reasons": [
+          "other"
+        ],
+        "gen_ai.system_instructions": "[{\"type\":\"text\",\"content\":\"Only JSON.\"}]",
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "an unreadable prompt is left whole",
+      "input": {
+        "ai.operationId": "ai.generateText",
+        "ai.prompt": "{\"prompt\":[{\"role\":\"user\",\"content\":[{\"text\":\"no type\"}]}]}"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText",
+        "ai.prompt": "{\"prompt\":[{\"role\":\"user\",\"content\":[{\"text\":\"no type\"}]}]}",
+        "gen_ai.operation.name": "invoke_agent",
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "a prompt that is not JSON is left whole",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"user\""
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"user\"",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "the response: reasoning, text and tool calls",
+      "input": {
+        "ai.operationId": "ai.streamText.doStream",
+        "ai.response.reasoning": "Hmm.",
+        "ai.response.text": "Calling.",
+        "ai.response.toolCalls": "[{\"toolCallId\":\"c1\",\"toolName\":\"a\",\"input\":\"{\\\"x\\\":2}\"},{\"toolCallId\":\"c2\",\"toolName\":\"b\",\"input\":\"not json\"},{\"toolName\":\"c\",\"input\":{\"y\":true}}]",
+        "ai.response.finishReason": "tool-calls",
+        "ai.response.msToFirstChunk": 250
+      },
+      "expected": {
+        "ai.operationId": "ai.streamText.doStream",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"content\":\"Hmm.\"},{\"type\":\"text\",\"content\":\"Calling.\"},{\"type\":\"tool_call\",\"id\":\"c1\",\"name\":\"a\",\"arguments\":{\"x\":2}},{\"type\":\"tool_call\",\"id\":\"c2\",\"name\":\"b\",\"arguments\":\"not json\"},{\"type\":\"tool_call\",\"name\":\"c\",\"arguments\":{\"y\":true}}],\"finish_reason\":\"tool_call\"}]",
+        "gen_ai.request.stream": true,
+        "gen_ai.response.finish_reasons": [
+          "tool-calls"
+        ],
+        "gen_ai.response.time_to_first_chunk": 0.25,
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a tool call whose input is the JSON null stays a string",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.toolCalls": "[{\"toolCallId\":\"c1\",\"toolName\":\"a\",\"input\":\"null\"}]",
+        "ai.response.finishReason": "tool-calls"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"c1\",\"name\":\"a\",\"arguments\":\"null\"}],\"finish_reason\":\"tool_call\"}]",
+        "gen_ai.response.finish_reasons": [
+          "tool-calls"
+        ],
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "unreadable tool calls leave the response whole",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.text": "Hi",
+        "ai.response.toolCalls": "[1]",
+        "ai.response.finishReason": "stop"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.text": "Hi",
+        "ai.response.toolCalls": "[1]",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.response.finish_reasons": [
+          "stop"
+        ],
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a finish reason with no name of its own passes through",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.text": "",
+        "ai.response.finishReason": "content-filter-v2"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[{\"role\":\"assistant\",\"parts\":[],\"finish_reason\":\"content-filter-v2\"}]",
+        "gen_ai.response.finish_reasons": [
+          "content-filter-v2"
+        ],
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "native messages win and the dialect goes",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[]",
+        "gen_ai.output.messages": "[]",
+        "ai.prompt.messages": "[{\"role\":\"user\",\"content\":\"Hi\"}]",
+        "ai.response.text": "Hello",
+        "ai.response.finishReason": "stop",
+        "gen_ai.response.finish_reasons": [
+          "stop"
+        ]
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[]",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[]",
+        "gen_ai.response.finish_reasons": [
+          "stop"
+        ],
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a forced tool choice keeps its object",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.toolChoice": "{\"type\":\"tool\", \"toolName\":\"get_weather\"}"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "rius.request.tool_choice": "{\"type\":\"tool\",\"toolName\":\"get_weather\"}"
+      }
+    },
+    {
+      "name": "a tool choice mode is the mode",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.toolChoice": "{\"type\":\"required\"}"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "rius.request.tool_choice": "required"
+      }
+    },
+    {
+      "name": "a tool choice that is not an object stays",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.toolChoice": "auto"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.toolChoice": "auto",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "providers under the registry's names",
+      "input": {
+        "ai.operationId": "ai.generateText",
+        "ai.model.provider": "google.vertex.chat",
+        "ai.model.id": "gemini-2.5-flash"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.provider.name": "gcp.vertex_ai",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "azure openai",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.model.provider": "azure-openai.chat"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "azure.ai.openai",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "bedrock",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.model.provider": "Amazon-Bedrock"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "aws.bedrock",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a provider id after a dash",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.model.provider": "deepseek-v3.chat"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "deepseek",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a provider no prefix matches passes through",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.model.provider": "openrouter.chat",
+        "ai.model.id": "openai/gpt-4o"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openrouter.chat",
+        "gen_ai.request.model": "openai/gpt-4o",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a routed model loses the provider's own prefix",
+      "input": {
+        "ai.operationId": "ai.generateText",
+        "ai.model.provider": "openai.responses",
+        "ai.model.id": "openai/gpt-4o"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o",
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "the provider id wins over gen_ai.system",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.model.provider": "anthropic.messages",
+        "gen_ai.system": "anthropic.messages"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "anthropic",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "request settings",
+      "input": {
+        "ai.operationId": "ai.streamObject",
+        "ai.settings.maxOutputTokens": 100,
+        "ai.settings.temperature": 0.5,
+        "ai.settings.topP": 0.9,
+        "ai.settings.topK": 40,
+        "ai.settings.frequencyPenalty": 0.1,
+        "ai.settings.presencePenalty": 0.2,
+        "ai.settings.seed": 7,
+        "ai.settings.stopSequences": [
+          "END"
+        ],
+        "ai.settings.maxRetries": 2
+      },
+      "expected": {
+        "ai.operationId": "ai.streamObject",
+        "ai.settings.maxRetries": 2,
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.request.frequency_penalty": 0.1,
+        "gen_ai.request.max_tokens": 100,
+        "gen_ai.request.presence_penalty": 0.2,
+        "gen_ai.request.seed": 7,
+        "gen_ai.request.stop_sequences": [
+          "END"
+        ],
+        "gen_ai.request.temperature": 0.5,
+        "gen_ai.request.top_k": 40,
+        "gen_ai.request.top_p": 0.9,
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "v5's generateText usage is the last step's, and is not read",
+      "input": {
+        "ai.operationId": "ai.generateText",
+        "ai.usage.promptTokens": 91,
+        "ai.usage.completionTokens": 15
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText",
+        "ai.usage.completionTokens": 15,
+        "ai.usage.promptTokens": 91,
+        "gen_ai.operation.name": "invoke_agent",
+        "openinference.span.kind": "AGENT"
+      }
+    },
+    {
+      "name": "v5's generateText call keeps its own count",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.promptTokens": 24,
+        "ai.usage.completionTokens": 51,
+        "gen_ai.usage.input_tokens": 24,
+        "gen_ai.usage.output_tokens": 51
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.completionTokens": 51,
+        "ai.usage.promptTokens": 24,
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.input_tokens": 24,
+        "gen_ai.usage.output_tokens": 51,
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a v5 stream wrapper's usage is the run's",
+      "input": {
+        "ai.operationId": "ai.streamText",
+        "ai.usage.inputTokens": 115,
+        "ai.usage.outputTokens": 66,
+        "ai.usage.cachedInputTokens": 16,
+        "ai.usage.reasoningTokens": 3,
+        "ai.usage.totalTokens": 181
+      },
+      "expected": {
+        "ai.operationId": "ai.streamText",
+        "ai.usage.totalTokens": 181,
+        "gen_ai.operation.name": "invoke_agent",
+        "openinference.span.kind": "AGENT",
+        "rius.aggregated_usage.cache_read.input_tokens": 16,
+        "rius.aggregated_usage.input_tokens": 115,
+        "rius.aggregated_usage.output_tokens": 66,
+        "rius.aggregated_usage.reasoning.output_tokens": 3
+      }
+    },
+    {
+      "name": "v6 usage on a call, detailed spelling first",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokens": 100,
+        "ai.usage.outputTokens": 20,
+        "ai.usage.inputTokenDetails.cacheReadTokens": 30,
+        "ai.usage.cachedInputTokens": 31,
+        "ai.usage.inputTokenDetails.cacheWriteTokens": 5,
+        "ai.usage.inputTokenDetails.noCacheTokens": 65,
+        "ai.usage.outputTokenDetails.reasoningTokens": 4,
+        "ai.usage.reasoningTokens": 5,
+        "ai.usage.outputTokenDetails.textTokens": 16,
+        "ai.usage.totalTokens": 120
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokenDetails.noCacheTokens": 65,
+        "ai.usage.outputTokenDetails.textTokens": 16,
+        "ai.usage.totalTokens": 120,
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.cache_read.input_tokens": 30,
+        "gen_ai.usage.cache_write.input_tokens": 5,
+        "gen_ai.usage.input_tokens": 100,
+        "gen_ai.usage.output_tokens": 20,
+        "gen_ai.usage.reasoning.output_tokens": 4,
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a usage count that is not a number stays",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokens": "many"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokens": "many",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a native usage count wins",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokens": 100,
+        "gen_ai.usage.input_tokens": 99
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.input_tokens": 99,
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "an embedding call",
+      "input": {
+        "ai.operationId": "ai.embedMany.doEmbed",
+        "ai.model.provider": "openai.embedding",
+        "ai.model.id": "text-embedding-3-small",
+        "ai.values": [
+          "\"a\"",
+          "\"b\""
+        ],
+        "ai.embeddings": [
+          "[0.1]",
+          "[0.2]"
+        ],
+        "ai.usage.tokens": 2
+      },
+      "expected": {
+        "ai.operationId": "ai.embedMany.doEmbed",
+        "ai.values": [
+          "\"a\"",
+          "\"b\""
+        ],
+        "gen_ai.operation.name": "embeddings",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "text-embedding-3-small",
+        "gen_ai.usage.input_tokens": 2,
+        "openinference.span.kind": "EMBEDDING"
+      }
+    },
+    {
+      "name": "an embedding run",
+      "input": {
+        "ai.operationId": "ai.embed",
+        "ai.embedding": "[0.1]",
+        "ai.value": "\"a\"",
+        "ai.usage.tokens": 1
+      },
+      "expected": {
+        "ai.operationId": "ai.embed",
+        "ai.value": "\"a\"",
+        "gen_ai.operation.name": "embeddings",
+        "openinference.span.kind": "EMBEDDING",
+        "rius.aggregated_usage.input_tokens": 1
+      }
+    },
+    {
+      "name": "a tool execution",
+      "input": {
+        "ai.operationId": "ai.toolCall",
+        "ai.toolCall.name": "get_weather",
+        "ai.toolCall.id": "call_1",
+        "ai.toolCall.args": "{\"city\":\"Paris\"}",
+        "ai.toolCall.result": "{\"temp\":22}"
+      },
+      "expected": {
+        "ai.operationId": "ai.toolCall",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "{\"city\":\"Paris\"}",
+        "gen_ai.tool.call.id": "call_1",
+        "gen_ai.tool.call.result": "{\"temp\":22}",
+        "gen_ai.tool.name": "get_weather",
+        "gen_ai.tool.type": "function",
+        "openinference.span.kind": "TOOL"
+      }
+    },
+    {
+      "name": "streamObject's time to first chunk",
+      "input": {
+        "ai.operationId": "ai.streamObject.doStream",
+        "ai.stream.msToFirstChunk": 120,
+        "ai.response.object": "{\"a\":1}",
+        "ai.response.finishReason": "stop"
+      },
+      "expected": {
+        "ai.operationId": "ai.streamObject.doStream",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"{\\\"a\\\":1}\"}],\"finish_reason\":\"stop\"}]",
+        "gen_ai.request.stream": true,
+        "gen_ai.response.finish_reasons": [
+          "stop"
+        ],
+        "gen_ai.response.time_to_first_chunk": 0.12,
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "either time to first chunk, the first readable one wins",
+      "input": {
+        "ai.operationId": "ai.streamText.doStream",
+        "ai.response.msToFirstChunk": "soon",
+        "ai.stream.msToFirstChunk": 80
+      },
+      "expected": {
+        "ai.operationId": "ai.streamText.doStream",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.stream": true,
+        "gen_ai.response.time_to_first_chunk": 0.08,
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a time to first chunk that is no duration stays",
+      "input": {
+        "ai.operationId": "ai.streamText.doStream",
+        "ai.response.msToFirstChunk": -1
+      },
+      "expected": {
+        "ai.operationId": "ai.streamText.doStream",
+        "ai.response.msToFirstChunk": -1,
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "an operation not mapped here keeps its dialect",
+      "input": {
+        "ai.operationId": "ai.rerank",
+        "ai.model.provider": "cohere.reranking",
+        "ai.model.id": "rerank-v3.5",
+        "ai.usage.tokens": 3,
+        "ai.prompt": "{\"query\":\"q\"}"
+      },
+      "expected": {
+        "ai.operationId": "ai.rerank",
+        "ai.prompt": "{\"query\":\"q\"}",
+        "ai.usage.tokens": 3,
+        "gen_ai.provider.name": "cohere",
+        "gen_ai.request.model": "rerank-v3.5"
+      }
+    },
+    {
+      "name": "tool definitions",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.tools": [
+          "{\"type\":\"function\",\"name\":\"a\",\"inputSchema\":{\"type\":\"object\"}}",
+          "{\"type\":\"provider-defined\",\"name\":\"b\",\"id\":\"openai.web_search\",\"args\":{}}"
+        ]
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.tool.definitions": "[{\"type\":\"function\",\"name\":\"a\",\"inputSchema\":{\"type\":\"object\"}},{\"type\":\"provider-defined\",\"name\":\"b\",\"id\":\"openai.web_search\",\"args\":{}}]",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "tool definitions that do not parse stay",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.tools": [
+          "{\"type\":\"function\"",
+          "{}"
+        ]
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.tools": [
+          "{\"type\":\"function\"",
+          "{}"
+        ],
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    }
+  ]
+}

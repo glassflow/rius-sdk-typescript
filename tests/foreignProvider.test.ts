@@ -207,6 +207,31 @@ describe("the bridge", () => {
     expect(llm["deployment.environment"]).toBeUndefined();
   });
 
+  // telemetry.sdk.* says which SDK produced a span. A bridged span was
+  // produced by the other provider, so it keeps that provider's own keys
+  // rather than taking Rius's.
+  it("keeps a bridged span's own telemetry.sdk.* keys", async () => {
+    installForeign(
+      resourceFromAttributes({
+        "service.name": "langfuse-app",
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "other-sdk",
+        "telemetry.sdk.version": "0.0.1",
+      }),
+    );
+    const riusExporter = initBridged();
+    jobWithLlmChild(other());
+    await rius().flush();
+
+    const spans = byName(riusExporter);
+    const job = spans.job.resource.attributes;
+    expect(job["telemetry.sdk.name"]).toBe("other-sdk");
+    expect(job["telemetry.sdk.version"]).toBe("0.0.1");
+    expect(job["service.name"]).toBe("rius-svc");
+    // Rius's own span keeps Rius's.
+    expect(spans.llm.resource.attributes["telemetry.sdk.name"]).toBe("opentelemetry");
+  });
+
   it("hands Rius's own spans their own resource object, unmerged", async () => {
     installForeign(resourceFromAttributes({ "deployment.environment": "x" }));
     const riusExporter = initBridged();

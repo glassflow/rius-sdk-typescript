@@ -638,12 +638,27 @@ export function bridge(
  * Export identity
  * ------------------------------------------------------------------ */
 
+/** OpenTelemetry's resource keys for the SDK that produced a span. */
+const TELEMETRY_SDK_PREFIX = "telemetry.sdk.";
+
+/**
+ * The `telemetry.sdk.*` keys a resource carries. They describe the SDK that
+ * produced the span, so on a bridged span they stay the other provider's own:
+ * Rius's describe Rius's provider, which did not produce it.
+ */
+function ownSdkIdentity(resource: Resource): Record<string, AttributeValue | undefined> {
+  return Object.fromEntries(
+    Object.entries(resource.attributes).filter(([key]) => key.startsWith(TELEMETRY_SDK_PREFIX)),
+  );
+}
+
 /**
  * Export spans of a bridged provider under Rius's resource identity.
  *
  * The other provider's resource wins nothing it shares with `resource`
  * (`service.name`, `service.instance.id`, the agent identity keys) and keeps
- * whatever else it carries. Spans of Rius's own provider pass through untouched.
+ * whatever else it carries, including its own `telemetry.sdk.*`. Spans of
+ * Rius's own provider pass through untouched.
  */
 export class ResourceAdoptingExporter implements SpanExporter {
   private readonly inner: SpanExporter;
@@ -669,7 +684,11 @@ export class ResourceAdoptingExporter implements SpanExporter {
       // Not resource.merge(): on a schema-url conflict OTel keeps the OLD
       // resource and drops the update entirely.
       merged = resourceFromAttributes(
-        { ...span.resource.attributes, ...this.resource.attributes },
+        {
+          ...span.resource.attributes,
+          ...this.resource.attributes,
+          ...ownSdkIdentity(span.resource),
+        },
         { schemaUrl: this.resource.schemaUrl ?? span.resource.schemaUrl },
       );
       this.adoptedResources.set(span.resource, merged);

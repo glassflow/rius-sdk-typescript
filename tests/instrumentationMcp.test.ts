@@ -1,4 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -250,6 +253,111 @@ describe("instrumentMcpClient", () => {
 
     restoreFirst();
     expect(Client.prototype.callTool).toBe(trueOriginal);
+  });
+});
+
+// The SDK's Client keeps nothing of the negotiated version: it passes it to
+// the transport's setProtocolVersion, which only the HTTP transports have.
+// The wrapper watches that hand-off during connect, so every transport gets
+// the attribute.
+describe("negotiated protocol version, captured at connect", () => {
+  async function connectedPair(): Promise<{ mcp: Client; close: () => Promise<void> }> {
+    const server = new McpServer({ name: "weather", version: "1.0.0" });
+    server.tool("forecast", async () => ({ content: [{ type: "text", text: "sunny" }] }));
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const mcp = new Client({ name: "probe", version: "1.0.0" });
+    await mcp.connect(clientSide);
+    return {
+      mcp,
+      close: async () => {
+        await mcp.close();
+        await server.close();
+      },
+    };
+  }
+
+  it("records it over an in-memory transport, which never stores it", async () => {
+    const restore = instrumentMcpClient(Client);
+    try {
+      const { mcp, close } = await connectedPair();
+      await mcp.callTool({ name: "forecast" });
+      await close();
+    } finally {
+      restore();
+    }
+    await client.flush();
+    const span = exporter.getFinishedSpans().find((s) => s.name === "execute_tool forecast");
+    expect(span?.attributes["mcp.protocol.version"]).toBe(LATEST_PROTOCOL_VERSION);
+  });
+
+  // A transport with its own setProtocolVersion on its prototype, like the
+  // SDK's StreamableHTTPClientTransport: it still receives the version, and
+  // is left without an own property hiding that method.
+  it("still hands the version to a transport that takes it, and leaves it untouched", async () => {
+    class HttpLikeTransport {
+      received: string | undefined;
+      setProtocolVersion(version: string): void {
+        this.received = version;
+      }
+    }
+    class Connecting extends FakeClient {
+      async connect(transport: HttpLikeTransport): Promise<void> {
+        transport.setProtocolVersion("2025-06-18");
+      }
+    }
+    const restore = instrumentMcpClient(Connecting);
+    try {
+      const transport = new HttpLikeTransport();
+      const mcp = new Connecting();
+      await mcp.connect(transport);
+      expect(transport.received).toBe("2025-06-18");
+      expect(Object.hasOwn(transport, "setProtocolVersion")).toBe(false);
+      await mcp.callTool({ name: "add" });
+    } finally {
+      restore();
+    }
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["mcp.protocol.version"]).toBe("2025-06-18");
+  });
+
+  // Client.connect skips initialize when the transport already has a
+  // session id (a reconnect), so no version is handed over: the one from the
+  // first connect stands.
+  it("keeps the first version across a reconnect that skips initialize", async () => {
+    class Reconnecting extends FakeClient {
+      async connect(transport: {
+        sessionId?: string;
+        setProtocolVersion?: (v: string) => void;
+      }): Promise<void> {
+        if (transport.sessionId !== undefined) return;
+        transport.setProtocolVersion?.("2025-03-26");
+      }
+    }
+    const restore = instrumentMcpClient(Reconnecting);
+    try {
+      const mcp = new Reconnecting();
+      await mcp.connect({});
+      await mcp.connect({ sessionId: "s-1" });
+      await mcp.callTool({ name: "add" });
+    } finally {
+      restore();
+    }
+    await client.flush();
+    expect(exporter.getFinishedSpans()[0].attributes["mcp.protocol.version"]).toBe("2025-03-26");
+  });
+
+  it("restores connect on uninstrument and does not stack connect wrappers", () => {
+    const trueOriginal = Client.prototype.connect;
+    const restoreFirst = instrumentMcpClient(Client);
+    const wrappedOnce = Client.prototype.connect;
+    expect(wrappedOnce).not.toBe(trueOriginal);
+    const restoreSecond = instrumentMcpClient(Client);
+    expect(Client.prototype.connect).toBe(wrappedOnce);
+    restoreSecond();
+    expect(Client.prototype.connect).toBe(trueOriginal);
+    restoreFirst();
+    expect(Client.prototype.connect).toBe(trueOriginal);
   });
 });
 
