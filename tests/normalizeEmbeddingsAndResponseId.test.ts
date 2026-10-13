@@ -327,10 +327,11 @@ describe("auto-instrumented OpenAI calls", () => {
     expect(attributes["embedding.embeddings.0.embedding.text"]).toBe("a");
     expect(attributes["embedding.embeddings.1.embedding.text"]).toBe("b");
     expect(attributes["gen_ai.operation.name"]).toBe("embeddings");
-    // The JS OpenAI instrumentation (4.2.x) writes no token count on an
-    // embeddings span, unlike the Python one; pinned so an upstream fix shows.
+    // The JS OpenAI instrumentation writes no token count on an embeddings
+    // span, unlike the Python one; the SDK records the response's own count
+    // (embeddingsUsage.ts), which normalizes like the Python instrumentor's.
     expect(attributes["llm.token_count.prompt"]).toBeUndefined();
-    expect(attributes["gen_ai.usage.input_tokens"]).toBeUndefined();
+    expect(attributes["gen_ai.usage.input_tokens"]).toBe(2);
   });
 
   it("a chat completion carries the response id", async () => {

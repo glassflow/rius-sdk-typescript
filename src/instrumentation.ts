@@ -5,6 +5,7 @@ import type { TracerProvider } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { aggregatingTracer } from "./aggregatedUsage.js";
+import { installEmbeddingsUsage } from "./embeddingsUsage.js";
 import type { McpClientLike } from "./instrumentationMcp.js";
 import { TRACER_NAME } from "./semconv.js";
 import { SDK_VERSION } from "./version.js";
@@ -347,9 +348,11 @@ export async function patchActiveBuild(
   instrumentation: ManuallyInstrumentable,
   pkg: string,
   toPatchable: (exports: Record<string, unknown>) => object | undefined,
+  prepare?: (patchable: object) => void,
 ): Promise<void> {
   const cached = cachedCjsExports(pkg, toPatchable);
   if (cached !== undefined) {
+    prepare?.(cached);
     instrumentation.manuallyInstrument(cached);
     return;
   }
@@ -368,6 +371,7 @@ export async function patchActiveBuild(
     warnBroken(pkg, new Error("unrecognised module shape, instrumentation not applied"));
     return;
   }
+  prepare?.(patchable);
   instrumentation.manuallyInstrument(patchable);
 }
 
@@ -426,6 +430,7 @@ function loadInjected(
   exportName: string,
   toPatchable: (exports: Record<string, unknown>) => object | undefined,
   construct: (Ctor: new () => PatchingInstrumentation) => ManuallyInstrumentable,
+  prepare?: (patchable: object) => void,
 ): ManuallyInstrumentable {
   const Ctor = (injected.instrumentation as Record<string, unknown>)[exportName];
   if (typeof Ctor !== "function") {
@@ -438,6 +443,7 @@ function loadInjected(
       `instrumentModules.${option}.sdk is not the ${option === "openai" ? "openai" : "@anthropic-ai/sdk"} module namespace`,
     );
   }
+  prepare?.(patchable);
   instrumentation.manuallyInstrument(patchable);
   return instrumentation;
 }
@@ -602,9 +608,19 @@ export const REGISTRY: RegistryEntry[] = [
     optInPackage: "@arizeai/openinference-instrumentation-openai",
     async load(
       _tracerProvider?: TracerProvider,
-      _teardown?: Array<() => void>,
+      teardown?: Array<() => void>,
       modules?: InstrumentModules,
     ) {
+      // Embeddings token counts, which the instrumentation does not record
+      // (see embeddingsUsage.ts). Installed on the very build the
+      // instrumentation is about to patch, right before it patches, so it ends
+      // up underneath the instrumentation's wrapper. A CJS build first
+      // required after init() is patched by the instrumentation's require hook
+      // alone and gets no counts, the same residual gap as the providers'.
+      const prepare = (patchable: object): void => {
+        const uninstall = installEmbeddingsUsage(patchable);
+        teardown?.push(uninstall);
+      };
       const injected = injectedFor(modules, "openai");
       if (injected !== undefined) {
         return loadInjected(
@@ -613,6 +629,7 @@ export const REGISTRY: RegistryEntry[] = [
           "OpenAIInstrumentation",
           openaiPatchable,
           (Ctor) => new Ctor(),
+          prepare,
         );
       }
       const mod = await optional("@arizeai/openinference-instrumentation-openai");
@@ -622,7 +639,7 @@ export const REGISTRY: RegistryEntry[] = [
       // The require hook registered by enableInstrumentations only covers CJS
       // consumers, and only for requires that happen after init(). Patch the
       // build in use directly so ESM apps and require-before-init both work.
-      await patchActiveBuild(instrumentation, "openai", openaiPatchable);
+      await patchActiveBuild(instrumentation, "openai", openaiPatchable, prepare);
       // Still returned for registration: the patched methods read the
       // instrumentation's tracer per call, so it has to be bound to our tracer
       // provider to emit anywhere.
