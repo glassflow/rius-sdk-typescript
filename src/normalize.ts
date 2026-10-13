@@ -930,8 +930,8 @@ const VERCEL_OPERATION_ID = "ai.operationId";
 /**
  * What an operation id says: its kind, and whether the span is ONE model call
  * (`call`) rather than the wrapper around a run of them. A wrapper's usage
- * repeats its calls' (generateText reports the steps' total), so it moves to
- * `rius.aggregated_usage.*` and is never counted twice.
+ * repeats its calls' (from v6 on, and on v5's streams, it is the run's total),
+ * so it moves to `rius.aggregated_usage.*` and is never counted twice.
  *
  * Only these ids are mapped. Any other (`ai.rerank`, `ai.generateImage`, ...)
  * keeps its `ai.*` keys apart from the identity ones and is left to the
@@ -1107,23 +1107,26 @@ const GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result";
 
 /**
  * Each usage count and its AI SDK spellings, in precedence order: v6's
- * detailed spelling, then the v5 one it replaced (`promptTokens` and
- * `completionTokens` on v5's generateText, `cachedInputTokens` and
- * `reasoningTokens` on its streams). An embedding call reports its input as
- * `ai.usage.tokens`. Every count is inclusive, as the conventions define it:
- * `inputTokens` already holds the cached tokens (`noCacheTokens` is the
- * remainder). The keys without a canonical counterpart (`totalTokens`,
+ * detailed spelling, then the one v5 also writes on its streams
+ * (`cachedInputTokens`, `reasoningTokens`). An embedding call reports its
+ * input as `ai.usage.tokens`. Every count is inclusive, as the conventions
+ * define it: `inputTokens` already holds the cached tokens (`noCacheTokens` is
+ * the remainder). The keys without a canonical counterpart (`totalTokens`,
  * `inputTokenDetails.noCacheTokens`, `outputTokenDetails.textTokens`) stay.
+ *
+ * v5's `promptTokens` / `completionTokens` (generateText and generateObject)
+ * are deliberately NOT read. On a model call the AI SDK writes the same counts
+ * under `gen_ai.usage.*` itself; on the generateText wrapper v5 takes them
+ * from the LAST step's response, not the run's total, so a multi-step run
+ * would carry a short total under a key that promises the whole run. They stay
+ * under their own names, which nothing reads as usage.
  */
 const VERCEL_USAGE: ReadonlyArray<readonly [suffix: string, sources: readonly string[]]> = [
   [
     GEN_AI_USAGE_INPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
-    ["ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.tokens"],
+    ["ai.usage.inputTokens", "ai.usage.tokens"],
   ],
-  [
-    GEN_AI_USAGE_OUTPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
-    ["ai.usage.outputTokens", "ai.usage.completionTokens"],
-  ],
+  [GEN_AI_USAGE_OUTPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length), ["ai.usage.outputTokens"]],
   [
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
     ["ai.usage.inputTokenDetails.cacheReadTokens", "ai.usage.cachedInputTokens"],
@@ -1446,13 +1449,15 @@ function vercelUsage(
  *
  * - Usage: a model call's counts under `gen_ai.usage.*`; a wrapper's (the
  *   run's total) under `rius.aggregated_usage.*`, so it is not counted again.
+ *   See VERCEL_USAGE for the v5 spelling that is not read.
  * - Messages, in the GenAI message schema as @ai-sdk/otel writes them: system
  *   prompts as `gen_ai.system_instructions`, the rest as
  *   `gen_ai.input.messages`, the response as one assistant message in
  *   `gen_ai.output.messages` carrying its finish reason. A prompt or response
  *   that cannot be read is left where it is, whole.
- * - `ai.response.msToFirstChunk` is milliseconds; `time_to_first_chunk` is
- *   seconds, and only a stream has a first chunk. The backend reads the
+ * - `ai.response.msToFirstChunk` (`ai.stream.msToFirstChunk` on streamObject)
+ *   is milliseconds; `time_to_first_chunk` is seconds, and only a stream has
+ *   a first chunk. The backend reads the
  *   `ai.stream.firstChunk` event, renamed by {@link normalizeFirstTokenEvent}.
  * - Embedding vectors (`ai.embedding`, `ai.embeddings`) go, as OpenInference's
  *   do (see dropEmbeddingVectors). The inputs (`ai.value`, `ai.values`) stay:
@@ -1493,18 +1498,26 @@ export function normalizeVercelSpan(attributes: Record<string, AttributeValue | 
   mapVercel(attributes, GEN_AI_TOOL_CALL_ARGUMENTS, ["ai.toolCall.args"], (v) => textValue([v]));
   mapVercel(attributes, GEN_AI_TOOL_CALL_RESULT, ["ai.toolCall.result"], (v) => textValue([v]));
 
-  const firstChunk = asNumber(attributes[VERCEL_MS_TO_FIRST_CHUNK]) as number | undefined;
-  if (firstChunk !== undefined && firstChunk >= 0) {
+  for (const key of VERCEL_MS_TO_FIRST_CHUNK) {
+    const firstChunk = asNumber(attributes[key]) as number | undefined;
+    if (firstChunk === undefined || firstChunk < 0) continue;
     attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] ??= firstChunk / 1000;
     attributes[GEN_AI_REQUEST_STREAM] ??= true;
-    delete attributes[VERCEL_MS_TO_FIRST_CHUNK];
+    for (const source of VERCEL_MS_TO_FIRST_CHUNK) delete attributes[source];
+    break;
   }
 
   for (const key of VERCEL_EMBEDDING_VECTORS) delete attributes[key];
 }
 
-/** Time to first chunk, in milliseconds. A source spelling, inline. */
-const VERCEL_MS_TO_FIRST_CHUNK = "ai.response.msToFirstChunk";
+/**
+ * Time to first chunk, in milliseconds, first readable wins: generateText and
+ * streamText write the first, streamObject the second. Source spellings, inline.
+ */
+const VERCEL_MS_TO_FIRST_CHUNK = [
+  "ai.response.msToFirstChunk",
+  "ai.stream.msToFirstChunk",
+] as const;
 
 /** An embedding call's output vectors: one (`embed`) or one per input. */
 const VERCEL_EMBEDDING_VECTORS = ["ai.embedding", "ai.embeddings"] as const;
