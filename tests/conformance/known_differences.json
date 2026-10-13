@@ -55,6 +55,11 @@
       "family": "openinference-litellm-openai",
       "key": "gen_ai.response.time_to_first_chunk",
       "reason": "As openinference-openai."
+    },
+    {
+      "family": "openinference-langchain-openai",
+      "key": "gen_ai.response.time_to_first_chunk",
+      "reason": "As openinference-openai: the openai instrumentor's ChatCompletion span of the streamed call."
     }
   ]
 }

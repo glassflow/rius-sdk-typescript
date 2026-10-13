@@ -690,7 +690,7 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "langchain",
     kind: "instrumentation",
-    async load() {
+    async load(_tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       const mod = await optional("@arizeai/openinference-instrumentation-langchain");
       const Ctor = mod?.LangChainInstrumentation as
         | (new () => { manuallyInstrument(module: object): void })
@@ -713,6 +713,15 @@ export const REGISTRY: RegistryEntry[] = [
 
       const instrumentation = new Ctor();
       instrumentation.manuallyInstrument(callbacks);
+      // The instrumentation never makes its spans current, so the provider
+      // call a chat model makes would land in a trace of its own; see
+      // langchainSpanContext. Install first, push second, as for mcp below.
+      const { installLangchainSpanContext } = await import("./langchainSpanContext.js");
+      const uninstallSpanContext = installLangchainSpanContext(
+        await optional("@langchain/core/language_models/chat_models"),
+        await optional("@langchain/core/callbacks/promises"),
+      );
+      teardown?.push(uninstallSpanContext);
       // Returned rather than treated as self-applying: the patched callback
       // manager reads the instrumentation's tracer on every call, so it still has
       // to be registered against our tracer provider to emit anywhere.

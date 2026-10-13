@@ -1,5 +1,11 @@
 import http from "node:http";
-import { type Attributes, SpanKind as OtelSpanKind } from "@opentelemetry/api";
+import {
+  type Attributes,
+  SpanKind as OtelSpanKind,
+  ROOT_CONTEXT,
+  type Span,
+  trace,
+} from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -271,5 +277,73 @@ describeV7("a two-step generateText on ai v7", () => {
     expect(agent?.attributes[aggregated("input_tokens")]).toBe(115);
     expect(agent?.attributes[aggregated("output_tokens")]).toBe(66);
     expect(spans.filter((s) => s.attributes[GEN_AI_OPERATION_NAME] === "chat")).toHaveLength(2);
+  });
+});
+
+describe("usage a wrapper span repeats from the provider call under it", () => {
+  // LangChain's ChatOpenAI span and the openai span under it carry the same
+  // call's usage. The provider span keeps it; the wrapper's copy moves aside.
+  const USAGE: Attributes = { [GEN_AI_USAGE_INPUT_TOKENS]: 42, [GEN_AI_USAGE_OUTPUT_TOKENS]: 9 };
+
+  function tracers() {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({
+      spanProcessors: [new NormalizingSpanProcessor(), new SimpleSpanProcessor(exporter)],
+    });
+    return {
+      exporter,
+      langchain: provider.getTracer("@arizeai/openinference-instrumentation-langchain"),
+      openai: provider.getTracer("@arizeai/openinference-instrumentation-openai"),
+    };
+  }
+
+  function under(span: Span) {
+    return trace.setSpan(ROOT_CONTEXT, span);
+  }
+
+  function named(exporter: InMemorySpanExporter, name: string): ReadableSpan {
+    const span = exporter.getFinishedSpans().find((s) => s.name === name);
+    expect(span).toBeDefined();
+    return span as ReadableSpan;
+  }
+
+  it("moves the wrapper's usage when a child with usage ended under it", () => {
+    const { exporter, langchain, openai } = tracers();
+    const outer = langchain.startSpan("ChatOpenAI");
+    openai.startSpan("OpenAI Chat Completions", { attributes: USAGE }, under(outer)).end();
+    outer.setAttributes(USAGE);
+    outer.end();
+    expect(named(exporter, "OpenAI Chat Completions").attributes).toMatchObject(USAGE);
+    const moved = named(exporter, "ChatOpenAI").attributes;
+    expect(usageKeys(moved)).toEqual([]);
+    expect(moved[aggregated("input_tokens")]).toBe(42);
+    expect(moved[aggregated("output_tokens")]).toBe(9);
+  });
+
+  it("keeps the wrapper's usage when no child recorded the call", () => {
+    const { exporter, langchain, openai } = tracers();
+    const outer = langchain.startSpan("ChatOpenAI");
+    openai.startSpan("OpenAI Chat Completions", {}, under(outer)).end();
+    outer.setAttributes(USAGE);
+    outer.end();
+    expect(named(exporter, "ChatOpenAI").attributes).toMatchObject(USAGE);
+  });
+
+  it("leaves a parent from any other instrumentation alone", () => {
+    const { exporter, openai } = tracers();
+    const outer = openai.startSpan("outer");
+    openai.startSpan("inner", { attributes: USAGE }, under(outer)).end();
+    outer.setAttributes(USAGE);
+    outer.end();
+    expect(named(exporter, "outer").attributes).toMatchObject(USAGE);
+  });
+
+  it("does not match a wrapper with a child in another trace", () => {
+    const { exporter, langchain, openai } = tracers();
+    const outer = langchain.startSpan("ChatOpenAI");
+    openai.startSpan("OpenAI Chat Completions", { attributes: USAGE }).end();
+    outer.setAttributes(USAGE);
+    outer.end();
+    expect(named(exporter, "ChatOpenAI").attributes).toMatchObject(USAGE);
   });
 });

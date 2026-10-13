@@ -1,0 +1,423 @@
+import http from "node:http";
+import { trace } from "@opentelemetry/api";
+import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type RiusClient, init } from "../src/client.js";
+import { installLangchainSpanContext } from "../src/langchainSpanContext.js";
+
+// A LangChain chat model call, end to end: a real ChatOpenAI against a local
+// server, with the LangChain and openai OpenInference instrumentations init()
+// enables. The LangChain instrumentation never makes its spans current, so on
+// its own the openai span lands in a trace of its own and the call's usage is
+// counted twice. With langchainSpanContext it nests under the LangChain span,
+// and the LangChain span's usage moves to rius.aggregated_usage.*.
+//
+// A file of its own: the OpenInference packages keep module-level patch state,
+// and vitest's per-file module isolation keeps that state to this file.
+
+const { ChatOpenAI } = await import("@langchain/openai");
+const { HumanMessage } = await import("@langchain/core/messages");
+const { BaseCallbackHandler } = await import("@langchain/core/callbacks/base");
+const callbackPromises = await import("@langchain/core/callbacks/promises");
+const { awaitAllCallbacks, consumeCallback } = callbackPromises;
+const chatModels = await import("@langchain/core/language_models/chat_models");
+const { BaseChatModel } = chatModels;
+const { AIMessage } = await import("@langchain/core/messages");
+const { ChatPromptTemplate } = await import("@langchain/core/prompts");
+// The ESM namespace @langchain/openai imports, handed to init() so the openai
+// instrumentation patches the same module the model calls through.
+const openaiSdk = await import("openai");
+const openaiInstrumentation = await import("@arizeai/openinference-instrumentation-openai");
+
+const USAGE = { prompt_tokens: 42, completion_tokens: 9, total_tokens: 51 };
+
+/**
+ * A chat model that calls no provider client and reports usage itself, so its
+ * LangChain span is the only record of the call. Notes the span active while
+ * it runs.
+ */
+class UsageOnlyModel extends BaseChatModel {
+  activeDuringCall: unknown[] = [];
+
+  _llmType(): string {
+    return "usage-only";
+  }
+
+  async _generate(..._args: unknown[]) {
+    this.activeDuringCall.push(trace.getActiveSpan());
+    return {
+      generations: [{ text: "Paris.", message: new AIMessage("Paris.") }],
+      llmOutput: { tokenUsage: { promptTokens: 42, completionTokens: 9, totalTokens: 51 } },
+    };
+  }
+}
+
+function completion(): unknown {
+  return {
+    id: "chatcmpl-1",
+    object: "chat.completion",
+    created: 1700000000,
+    model: "gpt-4o-mini-2024-07-18",
+    choices: [
+      { index: 0, message: { role: "assistant", content: "Paris." }, finish_reason: "stop" },
+    ],
+    usage: USAGE,
+  };
+}
+
+function sse(): string {
+  const chunk = (delta: unknown, finish: string | null = null, usage: unknown = null) =>
+    `data: ${JSON.stringify({
+      id: "chatcmpl-1",
+      object: "chat.completion.chunk",
+      created: 1700000000,
+      model: "gpt-4o-mini-2024-07-18",
+      choices: usage ? [] : [{ index: 0, delta, finish_reason: finish }],
+      ...(usage ? { usage } : {}),
+    })}\n\n`;
+  return [
+    chunk({ role: "assistant", content: "" }),
+    chunk({ content: "Par" }),
+    chunk({ content: "is." }),
+    chunk({}, "stop"),
+    chunk({}, null, USAGE),
+    "data: [DONE]\n\n",
+  ].join("");
+}
+
+async function server(): Promise<{ url: string; close: () => void }> {
+  const srv = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (part) => {
+      body += part;
+    });
+    request.on("end", () => {
+      const request_ = JSON.parse(body) as { stream?: boolean; model?: string };
+      if (request_.model === "no-such-model") {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "no such model", type: "invalid" } }));
+        return;
+      }
+      if (request_.stream) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(sse());
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(completion()));
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const address = srv.address();
+  if (address === null || typeof address === "string") throw new Error("test setup: no port");
+  return { url: `http://127.0.0.1:${address.port}`, close: () => srv.close() };
+}
+
+const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+// @langchain/core 1.x needs Node 20 (it reads the global crypto Node 18 lacks).
+const describeLangChain = nodeMajor >= 20 ? describe : describe.skip;
+
+describeLangChain("LangChain with the openai instrumentation", () => {
+  let mock: { url: string; close: () => void };
+  let exporter: InMemorySpanExporter;
+  let client: RiusClient;
+
+  beforeAll(async () => {
+    mock = await server();
+    exporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: exporter,
+      heartbeatTransport: async () => {},
+      instrumentModules: { openai: { instrumentation: openaiInstrumentation, sdk: openaiSdk } },
+    });
+    const ready = await client.ready;
+    expect(ready).toContain("langchain");
+    expect(ready).toContain("openai");
+  });
+
+  afterAll(async () => {
+    await client.shutdown();
+    mock.close();
+  });
+
+  function model(fields: Record<string, unknown> = {}) {
+    return new ChatOpenAI({
+      model: "gpt-4o-mini",
+      apiKey: "not-a-real-key",
+      maxRetries: 0,
+      configuration: { baseURL: mock.url },
+      ...fields,
+    });
+  }
+
+  async function finished(): Promise<ReadableSpan[]> {
+    await client.flush();
+    const spans = exporter.getFinishedSpans();
+    exporter.reset();
+    return spans;
+  }
+
+  const LANGCHAIN = "@arizeai/openinference-instrumentation-langchain";
+  const OPENAI = "@arizeai/openinference-instrumentation-openai";
+
+  /** Each LangChain LLM span with the openai span it is the parent of. */
+  function pairs(spans: ReadableSpan[]): Array<[ReadableSpan, ReadableSpan]> {
+    const byId = new Map(spans.map((span) => [span.spanContext().spanId, span]));
+    return spans
+      .filter((span) => span.instrumentationScope.name === OPENAI)
+      .map((inner) => {
+        const parent = inner.parentSpanContext;
+        expect(parent, "the provider span has no parent").toBeDefined();
+        const outer = byId.get(parent?.spanId ?? "");
+        expect(outer?.instrumentationScope.name).toBe(LANGCHAIN);
+        expect(outer?.spanContext().traceId).toBe(inner.spanContext().traceId);
+        return [outer as ReadableSpan, inner];
+      });
+  }
+
+  function expectCountedOnce([outer, inner]: [ReadableSpan, ReadableSpan]): void {
+    // The provider span is the call, so it keeps the usage; LangChain's copy moves aside.
+    expect(inner.attributes["gen_ai.usage.input_tokens"]).toBe(42);
+    expect(inner.attributes["gen_ai.usage.output_tokens"]).toBe(9);
+    expect(Object.keys(outer.attributes).filter((key) => key.startsWith("gen_ai.usage."))).toEqual(
+      [],
+    );
+    expect(outer.attributes["rius.aggregated_usage.input_tokens"]).toBe(42);
+    expect(outer.attributes["rius.aggregated_usage.output_tokens"]).toBe(9);
+  }
+
+  describe("LangChain chat model calls nest their provider span", () => {
+    it("invoke: nested, usage counted once", async () => {
+      await model().invoke([new HumanMessage("Capital of France?")]);
+      const found = pairs(await finished());
+      expect(found).toHaveLength(1);
+      expectCountedOnce(found[0] as [ReadableSpan, ReadableSpan]);
+    });
+
+    it("stream: nested, usage counted once", async () => {
+      let text = "";
+      for await (const chunk of await model({ streamUsage: true }).stream([
+        new HumanMessage("Capital of France?"),
+      ])) {
+        text += String(chunk.content);
+      }
+      expect(text).toBe("Paris.");
+      const found = pairs(await finished());
+      expect(found).toHaveLength(1);
+      expectCountedOnce(found[0] as [ReadableSpan, ReadableSpan]);
+    });
+
+    it("two calls in one chain: each matches its own", async () => {
+      const prompt = ChatPromptTemplate.fromMessages([["human", "Capital of {country}?"]]);
+      const chat = model();
+      await prompt
+        .pipe(chat)
+        .pipe(() => ({ country: "Germany" }))
+        .pipe(prompt)
+        .pipe(chat)
+        .invoke({ country: "France" });
+      const found = pairs(await finished());
+      expect(found).toHaveLength(2);
+      expect(found[0]?.[0].spanContext().spanId).not.toBe(found[1]?.[0].spanContext().spanId);
+      for (const pair of found) expectCountedOnce(pair);
+    });
+
+    it("parallel identical calls: each matches its own", async () => {
+      const chat = model();
+      await Promise.all(
+        Array.from({ length: 4 }, () => chat.invoke([new HumanMessage("Capital of France?")])),
+      );
+      const found = pairs(await finished());
+      expect(found).toHaveLength(4);
+      expect(new Set(found.map(([outer]) => outer.spanContext().spanId)).size).toBe(4);
+      for (const pair of found) expectCountedOnce(pair);
+    });
+
+    it("a failed call still nests, and its error reaches the caller unchanged", async () => {
+      await expect(
+        model({ model: "no-such-model" }).invoke([new HumanMessage("Capital of France?")]),
+      ).rejects.toThrow(/no such model/);
+      expect(pairs(await finished())).toHaveLength(1);
+    });
+
+    it("a lookup that throws never reaches the caller", async () => {
+      const hostile = BaseCallbackHandler.fromMethods({});
+      Object.defineProperty(hostile, "runs", {
+        get() {
+          throw new Error("lookup failed");
+        },
+      });
+      const result = await model().invoke([new HumanMessage("Capital of France?")], {
+        callbacks: [hostile],
+      });
+      expect(result.content).toBe("Paris.");
+      await finished();
+    });
+
+    it("a model call made inside a running callback does not wait forever", async () => {
+      // An evaluator or guardrail handler that calls a model from handleLLMEnd
+      // runs on LangChain's one-at-a-time callback queue. The inner call's
+      // start callback is queued behind it, so waiting for that callback
+      // can never finish: the wait gives up and the call runs un-nested.
+      const chat = model();
+      let inner: unknown;
+      let once = false;
+      const evaluator = BaseCallbackHandler.fromMethods({
+        async handleLLMEnd() {
+          if (once) return;
+          once = true;
+          inner = await chat.invoke([new HumanMessage("Was that right?")]);
+        },
+      });
+      await chat.invoke([new HumanMessage("Capital of France?")], { callbacks: [evaluator] });
+      await awaitAllCallbacks();
+      expect((inner as { content?: unknown } | undefined)?.content).toBe("Paris.");
+      await finished();
+    }, 5_000);
+
+    it("a LangChain call with no provider span under it keeps its usage", async () => {
+      const result = await new UsageOnlyModel({}).invoke([new HumanMessage("Capital of France?")]);
+      expect(result.content).toBe("Paris.");
+      const spans = await finished();
+      const outer = spans.find((span) => span.instrumentationScope.name === LANGCHAIN);
+      expect(outer?.name).toBe("UsageOnlyModel");
+      expect(outer?.attributes["gen_ai.usage.input_tokens"]).toBe(42);
+      expect(outer?.attributes["gen_ai.usage.output_tokens"]).toBe(9);
+      expect(outer?.attributes["rius.aggregated_usage.input_tokens"]).toBeUndefined();
+    });
+
+    it("runs un-nested at once when the run is unknown (the @langchain/core 0.3 shape)", async () => {
+      // 0.3 creates the run inside the queued callback, so a tracer may not
+      // know it yet when the model is called: there is nothing to wait for.
+      const usage = new UsageOnlyModel({});
+      await usage.invoke([new HumanMessage("warm up")]);
+      await finished();
+      const handler = { runs: {} as Record<string, unknown> };
+      const before = usage.activeDuringCall.length;
+      const call = usage._generate([new HumanMessage("x")], {}, {
+        runId: "unknown-run",
+        handlers: [handler],
+      } as never);
+      // The model's own call started synchronously: nothing was waited for.
+      expect(usage.activeDuringCall.length).toBe(before + 1);
+      await call;
+      expect(usage.activeDuringCall.at(-1)).toBeUndefined();
+    });
+
+    it("waits for a span whose start is queued behind a busy callback", async () => {
+      // Another call's callback holds the queue for a moment, so this call's
+      // span starts after the model is called: well within the bound, so the
+      // call still waits for it and nests.
+      const usage = new UsageOnlyModel({});
+      void consumeCallback(() => new Promise<void>((resolve) => setTimeout(resolve, 10)), false);
+      await usage.invoke([new HumanMessage("Capital of France?")]);
+      const active = usage.activeDuringCall.at(-1) as ReadableSpan | undefined;
+      const outer = (await finished()).find((span) => span.instrumentationScope.name === LANGCHAIN);
+      expect(outer).toBeDefined();
+      expect(active?.spanContext().spanId).toBe(outer?.spanContext().spanId);
+    });
+
+    it("gives up waiting for a span that never starts", async () => {
+      const usage = new UsageOnlyModel({});
+      await usage.invoke([new HumanMessage("warm up")]);
+      await finished();
+      // The run is known, its span never arrives: a start callback that was
+      // dropped, or one stuck behind the caller. The queue is held until the
+      // call is done, so only the bound can end the wait.
+      let release = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      void consumeCallback(() => held, false);
+      const handler = { runs: {} as Record<string, unknown>, getRunById: () => ({}) };
+      try {
+        await usage._generate([new HumanMessage("x")], {}, {
+          runId: "stuck-run",
+          handlers: [handler],
+        } as never);
+        expect(usage.activeDuringCall.at(-1)).toBeUndefined();
+      } finally {
+        release();
+      }
+    }, 2_000);
+
+    it("runs at once when the callback queue throws", async () => {
+      const usage = new UsageOnlyModel({});
+      await usage.invoke([new HumanMessage("warm up")]);
+      await finished();
+      const install = chatModels as unknown as Parameters<typeof installLangchainSpanContext>[0];
+      installLangchainSpanContext(install, {
+        consumeCallback: () => {
+          throw new Error("queue failed");
+        },
+      });
+      // The bound's timer cannot fire, so only the throw can end the wait.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const handler = { runs: {} as Record<string, unknown>, getRunById: () => ({}) };
+        let ran = false;
+        const call = usage
+          ._generate([new HumanMessage("x")], {}, {
+            runId: "stuck-run",
+            handlers: [handler],
+          } as never)
+          .then(() => {
+            ran = true;
+          });
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(ran).toBe(true);
+        await call;
+      } finally {
+        vi.useRealTimers();
+        installLangchainSpanContext(install, callbackPromises);
+      }
+    });
+
+    it("the caller's code between stream chunks does not run under the span", async () => {
+      for await (const _ of await model({ streamUsage: true }).stream([
+        new HumanMessage("Capital of France?"),
+      ])) {
+        expect(trace.getActiveSpan()).toBeUndefined();
+      }
+      expect(trace.getActiveSpan()).toBeUndefined();
+      await finished();
+    });
+  });
+
+  describe("installLangchainSpanContext", () => {
+    it("is a no-op on a module without the expected shape", () => {
+      expect(() => installLangchainSpanContext(undefined)()).not.toThrow();
+      expect(() =>
+        installLangchainSpanContext({ BaseChatModel: { prototype: {} } })(),
+      ).not.toThrow();
+    });
+
+    // Runs last: it takes down the install init() made.
+    it("does not stack, and uninstall restores the base class", async () => {
+      const base = chatModels.BaseChatModel.prototype as unknown as Record<
+        string,
+        { [key: symbol]: unknown }
+      >;
+      const marker = Symbol.for("rius.langchainSpanContext");
+      const original = base._generateUncached?.[marker];
+      // init() installed once already; installing again wraps the real method,
+      // not the wrapper that is there.
+      expect(original).toBeTypeOf("function");
+      const uninstall = installLangchainSpanContext(
+        chatModels as unknown as Parameters<typeof installLangchainSpanContext>[0],
+      );
+      expect(base._generateUncached?.[marker]).toBe(original);
+      uninstall();
+      expect(base._generateUncached).toBe(original);
+      expect(base._generateUncached?.[marker]).toBeUndefined();
+      // The concrete model's own methods, wrapped on first use, are restored too.
+      let owner: object | null = ChatOpenAI.prototype;
+      while (owner !== null && !Object.hasOwn(owner, "_generate")) {
+        owner = Object.getPrototypeOf(owner) as object | null;
+      }
+      const generate = (owner as Record<string, { [key: symbol]: unknown }> | null)?._generate;
+      expect(generate).toBeTypeOf("function");
+      expect(generate?.[marker]).toBeUndefined();
+    });
+  });
+});
