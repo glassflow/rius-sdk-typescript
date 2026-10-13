@@ -99,8 +99,8 @@ export interface InitOptions extends RiusOptions {
 const sinks = new WeakMap<RiusClient, DelegatingSpanProcessor>();
 
 /**
- * The processor sink for a client, so later-resolving instrumentation can
- * contribute a span processor after the provider has been constructed.
+ * The processor sink for a client, so a span processor can be added after the
+ * provider has been constructed.
  *
  * @internal Not re-exported from the package entry point; not public API.
  */
@@ -495,7 +495,7 @@ export function init(options: InitOptions = {}): RiusClient {
   const teardown: Array<() => void> = [];
   const ready = config.disabled
     ? Promise.resolve<string[]>([])
-    : enableInstrumentations(processors, provider, undefined, teardown, {
+    : enableInstrumentations(provider, undefined, teardown, {
         instrumentModules: options.instrumentModules,
       });
 

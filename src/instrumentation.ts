@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import { join, sep } from "node:path";
 import type { TracerProvider } from "@opentelemetry/api";
 import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
-import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { aggregatingTracer } from "./aggregatedUsage.js";
 import { installEmbeddingsUsage } from "./embeddingsUsage.js";
 import type { McpClientLike } from "./instrumentationMcp.js";
@@ -14,22 +13,16 @@ import { SDK_VERSION } from "./version.js";
  * `"self-applying"` is for an entry whose `load()` has already taken full
  * effect by the time it resolves (e.g. by monkey-patching a prototype)
  * rather than returning something for `enableInstrumentations` to attach.
- * There is nothing to hand to `registerInstrumentations` or a processor
- * sink, so it is a distinct kind rather than a marker on the loaded value:
+ * There is nothing to hand to `registerInstrumentations`, so it is a
+ * distinct kind rather than a marker on the loaded value:
  * dispatch stays a single switch on `kind`, and the loaded value's shape
  * does not have to double as a signal.
  */
-export type EntryKind = "instrumentation" | "processor" | "self-applying";
+export type EntryKind = "instrumentation" | "self-applying";
 
 export interface RegistryEntry {
   name: string;
   kind: EntryKind;
-  /**
-   * Where a `processor` entry goes in the sink. `"first"` for a processor that
-   * must see a span before the exporting processor queues it. Ignored by
-   * `instrumentation` and `self-applying` entries. Defaults to `"last"`.
-   */
-  insert?: "first" | "last";
   /**
    * The package whose listing in the app's `package.json` means the user wants
    * this integration. When `load()` resolves undefined and this package is
@@ -126,17 +119,6 @@ export function readDeclaredDependencies(dir: string): ReadonlySet<string> {
     return new Set();
   }
   return names;
-}
-
-/**
- * Anything that accepts a span processor after the fact. The provider itself is
- * not usable here: OpenTelemetry JS 2.x accepts `spanProcessors` at provider
- * construction only and has no `addSpanProcessor`, so `init()` passes its
- * delegating processor instead.
- */
-export interface ProcessorSink {
-  add(processor: SpanProcessor): void;
-  addFirst(processor: SpanProcessor): void;
 }
 
 // esbuild rewrites a bare `import()` into `require()` in the CJS build, and
@@ -691,13 +673,12 @@ export const REGISTRY: RegistryEntry[] = [
 ];
 
 /**
- * Enable every registry entry whose package is present. Processors go to
- * `sink`; instrumentations are registered against `tracerProvider`. Returns the
- * names enabled. Never throws: a broken optional integration must not break
- * init().
+ * Enable every registry entry whose package is present. Instrumentations are
+ * registered against `tracerProvider`; self-applying entries take effect in
+ * their own `load()`. Returns the names enabled. Never throws: a broken
+ * optional integration must not break init().
  */
 export async function enableInstrumentations(
-  sink: ProcessorSink,
   tracerProvider: TracerProvider,
   names?: string[],
   teardown?: Array<() => void>,
@@ -722,10 +703,7 @@ export async function enableInstrumentations(
         continue;
       }
 
-      if (entry.kind === "processor") {
-        if (entry.insert === "first") sink.addFirst(loaded as SpanProcessor);
-        else sink.add(loaded as SpanProcessor);
-      } else if (entry.kind === "instrumentation") {
+      if (entry.kind === "instrumentation") {
         // The disable function is what makes a later init() work: the
         // OpenInference instrumentations guard against double patching, so
         // unless shutdown() disables this one, its patches stay bound to the

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TracerProvider } from "@opentelemetry/api";
-import { InMemorySpanExporter, type SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import {
@@ -37,16 +37,8 @@ afterEach(async () => {
 /** Structural stand-in: registerInstrumentations only ever calls getTracer(). */
 const tracerProvider = { getTracer: () => undefined } as unknown as TracerProvider;
 
-function makeSink() {
-  return { add: vi.fn(), addFirst: vi.fn() };
-}
-
-const inertProcessor: SpanProcessor = {
-  onStart() {},
-  onEnd() {},
-  async forceFlush() {},
-  async shutdown() {},
-};
+/** What a self-applying entry's load() resolves to once its patch ran. */
+const applied = true;
 
 /** Silences and records console.warn. Callers must mockRestore in a finally. */
 function spyOnWarn() {
@@ -249,62 +241,35 @@ describe("isUnresolved", () => {
 
 describe("enableInstrumentations", () => {
   it("skips entries whose optional package is absent and never throws", async () => {
-    const sink = makeSink();
-    const enabled = await enableInstrumentations(sink, tracerProvider, [
-      "definitely-not-installed",
-    ]);
+    const enabled = await enableInstrumentations(tracerProvider, ["definitely-not-installed"]);
     expect(enabled).toEqual([]);
-    expect(sink.add).not.toHaveBeenCalled();
-    expect(sink.addFirst).not.toHaveBeenCalled();
   });
 
   it("returns the names it enabled and nothing else", async () => {
-    const sink = makeSink();
     await withEntry(
-      { name: "test-ok-entry", kind: "processor", load: async () => inertProcessor },
+      { name: "test-ok-entry", kind: "self-applying", load: async () => applied },
       async () => {
-        const enabled = await enableInstrumentations(sink, tracerProvider, [
+        const enabled = await enableInstrumentations(tracerProvider, [
           "test-ok-entry",
           "definitely-not-installed",
         ]);
         expect(enabled).toEqual(["test-ok-entry"]);
-        expect(sink.add).toHaveBeenCalledWith(inertProcessor);
-      },
-    );
-  });
-
-  it('routes insert:"first" entries to addFirst and the rest to add', async () => {
-    const sink = makeSink();
-    await withEntry(
-      {
-        name: "test-first-entry",
-        kind: "processor",
-        insert: "first",
-        load: async () => inertProcessor,
-      },
-      async () => {
-        await enableInstrumentations(sink, tracerProvider, ["test-first-entry"]);
-        expect(sink.addFirst).toHaveBeenCalledWith(inertProcessor);
-        expect(sink.add).not.toHaveBeenCalled();
       },
     );
   });
 
   it("does not throw when a registry entry's load() rejects, and omits it from the result", async () => {
-    const sink = makeSink();
     await withEntry(
       {
         name: "test-broken-entry",
-        kind: "processor",
+        kind: "self-applying",
         load: () => Promise.reject(new Error("integration exploded")),
       },
       async () => {
         const warn = spyOnWarn();
         try {
-          const enabled = await enableInstrumentations(sink, tracerProvider, ["test-broken-entry"]);
+          const enabled = await enableInstrumentations(tracerProvider, ["test-broken-entry"]);
           expect(enabled).toEqual([]);
-          expect(sink.add).not.toHaveBeenCalled();
-          expect(sink.addFirst).not.toHaveBeenCalled();
         } finally {
           warn.mockRestore();
         }
@@ -315,9 +280,8 @@ describe("enableInstrumentations", () => {
 
 describe("enableInstrumentations diagnostics", () => {
   it("warns once naming the entry when load() throws, and still enables the others", async () => {
-    const sink = makeSink();
     await withEntry(
-      { name: "test-healthy-entry", kind: "processor", load: async () => inertProcessor },
+      { name: "test-healthy-entry", kind: "self-applying", load: async () => applied },
       () =>
         withEntry(
           {
@@ -328,7 +292,7 @@ describe("enableInstrumentations diagnostics", () => {
           async () => {
             const warn = spyOnWarn();
             try {
-              const enabled = await enableInstrumentations(sink, tracerProvider, [
+              const enabled = await enableInstrumentations(tracerProvider, [
                 "test-throwing-entry",
                 "test-healthy-entry",
               ]);
@@ -352,13 +316,12 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("stays quiet when load() resolves undefined, because that means absent", async () => {
-    const sink = makeSink();
     await withEntry(
-      { name: "test-absent-entry", kind: "processor", load: async () => undefined },
+      { name: "test-absent-entry", kind: "self-applying", load: async () => undefined },
       async () => {
         const warn = spyOnWarn();
         try {
-          const enabled = await enableInstrumentations(sink, tracerProvider, ["test-absent-entry"]);
+          const enabled = await enableInstrumentations(tracerProvider, ["test-absent-entry"]);
           expect(enabled).toEqual([]);
           // The regression guard: warning here would make every consumer who
           // skipped an optional peer see noise at startup.
@@ -371,7 +334,6 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("warns once when load() resolves undefined for a package the app lists in package.json", async () => {
-    const sink = makeSink();
     await withEntry(
       {
         name: "test-declared-entry",
@@ -383,7 +345,6 @@ describe("enableInstrumentations diagnostics", () => {
         const warn = spyOnWarn();
         try {
           const enabled = await enableInstrumentations(
-            sink,
             tracerProvider,
             ["test-declared-entry"],
             undefined,
@@ -403,7 +364,6 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("stays quiet when the unloaded package is not listed in package.json", async () => {
-    const sink = makeSink();
     await withEntry(
       {
         name: "test-declared-entry",
@@ -415,7 +375,6 @@ describe("enableInstrumentations diagnostics", () => {
         const warn = spyOnWarn();
         try {
           const enabled = await enableInstrumentations(
-            sink,
             tracerProvider,
             ["test-declared-entry"],
             undefined,
@@ -431,19 +390,17 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("does not warn for a listed package that loaded", async () => {
-    const sink = makeSink();
     await withEntry(
       {
         name: "test-declared-entry",
-        kind: "processor",
+        kind: "self-applying",
         optInPackage: "test-declared-pkg",
-        load: async () => inertProcessor,
+        load: async () => applied,
       },
       async () => {
         const warn = spyOnWarn();
         try {
           const enabled = await enableInstrumentations(
-            sink,
             tracerProvider,
             ["test-declared-entry"],
             undefined,
@@ -476,7 +433,6 @@ describe("enableInstrumentations diagnostics", () => {
           const warn = spyOnWarn();
           try {
             const enabled = await enableInstrumentations(
-              makeSink(),
               tracerProvider,
               ["test-declared-entry"],
               undefined,
@@ -510,7 +466,6 @@ describe("enableInstrumentations diagnostics", () => {
             throw new Error("cannot read the working directory");
           });
           const enabled = await enableInstrumentations(
-            makeSink(),
             tracerProvider,
             ["test-declared-a", "test-declared-b"],
             undefined,
@@ -542,7 +497,7 @@ describe("enableInstrumentations diagnostics", () => {
         async () => {
           const warn = spyOnWarn();
           try {
-            await enableInstrumentations(makeSink(), tracerProvider, ["test-declared-entry"]);
+            await enableInstrumentations(tracerProvider, ["test-declared-entry"]);
             expect(warn).toHaveBeenCalledTimes(1);
             expect(String(warn.mock.calls[0]?.[0])).toContain("test-declared-pkg");
           } finally {
@@ -571,9 +526,7 @@ describe("enableInstrumentations diagnostics", () => {
         async () => {
           const warn = spyOnWarn();
           try {
-            const enabled = await enableInstrumentations(makeSink(), tracerProvider, [
-              "test-declared-entry",
-            ]);
+            const enabled = await enableInstrumentations(tracerProvider, ["test-declared-entry"]);
             expect(enabled).toEqual([]);
             expect(warn).not.toHaveBeenCalled();
           } finally {
@@ -587,7 +540,6 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("reads the declared set at most once per call, and only when an entry needs it", async () => {
-    const sink = makeSink();
     const entry = (name: string): RegistryEntry => ({
       name,
       kind: "instrumentation",
@@ -602,7 +554,6 @@ describe("enableInstrumentations diagnostics", () => {
             () => new Set(["test-declared-a-pkg", "test-declared-b-pkg"]),
           );
           await enableInstrumentations(
-            sink,
             tracerProvider,
             ["test-declared-a", "test-declared-b"],
             undefined,
@@ -613,7 +564,7 @@ describe("enableInstrumentations diagnostics", () => {
 
           // Nothing unloaded, or nothing carrying an opt-in package: never read.
           declaredDependencies.mockClear();
-          await enableInstrumentations(sink, tracerProvider, [], undefined, {
+          await enableInstrumentations(tracerProvider, [], undefined, {
             declaredDependencies,
           });
           expect(declaredDependencies).not.toHaveBeenCalled();
@@ -625,18 +576,17 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("warns without throwing when load() rejects with a non-Error value", async () => {
-    const sink = makeSink();
     await withEntry(
       {
         name: "test-nonerror-entry",
-        kind: "processor",
+        kind: "self-applying",
         load: () => Promise.reject("just a string"),
       },
       async () => {
         const warn = spyOnWarn();
         try {
           await expect(
-            enableInstrumentations(sink, tracerProvider, ["test-nonerror-entry"]),
+            enableInstrumentations(tracerProvider, ["test-nonerror-entry"]),
           ).resolves.toEqual([]);
           expect(warn).toHaveBeenCalledTimes(1);
           const message = String(warn.mock.calls[0]?.[0]);

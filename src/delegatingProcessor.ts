@@ -2,10 +2,10 @@ import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 
 /**
- * Span processors can only be given to a provider at construction, but the
- * auto-instrumentation registry resolves asynchronously and may contribute one
- * afterwards. This processor is registered up front and forwards to a list that
- * can grow later.
+ * Span processors can only be given to a provider at construction, but some
+ * are added after it (the heartbeat's open-root tracker, for one). This
+ * processor is registered up front and forwards to a list that can grow
+ * later.
  *
  * Spans that already ENDED before a delegate is added are not replayed to it.
  */
@@ -17,12 +17,9 @@ export class DelegatingSpanProcessor implements SpanProcessor {
   }
 
   /**
-   * Insert ahead of existing delegates, for a processor that must observe a span
-   * before the exporting processor queues it.
-   *
-   * Required by attribute-transforming processors: once a span is queued for
-   * export, later mutation is not guaranteed to be seen, and attributes a
-   * transform ADDS would bypass the masking applied in the exporter chain.
+   * Insert ahead of existing delegates, for a processor that must observe a
+   * span before the pipeline's own processors do: normalization rewrites the
+   * attributes in place, so only a processor added first sees them raw.
    */
   addFirst(processor: SpanProcessor): void {
     this.delegates.unshift(processor);
