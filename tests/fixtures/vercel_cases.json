@@ -525,6 +525,20 @@
       }
     },
     {
+      "name": "a reasoning count on a span with an operation id not mapped here stays",
+      "input": {
+        "ai.operationId": "ai.someFutureOperation",
+        "gen_ai.operation.name": "chat",
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      },
+      "expected": {
+        "ai.operationId": "ai.someFutureOperation",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      }
+    },
+    {
       "name": "a reasoning count on a span that is not GenAI stays",
       "input": {
         "ai.usage.outputTokenDetails.reasoningTokens": 3
