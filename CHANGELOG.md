@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.1.0...v1.1.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* drop a request bag's tool definitions when llm.tools supplied them ([#120](https://github.com/glassflow/rius-sdk-typescript/issues/120)) ([064d112](https://github.com/glassflow/rius-sdk-typescript/commit/064d112af930be6b734742fc25171a2138b6c54b))
+* map pydantic-ai's thinking_tokens and thoughts_tokens to the canonical reasoning count ([#119](https://github.com/glassflow/rius-sdk-typescript/issues/119)) ([8b11f6e](https://github.com/glassflow/rius-sdk-typescript/commit/8b11f6ef894c8fc0904d9596336ac47b8366df46))
+* name a LangChain run's provider from ls_provider when no provider key is set ([#123](https://github.com/glassflow/rius-sdk-typescript/issues/123)) ([b6c703a](https://github.com/glassflow/rius-sdk-typescript/commit/b6c703a732c21d7d30d65cf263f6acb7361b6fcc))
+* record OpenAI embeddings token counts the OpenInference instrumentation leaves out ([#124](https://github.com/glassflow/rius-sdk-typescript/issues/124)) ([066e896](https://github.com/glassflow/rius-sdk-typescript/commit/066e8969f2802a52ed9653671a891f050baee642))
+
 ## [1.1.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.0.0...v1.1.0) (2026-10-12)
 
 
