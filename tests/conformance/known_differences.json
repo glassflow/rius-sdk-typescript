@@ -10,6 +10,51 @@
       "family": "openinference-llama-index",
       "key": "gen_ai.response.time_to_first_chunk",
       "reason": "As openinference-openai."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.input_tokens",
+      "reason": "LiteLLM is Python-only, so this SDK never sees these spans live and does not move a LiteLLM wrapper's usage. The Python SDK, the reference here, moves the completion span's usage to rius.aggregated_usage.* when its OpenAI child recorded the same call."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.output_tokens",
+      "reason": "As gen_ai.usage.input_tokens."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.cache_read.input_tokens",
+      "reason": "As gen_ai.usage.input_tokens."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.reasoning.output_tokens",
+      "reason": "As gen_ai.usage.input_tokens."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "rius.aggregated_usage.input_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "rius.aggregated_usage.output_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "rius.aggregated_usage.cache_read.input_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "rius.aggregated_usage.reasoning.output_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.response.time_to_first_chunk",
+      "reason": "As openinference-openai."
     }
   ]
 }
