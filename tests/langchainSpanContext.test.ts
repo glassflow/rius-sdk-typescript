@@ -1,7 +1,7 @@
 import http from "node:http";
 import { trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RiusClient, init } from "../src/client.js";
 import { installLangchainSpanContext } from "../src/langchainSpanContext.js";
 
@@ -18,8 +18,10 @@ import { installLangchainSpanContext } from "../src/langchainSpanContext.js";
 const { ChatOpenAI } = await import("@langchain/openai");
 const { HumanMessage } = await import("@langchain/core/messages");
 const { BaseCallbackHandler } = await import("@langchain/core/callbacks/base");
-const { awaitAllCallbacks } = await import("@langchain/core/callbacks/promises");
-const { BaseChatModel } = await import("@langchain/core/language_models/chat_models");
+const callbackPromises = await import("@langchain/core/callbacks/promises");
+const { awaitAllCallbacks, consumeCallback } = callbackPromises;
+const chatModels = await import("@langchain/core/language_models/chat_models");
+const { BaseChatModel } = chatModels;
 const { AIMessage } = await import("@langchain/core/messages");
 const { ChatPromptTemplate } = await import("@langchain/core/prompts");
 // The ESM namespace @langchain/openai imports, handed to init() so the openai
@@ -302,18 +304,73 @@ describeLangChain("LangChain with the openai instrumentation", () => {
       expect(usage.activeDuringCall.at(-1)).toBeUndefined();
     });
 
+    it("waits for a span whose start is queued behind a busy callback", async () => {
+      // Another call's callback holds the queue for a moment, so this call's
+      // span starts after the model is called: well within the bound, so the
+      // call still waits for it and nests.
+      const usage = new UsageOnlyModel({});
+      void consumeCallback(() => new Promise<void>((resolve) => setTimeout(resolve, 10)), false);
+      await usage.invoke([new HumanMessage("Capital of France?")]);
+      const active = usage.activeDuringCall.at(-1) as ReadableSpan | undefined;
+      const outer = (await finished()).find((span) => span.instrumentationScope.name === LANGCHAIN);
+      expect(outer).toBeDefined();
+      expect(active?.spanContext().spanId).toBe(outer?.spanContext().spanId);
+    });
+
     it("gives up waiting for a span that never starts", async () => {
       const usage = new UsageOnlyModel({});
       await usage.invoke([new HumanMessage("warm up")]);
       await finished();
       // The run is known, its span never arrives: a start callback that was
-      // dropped, or one stuck behind the caller.
+      // dropped, or one stuck behind the caller. The queue is held until the
+      // call is done, so only the bound can end the wait.
+      let release = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      void consumeCallback(() => held, false);
       const handler = { runs: {} as Record<string, unknown>, getRunById: () => ({}) };
-      await usage._generate([new HumanMessage("x")], {}, {
-        runId: "stuck-run",
-        handlers: [handler],
-      } as never);
-      expect(usage.activeDuringCall.at(-1)).toBeUndefined();
+      try {
+        await usage._generate([new HumanMessage("x")], {}, {
+          runId: "stuck-run",
+          handlers: [handler],
+        } as never);
+        expect(usage.activeDuringCall.at(-1)).toBeUndefined();
+      } finally {
+        release();
+      }
+    }, 2_000);
+
+    it("runs at once when the callback queue throws", async () => {
+      const usage = new UsageOnlyModel({});
+      await usage.invoke([new HumanMessage("warm up")]);
+      await finished();
+      const install = chatModels as unknown as Parameters<typeof installLangchainSpanContext>[0];
+      installLangchainSpanContext(install, {
+        consumeCallback: () => {
+          throw new Error("queue failed");
+        },
+      });
+      // The bound's timer cannot fire, so only the throw can end the wait.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const handler = { runs: {} as Record<string, unknown>, getRunById: () => ({}) };
+        let ran = false;
+        const call = usage
+          ._generate([new HumanMessage("x")], {}, {
+            runId: "stuck-run",
+            handlers: [handler],
+          } as never)
+          .then(() => {
+            ran = true;
+          });
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(ran).toBe(true);
+        await call;
+      } finally {
+        vi.useRealTimers();
+        installLangchainSpanContext(install, callbackPromises);
+      }
     });
 
     it("the caller's code between stream chunks does not run under the span", async () => {
@@ -337,7 +394,6 @@ describeLangChain("LangChain with the openai instrumentation", () => {
 
     // Runs last: it takes down the install init() made.
     it("does not stack, and uninstall restores the base class", async () => {
-      const chatModels = await import("@langchain/core/language_models/chat_models");
       const base = chatModels.BaseChatModel.prototype as unknown as Record<
         string,
         { [key: symbol]: unknown }
