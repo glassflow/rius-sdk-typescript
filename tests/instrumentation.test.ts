@@ -3,15 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TracerProvider } from "@opentelemetry/api";
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  type ReadableSpan,
-  SimpleSpanProcessor,
-  type SpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
+import { InMemorySpanExporter, type SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, getTracer, init, spanProcessorSink } from "../src/client.js";
+import { type RiusClient, init } from "../src/client.js";
 import {
   REGISTRY,
   type RegistryEntry,
@@ -79,37 +73,11 @@ function scratchDir(files: Record<string, string>): { dir: string; cleanup: () =
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** Attributes as the Vercel AI SDK sets them on a generateText span. */
-const VERCEL_SPAN_ATTRIBUTES = {
-  "operation.name": "ai.generateText.doGenerate",
-  // The attribute the transform is gated on: every v5/v6 span carries it.
-  "ai.operationId": "ai.generateText.doGenerate",
-  "ai.model.id": "gpt-4o-mini",
-  "ai.model.provider": "openai",
-  "ai.prompt": JSON.stringify({ prompt: "what is 2+2" }),
-  "ai.response.text": "4",
-  "ai.settings.maxOutputTokens": 100,
-};
-
-/** A finished span shaped like one the Vercel AI SDK emits. */
-function vercelSpan(operationId = "ai.generateText.doGenerate"): ReadableSpan {
-  const exporter = new InMemorySpanExporter();
-  const provider = new BasicTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
-  });
-  const span = provider.getTracer("test").startSpan(operationId, {
-    attributes: { ...VERCEL_SPAN_ATTRIBUTES, "ai.operationId": operationId },
-  });
-  span.end();
-  const finished = exporter.getFinishedSpans()[0];
-  if (finished === undefined) throw new Error("test setup: no finished span");
-  return finished;
-}
-
 describe("REGISTRY", () => {
-  it("declares both entry kinds, since Vercel support is a processor not an instrumentation", () => {
+  it("declares the kind of each entry", () => {
     const kinds = Object.fromEntries(REGISTRY.map((e) => [e.name, e.kind]));
-    expect(kinds["vercel-ai"]).toBe("processor");
+    expect(kinds["vercel-ai"]).toBe("self-applying");
+    expect(kinds.mcp).toBe("self-applying");
     expect(kinds.openai).toBe("instrumentation");
     expect(kinds.anthropic).toBe("instrumentation");
     expect(kinds.langchain).toBe("instrumentation");
@@ -117,10 +85,6 @@ describe("REGISTRY", () => {
 
   it("has unique names", () => {
     expect(new Set(REGISTRY.map((e) => e.name)).size).toBe(REGISTRY.length);
-  });
-
-  it("marks vercel-ai for insertion first, so masking still sees what it adds", () => {
-    expect(REGISTRY.find((e) => e.name === "vercel-ai")?.insert).toBe("first");
   });
 
   it("names the package whose listing in package.json means the user wants anthropic or openai", () => {
@@ -183,7 +147,7 @@ describe("readDeclaredDependencies", () => {
 });
 
 describe("isUnresolved", () => {
-  const spec = "@arizeai/openinference-vercel";
+  const spec = "@langchain/core";
 
   it("treats a failure to resolve the requested specifier as absent", () => {
     const messages = [
@@ -201,10 +165,11 @@ describe("isUnresolved", () => {
   });
 
   it("treats a SUBPATH specifier as absent when the message names only the package", () => {
-    // The case production actually hits: the vercel-ai entry imports
-    // "<pkg>/utils", but Node's resolution error names only "<pkg>". Requiring
-    // the full specifier warned every consumer who skipped the optional peer.
-    const subpath = `${spec}/utils`;
+    // The case production actually hits: the langchain entry imports
+    // "<pkg>/callbacks/manager", but Node's resolution error names only
+    // "<pkg>". Requiring the full specifier warned every consumer who skipped
+    // the optional peer.
+    const subpath = `${spec}/callbacks/manager`;
     const messages = [
       `Cannot find package '${spec}' imported from /app/node_modules/@glassflow-ai/rius/dist/index.js`,
       `Cannot find module '${spec}'`,
@@ -261,7 +226,7 @@ describe("isUnresolved", () => {
   it("classifies the error the real loader throws for an absent scoped subpath", async () => {
     // Not a transcribed message: whatever the active loader actually throws for
     // a subpath import of a package that is not installed. This is the shape the
-    // vercel-ai entry hits on every machine without the optional peer, and it is
+    // langchain entry hits on every machine without the optional peer, and it is
     // the case a hand-written table missed.
     const absent = "@totally/absent-pkg/utils";
     let thrown: unknown = "nothing was thrown";
@@ -685,62 +650,13 @@ describe("enableInstrumentations diagnostics", () => {
   });
 });
 
-// The @arizeai/openinference-vercel devDependency declares engines: >=22, and
-// its own peers (ai, @ai-sdk/otel) target the same floor, so loading it on the
-// Node 18 and 20 legs of the CI matrix is not expected to work. Only the tests
-// that actually load the package are gated; everything else runs on every leg.
-const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
-const describeWithVercelPackage = describe.skipIf(nodeMajor < 22);
-
-describeWithVercelPackage("the vercel-ai entry", () => {
-  it("loads a transforming processor from the installed package", async () => {
+describe("the vercel-ai entry", () => {
+  it("has nothing to enable without a tracer provider to register with", async () => {
+    // ai v5/v6 spans are mapped by the normalizer and need no entry; ai v7
+    // needs a tracer provider for @ai-sdk/otel to be registered against.
     const entry = REGISTRY.find((e) => e.name === "vercel-ai");
     expect(entry).toBeDefined();
-    const loaded = (await entry?.load()) as SpanProcessor | undefined;
-    expect(loaded).toBeDefined();
-    expect(typeof loaded?.onEnd).toBe("function");
-  });
-
-  it("is reported as enabled and leaves a span the normalizer maps to it", async () => {
-    const sink = makeSink();
-    const enabled = await enableInstrumentations(sink, tracerProvider, ["vercel-ai"]);
-    expect(enabled).toContain("vercel-ai");
-    expect(sink.addFirst).toHaveBeenCalledTimes(1);
-    expect(sink.add).not.toHaveBeenCalled();
-
-    const processor = sink.addFirst.mock.calls[0]?.[0] as SpanProcessor;
-    const span = vercelSpan();
-    const before = { ...span.attributes };
-    processor.onEnd(span);
-    expect(span.attributes).toEqual(before);
-  });
-
-  it("adds OpenInference attributes to an operation the normalizer does not map", async () => {
-    const sink = makeSink();
-    await enableInstrumentations(sink, tracerProvider, ["vercel-ai"]);
-    const processor = sink.addFirst.mock.calls[0]?.[0] as SpanProcessor;
-    const span = vercelSpan("ai.generateImage");
-    expect(span.attributes["llm.model_name"]).toBeUndefined();
-
-    processor.onEnd(span);
-
-    expect(span.attributes["openinference.span.kind"]).toBe("LLM");
-    expect(span.attributes["llm.model_name"]).toBe("gpt-4o-mini");
-    expect(span.attributes["output.value"]).toBe("4");
-    // The transform ADDS content, which is why it has to run ahead of the
-    // exporting processor: masking lives in the exporter chain.
-    expect(span.attributes["input.value"]).toBe(JSON.stringify({ prompt: "what is 2+2" }));
-    // Original attributes survive; the transform only adds.
-    expect(span.attributes["ai.model.id"]).toBe("gpt-4o-mini");
-  });
-
-  it("does not export on its own, so spans are never exported twice", async () => {
-    const entry = REGISTRY.find((e) => e.name === "vercel-ai");
-    const loaded = (await entry?.load()) as SpanProcessor;
-    // A processor that exported would need somewhere to export to; ours takes no
-    // exporter and its flush/shutdown are inert.
-    await expect(loaded.forceFlush()).resolves.toBeUndefined();
-    await expect(loaded.shutdown()).resolves.toBeUndefined();
+    expect(await entry?.load()).toBeUndefined();
   });
 });
 
@@ -768,39 +684,6 @@ describe("init().ready", () => {
     );
     expect(outcome.settled).toBe("resolved");
     expect(outcome.settled === "resolved" && Array.isArray(outcome.names)).toBe(true);
-    await client.shutdown();
-  });
-});
-
-describeWithVercelPackage("init() processor ordering", () => {
-  it("gives the vercel-ai transform the span before the exporting processor", async () => {
-    const client = initTracked({
-      spanExporter: new InMemorySpanExporter(),
-      heartbeatTransport: async () => {},
-    });
-    expect(await client.ready).toContain("vercel-ai");
-
-    // A delegate appended with add() sits in the same relative position as the
-    // exporting processor init() registered: after anything addFirst placed. If
-    // it already sees the OpenInference attributes, the transform ran before the
-    // exporting processor could queue the span, which is the ordering that
-    // masking depends on.
-    let kindSeenDownstream: unknown = "downstream delegate never ran";
-    spanProcessorSink(client).add({
-      onStart() {},
-      onEnd(span) {
-        kindSeenDownstream = span.attributes["openinference.span.kind"];
-      },
-      async forceFlush() {},
-      async shutdown() {},
-    });
-
-    const span = getTracer().startSpan("ai.generateText.doGenerate", {
-      attributes: VERCEL_SPAN_ATTRIBUTES,
-    });
-    span.end();
-
-    expect(kindSeenDownstream).toBe("LLM");
     await client.shutdown();
   });
 });

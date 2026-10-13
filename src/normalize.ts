@@ -933,19 +933,27 @@ const VERCEL_OPERATION_ID = "ai.operationId";
  * repeats its calls' (from v6 on, and on v5's streams, it is the run's total),
  * so it moves to `rius.aggregated_usage.*` and is never counted twice.
  *
- * Only these ids are mapped. Any other (`ai.rerank`, `ai.generateImage`, ...)
- * keeps its `ai.*` keys apart from the identity ones and is left to the
- * @arizeai/openinference-vercel transform where that is installed.
+ * `operation` names the call where no kind of ours does: a rerank is neither a
+ * model call nor a retrieval, and the taxonomy has no reranker, so it gets the
+ * operation name alone.
+ *
+ * Only these ids are mapped. Any other keeps its `ai.*` keys apart from the
+ * identity ones. v5 and v6 trace nothing else: their image, speech and
+ * transcription calls take no telemetry settings.
  */
 interface VercelOperation {
-  readonly kind: SpanKind;
+  readonly kind?: SpanKind;
+  readonly operation?: string;
   readonly call: boolean;
 }
 
 /**
- * The operations mapped natively. The generate/stream wrappers are agent runs
+ * The operations mapped. The generate/stream wrappers are agent runs
  * (`invoke_agent`, as @ai-sdk/otel classifies them): each owns a loop of
- * model calls and tool executions.
+ * model calls and tool executions. A rerank is `rerank`, as @ai-sdk/otel
+ * names it; its documents (`ai.documents`) and ranking (`ai.ranking`, indices
+ * and scores) stay under the AI SDK's keys, where @ai-sdk/otel writes them
+ * too: the conventions define neither.
  */
 export const VERCEL_OPERATIONS: Readonly<Record<string, VercelOperation>> = {
   "ai.generateText": { kind: SpanKind.AGENT, call: false },
@@ -961,19 +969,14 @@ export const VERCEL_OPERATIONS: Readonly<Record<string, VercelOperation>> = {
   "ai.embed.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
   "ai.embedMany.doEmbed": { kind: SpanKind.EMBEDDING, call: true },
   "ai.toolCall": { kind: SpanKind.TOOL, call: false },
+  "ai.rerank": { operation: "rerank", call: false },
+  "ai.rerank.doRerank": { operation: "rerank", call: true },
 };
 
 function vercelOperation(raw: AttributeValue | undefined): VercelOperation | undefined {
   return typeof raw === "string" && Object.hasOwn(VERCEL_OPERATIONS, raw)
     ? VERCEL_OPERATIONS[raw]
     : undefined;
-}
-
-/** Whether this SDK maps the span's `ai.*` dialect itself (see VERCEL_OPERATIONS). */
-export function isNativeVercelSpan(attributes: Readonly<Record<string, unknown>>): boolean {
-  return (
-    vercelOperation(attributes[VERCEL_OPERATION_ID] as AttributeValue | undefined) !== undefined
-  );
 }
 
 /**
@@ -984,12 +987,13 @@ export function isNativeVercelSpan(attributes: Readonly<Record<string, unknown>>
 export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Expansion {
   const operation = vercelOperation(raw);
   if (operation === undefined) return { [VERCEL_OPERATION_ID]: raw };
+  const { kind } = operation;
   const produced: Expansion = {
     [VERCEL_OPERATION_ID]: raw,
-    [OPENINFERENCE_SPAN_KIND]: operation.kind,
-    [GEN_AI_OPERATION_NAME]: operationForKind(operation.kind),
+    [GEN_AI_OPERATION_NAME]: operation.operation ?? (kind && operationForKind(kind)),
   };
-  if (operation.kind === SpanKind.TOOL) produced[GEN_AI_TOOL_TYPE] = "function";
+  if (kind !== undefined) produced[OPENINFERENCE_SPAN_KIND] = kind;
+  if (kind === SpanKind.TOOL) produced[GEN_AI_TOOL_TYPE] = "function";
   return produced;
 }
 
@@ -2463,10 +2467,9 @@ export function responseIdFromOutput(
  * the contract the rest of the pipeline and the backend are written against.
  *
  * IN PLACE, at `onEnd`, rather than in an exporter wrapper. The JS OTel SDK
- * exposes `ReadableSpan.attributes` as a plain mutable object and this SDK
- * already mutates it at `onEnd` for the OpenInference Vercel transform
- * (instrumentation.ts), so a processor keeps one mutation model instead of
- * two. It also makes ORDERING a matter of processor position: registered
+ * exposes `ReadableSpan.attributes` as a plain mutable object, so a processor
+ * can rewrite the span it is handed without copying it. It also makes
+ * ORDERING a matter of processor position: registered
  * ahead of the exporting `BatchSpanProcessor`, this runs before the span is
  * queued and therefore before `MaskingSpanExporter`, which is required —
  * masking must only have to recognise canonical content keys, and reversed it
@@ -2513,8 +2516,7 @@ export class NormalizingSpanProcessor implements SpanProcessor {
   }
 
   onEnd(span: ReadableSpan): void {
-    // Ended spans have no setAttribute; the bag is writable by reference,
-    // which is the same seam the Vercel transform uses.
+    // Ended spans have no setAttribute; the bag is writable by reference.
     const attributes = span.attributes as Record<string, AttributeValue | undefined>;
     this.normalize(attributes, this.rules, (key, value) => {
       attributes[key] = value;

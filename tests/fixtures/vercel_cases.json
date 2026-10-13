@@ -569,20 +569,76 @@
       }
     },
     {
-      "name": "an operation not mapped here keeps its dialect",
+      "name": "a rerank run",
       "input": {
         "ai.operationId": "ai.rerank",
         "ai.model.provider": "cohere.reranking",
         "ai.model.id": "rerank-v3.5",
-        "ai.usage.tokens": 3,
-        "ai.prompt": "{\"query\":\"q\"}"
+        "ai.documents": [
+          "\"Berlin is the capital of Germany.\"",
+          "\"Paris is the capital of France.\""
+        ],
+        "ai.settings.maxRetries": 0
       },
       "expected": {
         "ai.operationId": "ai.rerank",
-        "ai.prompt": "{\"query\":\"q\"}",
-        "ai.usage.tokens": 3,
+        "ai.documents": [
+          "\"Berlin is the capital of Germany.\"",
+          "\"Paris is the capital of France.\""
+        ],
+        "ai.settings.maxRetries": 0,
+        "gen_ai.operation.name": "rerank",
         "gen_ai.provider.name": "cohere",
         "gen_ai.request.model": "rerank-v3.5"
+      }
+    },
+    {
+      "name": "a rerank call",
+      "input": {
+        "ai.operationId": "ai.rerank.doRerank",
+        "ai.model.provider": "cohere.reranking",
+        "ai.model.id": "rerank-v3.5",
+        "ai.documents": [
+          "\"Berlin is the capital of Germany.\"",
+          "\"Paris is the capital of France.\""
+        ],
+        "ai.ranking": [
+          "{\"index\":1,\"relevanceScore\":0.875}",
+          "{\"index\":0,\"relevanceScore\":0.25}"
+        ],
+        "ai.ranking.type": "text"
+      },
+      "expected": {
+        "ai.operationId": "ai.rerank.doRerank",
+        "ai.documents": [
+          "\"Berlin is the capital of Germany.\"",
+          "\"Paris is the capital of France.\""
+        ],
+        "ai.ranking": [
+          "{\"index\":1,\"relevanceScore\":0.875}",
+          "{\"index\":0,\"relevanceScore\":0.25}"
+        ],
+        "ai.ranking.type": "text",
+        "gen_ai.operation.name": "rerank",
+        "gen_ai.provider.name": "cohere",
+        "gen_ai.request.model": "rerank-v3.5"
+      }
+    },
+    {
+      "name": "an operation not mapped here keeps its dialect",
+      "input": {
+        "ai.operationId": "ai.generateSpeech",
+        "ai.model.provider": "openai.speech",
+        "ai.model.id": "tts-1",
+        "ai.usage.tokens": 3,
+        "ai.prompt": "{\"text\":\"hi\"}"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateSpeech",
+        "ai.prompt": "{\"text\":\"hi\"}",
+        "ai.usage.tokens": 3,
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "tts-1"
       }
     },
     {

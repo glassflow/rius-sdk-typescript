@@ -1,11 +1,7 @@
 import type { AttributeValue, Attributes } from "@opentelemetry/api";
 import type { ReadableSpan, Span, TimedEvent } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
-import {
-  NormalizingSpanProcessor,
-  VERCEL_FIRST_CHUNK_EVENT,
-  isNativeVercelSpan,
-} from "../src/normalize.js";
+import { NormalizingSpanProcessor, VERCEL_FIRST_CHUNK_EVENT } from "../src/normalize.js";
 import { GEN_AI_FIRST_TOKEN_EVENT } from "../src/semconv.js";
 import fixture from "./fixtures/vercel_cases.json" with { type: "json" };
 
@@ -88,6 +84,23 @@ describe("at span start", () => {
     });
   });
 
+  it("classifies a still-running rerank, which has no kind of ours", () => {
+    const attributes: Attributes = {
+      "ai.operationId": "ai.rerank.doRerank",
+      "ai.model.provider": "cohere.reranking",
+      "ai.model.id": "rerank-v3.5",
+      "ai.documents": ['"a"', '"b"'],
+    };
+    new NormalizingSpanProcessor().onStart(starting(attributes), {} as never);
+    expect(attributes).toEqual({
+      "ai.operationId": "ai.rerank.doRerank",
+      "gen_ai.operation.name": "rerank",
+      "gen_ai.provider.name": "cohere",
+      "gen_ai.request.model": "rerank-v3.5",
+      "ai.documents": ['"a"', '"b"'],
+    });
+  });
+
   it("names a still-running tool call", () => {
     const attributes: Attributes = {
       "ai.operationId": "ai.toolCall",
@@ -132,34 +145,5 @@ describe("the first-chunk event", () => {
     const events = [firstChunk()];
     new NormalizingSpanProcessor().onEnd(ended({}, events));
     expect(events.map((e) => e.name)).toEqual([GEN_AI_FIRST_TOKEN_EVENT]);
-  });
-});
-
-describe("isNativeVercelSpan", () => {
-  it("claims the generate, stream, embed and tool operations", () => {
-    for (const id of [
-      "ai.generateText",
-      "ai.generateText.doGenerate",
-      "ai.streamText",
-      "ai.streamText.doStream",
-      "ai.generateObject",
-      "ai.generateObject.doGenerate",
-      "ai.streamObject",
-      "ai.streamObject.doStream",
-      "ai.embed",
-      "ai.embed.doEmbed",
-      "ai.embedMany",
-      "ai.embedMany.doEmbed",
-      "ai.toolCall",
-    ]) {
-      expect(isNativeVercelSpan({ "ai.operationId": id }), id).toBe(true);
-    }
-  });
-
-  it("leaves the rest to the transform", () => {
-    for (const id of ["ai.rerank", "ai.rerank.doRerank", "ai.generateImage", "generateText", 1]) {
-      expect(isNativeVercelSpan({ "ai.operationId": id }), String(id)).toBe(false);
-    }
-    expect(isNativeVercelSpan({})).toBe(false);
   });
 });
