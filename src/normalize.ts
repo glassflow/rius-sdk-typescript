@@ -1426,6 +1426,38 @@ function vercelToolChoice(raw: AttributeValue): AttributeValue | undefined {
   return compactJson(choice);
 }
 
+/** @ai-sdk/otel's reasoning count and its step operation. Source spellings, inline. */
+const VERCEL_OTEL_REASONING_TOKENS = "ai.usage.outputTokenDetails.reasoningTokens";
+const VERCEL_OTEL_AGENT_STEP = "agent_step";
+
+/**
+ * The reasoning split on @ai-sdk/otel's spans (v7). Its GenAI-native spans
+ * carry no `ai.operationId` and write every count under `gen_ai.usage.*`
+ * except this one, which the conventions name but the integration writes only
+ * under the AI SDK's spelling, and only with its `usage` option (which the SDK
+ * passes; see registerVercelTelemetry). A step's count repeats its model
+ * call's, so it goes under `rius.aggregated_usage.*`; a run's total is moved
+ * there by moveAggregatedUsage with the rest of its usage. The other detail
+ * keys that option adds have no canonical counterpart and stay.
+ *
+ * Only on a span with no `ai.operationId` that names a GenAI operation. The
+ * v6 LegacyOpenTelemetry integration writes this key too, but its spans carry
+ * `ai.operationId`, so normalizeVercelSpan never sends them here.
+ */
+function vercelOtelReasoning(attributes: Record<string, AttributeValue | undefined>): void {
+  if (attributes[VERCEL_OTEL_REASONING_TOKENS] === undefined) return;
+  const operation = attributes[GEN_AI_OPERATION_NAME];
+  if (typeof operation !== "string") return;
+  const prefix =
+    operation === VERCEL_OTEL_AGENT_STEP ? RIUS_AGGREGATED_USAGE_PREFIX : GEN_AI_USAGE_PREFIX;
+  mapVercel(
+    attributes,
+    prefix + GEN_AI_USAGE_REASONING_OUTPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
+    [VERCEL_OTEL_REASONING_TOKENS],
+    (value) => toInt([value]),
+  );
+}
+
 /** The end-only half of the dialect; see {@link normalizeVercelSpan}. */
 function vercelUsage(
   attributes: Record<string, AttributeValue | undefined>,
@@ -1461,12 +1493,17 @@ function vercelUsage(
  *   do (see dropEmbeddingVectors). The inputs (`ai.value`, `ai.values`) stay:
  *   the conventions define no embedding input.
  *
- * Only on a span whose `ai.operationId` is one of {@link VERCEL_OPERATIONS}.
- * Every canonical key already present wins, and every mapped source goes.
+ * Only on a span whose `ai.operationId` is one of {@link VERCEL_OPERATIONS}; a
+ * span with none (@ai-sdk/otel's) gets only its reasoning split mapped (see
+ * vercelOtelReasoning). Every canonical key already present wins, and every
+ * mapped source goes.
  */
 export function normalizeVercelSpan(attributes: Record<string, AttributeValue | undefined>): void {
   const operation = vercelOperation(attributes[VERCEL_OPERATION_ID]);
-  if (operation === undefined) return;
+  if (operation === undefined) {
+    if (attributes[VERCEL_OPERATION_ID] === undefined) vercelOtelReasoning(attributes);
+    return;
+  }
   vercelUsage(attributes, operation);
 
   const prompt = vercelPrompt(attributes);

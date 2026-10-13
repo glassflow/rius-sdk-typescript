@@ -456,6 +456,98 @@
       }
     },
     {
+      "name": "@ai-sdk/otel's reasoning split on a model call",
+      "input": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.output_tokens": 9,
+        "ai.usage.outputTokenDetails.reasoningTokens": 3,
+        "ai.usage.outputTokenDetails.textTokens": 6,
+        "ai.usage.inputTokenDetails.noCacheTokens": 26
+      },
+      "expected": {
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "gen_ai.usage.output_tokens": 9,
+        "gen_ai.usage.reasoning.output_tokens": 3,
+        "ai.usage.outputTokenDetails.textTokens": 6,
+        "ai.usage.inputTokenDetails.noCacheTokens": 26
+      }
+    },
+    {
+      "name": "@ai-sdk/otel's reasoning split on a run",
+      "input": {
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.usage.output_tokens": 9,
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      },
+      "expected": {
+        "gen_ai.operation.name": "invoke_agent",
+        "openinference.span.kind": "AGENT",
+        "gen_ai.usage.output_tokens": 9,
+        "gen_ai.usage.reasoning.output_tokens": 3
+      }
+    },
+    {
+      "name": "@ai-sdk/otel's reasoning split on a step repeats its model call's",
+      "input": {
+        "gen_ai.operation.name": "agent_step",
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      },
+      "expected": {
+        "gen_ai.operation.name": "agent_step",
+        "openinference.span.kind": "CHAIN",
+        "rius.aggregated_usage.reasoning.output_tokens": 3
+      }
+    },
+    {
+      "name": "a native reasoning count wins over @ai-sdk/otel's",
+      "input": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.reasoning.output_tokens": 5,
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      },
+      "expected": {
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "gen_ai.usage.reasoning.output_tokens": 5
+      }
+    },
+    {
+      "name": "an @ai-sdk/otel reasoning count that is not a number stays",
+      "input": {
+        "gen_ai.operation.name": "chat",
+        "ai.usage.outputTokenDetails.reasoningTokens": "three"
+      },
+      "expected": {
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "ai.usage.outputTokenDetails.reasoningTokens": "three"
+      }
+    },
+    {
+      "name": "a reasoning count on a span with an operation id not mapped here stays",
+      "input": {
+        "ai.operationId": "ai.someFutureOperation",
+        "gen_ai.operation.name": "chat",
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      },
+      "expected": {
+        "ai.operationId": "ai.someFutureOperation",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM",
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      }
+    },
+    {
+      "name": "a reasoning count on a span that is not GenAI stays",
+      "input": {
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      },
+      "expected": {
+        "ai.usage.outputTokenDetails.reasoningTokens": 3
+      }
+    },
+    {
       "name": "an embedding call",
       "input": {
         "ai.operationId": "ai.embedMany.doEmbed",

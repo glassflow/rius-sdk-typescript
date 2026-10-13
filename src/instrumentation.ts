@@ -471,7 +471,7 @@ async function registerVercelTelemetry(
   if (register === undefined) return false; // ai absent, or v5/v6: nothing to register
   const otel = await optional("@ai-sdk/otel");
   const OpenTelemetryIntegration = otel?.OpenTelemetry as
-    | (new (options: { tracer: unknown }) => unknown)
+    | (new (options: { tracer: unknown; usage: boolean }) => unknown)
     | undefined;
   if (OpenTelemetryIntegration === undefined) {
     console.warn(
@@ -489,9 +489,12 @@ async function registerVercelTelemetry(
   }
   // Wrapped because @ai-sdk/otel reports a run's total usage on its
   // invoke_agent span as well as each call's on its chat span; the wrapper
-  // lets the normalizer move that total out of gen_ai.usage.*.
+  // lets the normalizer move that total out of gen_ai.usage.*. `usage`
+  // because the integration writes the reasoning split only with it, and only
+  // under ai.usage.*, which the normalizer maps.
   const integration = new OpenTelemetryIntegration({
     tracer: aggregatingTracer(tracerProvider.getTracer(TRACER_NAME, SDK_VERSION)),
+    usage: true,
   });
   vercelTelemetryIntegration = integration;
   register(integration);

@@ -151,7 +151,7 @@ const START_TIME_IDENTITY: Record<string, Record<string, Record<string, unknown>
       "gen_ai.request.model": "gpt-4o",
       "gen_ai.request.temperature": 0.3,
     },
-    step: { "gen_ai.operation.name": "agent_step" },
+    step: { "gen_ai.operation.name": "agent_step", "openinference.span.kind": "CHAIN" },
     chat: {
       "gen_ai.operation.name": "chat",
       "openinference.span.kind": "LLM",
