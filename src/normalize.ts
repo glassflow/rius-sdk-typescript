@@ -562,6 +562,32 @@ function isLangChainRun(
 }
 
 /**
+ * The provider LangChain names in the run metadata's `ls_provider`, through
+ * the same spellings as llm.provider, which the Python LangChain
+ * instrumentation fills from this very key. It is the chat model class's own
+ * name for the API it calls (`openai` for `ChatOpenAI`, also behind a
+ * gateway).
+ */
+function langchainProvider(
+  read: Readonly<Record<string, AttributeValue>>,
+): AttributeValue | undefined {
+  const raw = read[METADATA];
+  if (typeof raw !== "string") return undefined;
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const named = (metadata as Record<string, unknown>).ls_provider;
+  if (typeof named !== "string" || named.trim() === "") return undefined;
+  return providerName([named]);
+}
+
+/**
  * Promote the spec-defined members of the request bag; keep the rest.
  *
  * The leftover members go back under `llm.invocation_parameters`, and that is
@@ -588,6 +614,13 @@ function isLangChainRun(
  * not what the call did: a `ChatOpenAI.stream()` call records `false` there.
  * An absent key is honest; that one is not. `read` holds the span's run
  * metadata, which identifies a LangChain run.
+ *
+ * A LangChain run also gets its provider from that metadata (`ls_provider`).
+ * The JS instrumentation records no provider key at all, so this is the only
+ * place a Node LangChain span can get one. The provider rules come earlier in
+ * the table and win, so llm.provider (which the Python instrumentation copies
+ * from `ls_provider`) and llm.system keep precedence, and a native
+ * gen_ai.provider.name wins as always.
  */
 export function invocationParameters(
   raw: AttributeValue | undefined,
@@ -626,11 +659,17 @@ export function invocationParameters(
     produced[target] = value;
     delete leftover[member];
   }
-  if (Object.keys(produced).length === 0) return { [LLM_INVOCATION_PARAMETERS]: raw }; // unchanged
+  const provider = langchain ? langchainProvider(read) : undefined;
+  if (Object.keys(produced).length === 0) {
+    const unchanged: Expansion = { [LLM_INVOCATION_PARAMETERS]: raw };
+    if (provider !== undefined) unchanged[GEN_AI_PROVIDER_NAME] = provider;
+    return unchanged;
+  }
   const expansion: Expansion = { ...produced };
   if (Object.keys(leftover).length > 0) {
     expansion[LLM_INVOCATION_PARAMETERS] = toAttributeValue(leftover);
   }
+  if (provider !== undefined) expansion[GEN_AI_PROVIDER_NAME] = provider;
   return expansion;
 }
 

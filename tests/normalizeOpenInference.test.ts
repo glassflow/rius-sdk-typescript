@@ -523,6 +523,60 @@ describe("the invocation-parameter bag", () => {
     expect(out.metadata).toBe(metadata);
   });
 
+  // The JS LangChain instrumentation records no provider key at all; its run
+  // metadata names it (ls_provider), through llm.provider's spellings.
+  it.each([
+    ["openai", "openai"],
+    ["anthropic", "anthropic"],
+    ["mistralai", "mistral_ai"],
+    ["google_vertexai", "google_vertexai"],
+  ])("names a LangChain run's provider from ls_provider %s", (lsProvider, expected) => {
+    const metadata = JSON.stringify({ ls_provider: lsProvider, ls_model_type: "chat" });
+    const out = normalized({
+      metadata,
+      "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o-mini", stream: false }),
+    });
+    expect(out["gen_ai.provider.name"]).toBe(expected);
+    expect(out.metadata).toBe(metadata);
+  });
+
+  it("names the provider even when the bag promotes nothing", () => {
+    const bag = JSON.stringify({ _type: "openai-chat", stop: null });
+    const metadata = JSON.stringify({ ls_provider: "openai" });
+    expect(normalized({ metadata, "llm.invocation_parameters": bag })).toEqual({
+      metadata,
+      "llm.invocation_parameters": bag,
+      "gen_ai.provider.name": "openai",
+    });
+  });
+
+  it.each([
+    [{ "llm.provider": "azure" }, "azure"],
+    [{ "llm.system": "anthropic" }, "anthropic"],
+    [{ "gen_ai.provider.name": "groq" }, "groq"],
+  ])("lets any provider key win over ls_provider (%o)", (other, expected) => {
+    const out = normalized({
+      ...other,
+      metadata: JSON.stringify({ ls_provider: "openai", ls_model_type: "chat" }),
+      "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o-mini" }),
+    });
+    expect(out["gen_ai.provider.name"]).toBe(expected);
+  });
+
+  it.each([
+    JSON.stringify({ tenant: "acme" }),
+    JSON.stringify({ ls_provider: "", ls_model_type: "chat" }),
+    JSON.stringify({ ls_provider: 7, ls_model_type: "chat" }),
+    "not json",
+  ])("names no provider without a named ls_provider (%s)", (metadata) => {
+    const out = normalized({
+      metadata,
+      "llm.invocation_parameters": JSON.stringify({ model: "gpt-4o-mini" }),
+    });
+    expect(out["gen_ai.provider.name"]).toBeUndefined();
+    expect(out.metadata).toBe(metadata);
+  });
+
   it("still takes stream from a bag that records the request body", () => {
     const out = normalized({
       metadata: JSON.stringify({ tenant: "acme" }),
