@@ -1484,6 +1484,8 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  *   where litellm and langchain leave them. Both present are concatenated,
  *   tools first, and only when every present member is a list. The members
  *   leave the bag, and a bag left empty is dropped rather than riding as `{}`.
+ *   When the indexed schemas were the source, the bag's members are
+ *   duplicates of them and leave the bag all the same.
  *
  * Native wins: a span already carrying `gen_ai.tool.definitions` keeps it,
  * and the sources are removed anyway because they are then duplicates.
@@ -1522,24 +1524,43 @@ export function normalizeToolDefinitions(
       }
     }
     for (const key of indexed.values()) delete attributes[key];
+    // litellm and langchain write the same definitions into the request bag
+    // as well. They are duplicates of the ones just reassembled, and go now:
+    // left behind, a second normalization would find a native
+    // gen_ai.tool.definitions and remove them then, so normalizing twice
+    // would differ from normalizing once.
+    takeBagDefinitions(attributes);
     if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(schemas);
     return;
   }
 
+  const definitions = takeBagDefinitions(attributes);
+  if (definitions !== undefined && !native) {
+    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+  }
+}
+
+/**
+ * Remove the request bag's tool-definition members and return them, or
+ * undefined (bag untouched) when it holds none, or holds them in a shape we
+ * cannot vouch is a list of definitions: the bag is content already, so
+ * leaving it is safe. A bag left empty goes too, rather than riding as `{}`.
+ */
+function takeBagDefinitions(
+  attributes: Record<string, AttributeValue | undefined>,
+): unknown[] | undefined {
   const bag = attributes[LLM_INVOCATION_PARAMETERS];
-  if (typeof bag !== "string") return;
+  if (typeof bag !== "string") return undefined;
   let payload: unknown;
   try {
     payload = JSON.parse(bag);
   } catch {
-    return;
+    return undefined;
   }
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const members = payload as Record<string, unknown>;
   const present = INVOCATION_PARAMETERS_CONTENT_MEMBERS.filter((m) => Object.hasOwn(members, m));
-  // Absent, or a shape we cannot vouch is a list of definitions: the bag is
-  // content already, so leaving it is safe.
-  if (present.length === 0 || !present.every((m) => Array.isArray(members[m]))) return;
+  if (present.length === 0 || !present.every((m) => Array.isArray(members[m]))) return undefined;
   const definitions = present.flatMap((m) => members[m] as unknown[]);
   const leftover = Object.fromEntries(
     Object.entries(members).filter(([key]) => !present.includes(key)),
@@ -1549,7 +1570,7 @@ export function normalizeToolDefinitions(
   } else {
     delete attributes[LLM_INVOCATION_PARAMETERS];
   }
-  if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+  return definitions;
 }
 
 /**

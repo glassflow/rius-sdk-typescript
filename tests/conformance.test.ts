@@ -241,6 +241,17 @@ function differences(family: string, got: ScenarioJson, want: Scenario): Differe
 
 type Known = { family: string; key: string; reason: string };
 
+/**
+ * Families whose second replay is allowed to differ, and why. An entry that
+ * stops being needed fails the test, as a stale known difference does.
+ */
+const SECOND_PASS_EXEMPT: Record<string, string> = {
+  "vercel-ai-v5":
+    "The @arizeai/openinference-vercel transform re-reads the ai.* keys it leaves on the span, " +
+    "so a second replay translates them again. In production the transform runs once (the " +
+    "sink's second pass has none), and native ai.* mapping is planned to replace it.",
+};
+
 describe("the shared recordings from rius-semconv", () => {
   const recordings = loadRecordings();
   const known: Known[] = JSON.parse(readFileSync(KNOWN, "utf8")).differences;
@@ -278,6 +289,35 @@ describe("the shared recordings from rius-semconv", () => {
         .filter((k) => !used.has(`${k.family} ${k.key}`))
         .map((k) => `${k.family} ${k.key}`);
       expect(stale, "known differences that no longer occur").toEqual([]);
+    }
+  });
+
+  it("come out of a second normalization unchanged", async () => {
+    // Normalized spans are normalized again in production: the sink normalizes
+    // what this SDK exported. So this SDK's own output, replayed through it
+    // again, must not change.
+    const changed: string[] = [];
+    const stillExempt = new Set<string>();
+    let spans = 0;
+    for (const rec of recordings) {
+      if (NEEDS_VERCEL_TRANSFORM.has(rec.family) && nodeMajor < 22) continue;
+      for (const raw of rec.raw) {
+        const once = (await replay(raw, rec.aggregating)) as unknown as Scenario;
+        spans += once.spans.length;
+        for (const d of differences(rec.family, await replay(once, rec.aggregating), once)) {
+          if (Object.hasOwn(SECOND_PASS_EXEMPT, d.family)) {
+            stillExempt.add(d.family);
+            continue;
+          }
+          changed.push(`${d.family}/${d.scenario} span ${d.spanId}: ${d.key}: ${d.detail}`);
+        }
+      }
+    }
+    expect(spans, "no spans compared: is tests/fixtures/semconv synced?").toBeGreaterThan(0);
+    expect(changed, "a second normalization changed").toEqual([]);
+    if (nodeMajor >= 22) {
+      const stale = Object.keys(SECOND_PASS_EXEMPT).filter((f) => !stillExempt.has(f));
+      expect(stale, "exemptions from the second-pass check that are no longer needed").toEqual([]);
     }
   });
 
