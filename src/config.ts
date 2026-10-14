@@ -88,9 +88,10 @@ export interface RiusOptions {
    * unset, `gen_ai.main_agent.id` is a `gen_ai.main_agent.id` already in
    * `OTEL_RESOURCE_ATTRIBUTES`, else the agent name, so RENAMING THE AGENT
    * CHANGES THE ID unless an id is set (a one-time debug message on
-   * OpenTelemetry's diag logger says so); `rius.main_agent.id` stays absent. With neither an id nor a name
-   * (the `unknown_service` placeholder), no `gen_ai.main_agent.*` key is
-   * emitted: the conventions do not allow the entity without an identifier.
+   * OpenTelemetry's diag logger says so); `rius.main_agent.id` stays absent.
+   * With neither an id nor a name (the `unknown_service` placeholder), the SDK
+   * emits no `gen_ai.main_agent.*` key: the conventions do not allow the
+   * entity without an identifier.
    */
   mainAgentId?: string;
   /**
@@ -251,22 +252,24 @@ export interface OperatorMainAgent {
  *
  * The format is the spec's: comma-separated `key=value` pairs, values
  * percent-encoded. A malformed pair is skipped rather than thrown on — a
- * broken environment variable must not stop a process from starting.
+ * broken environment variable must not stop a process from starting. A key
+ * given twice takes its last value, as the OTel SDKs' detectors do.
  */
 function otelResourceAttribute(raw: string | undefined, key: string): string | undefined {
   if (raw === undefined) return undefined;
+  let found: string | undefined;
   for (const pair of raw.split(",")) {
     const separator = pair.indexOf("=");
     if (separator === -1) continue;
     if (pair.slice(0, separator).trim() !== key) continue;
     const value = pair.slice(separator + 1).trim();
     try {
-      return decodeURIComponent(value) || undefined;
+      found = decodeURIComponent(value);
     } catch {
-      return value || undefined;
+      found = value;
     }
   }
-  return undefined;
+  return found || undefined;
 }
 
 /**

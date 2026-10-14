@@ -640,6 +640,19 @@ describe("main-agent identity on the resource", () => {
     }
   });
 
+  it("takes the last value of an operator key given twice, as the OTel detectors do", async () => {
+    vi.stubEnv(
+      "OTEL_RESOURCE_ATTRIBUTES",
+      "gen_ai.main_agent.id=first,gen_ai.main_agent.id=second",
+    );
+    try {
+      const attributes = await resourceAttributes({ agentName: "planner" });
+      expect(attributes["gen_ai.main_agent.id"]).toBe("second");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("resolves the main-agent id: option, then env, then operator, then name", async () => {
     vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", "gen_ai.main_agent.id=from-otel");
     vi.stubEnv("RIUS_MAIN_AGENT_ID", "from-rius-env");
