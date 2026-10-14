@@ -72,19 +72,23 @@ export interface RiusOptions {
   /**
    * A STABLE identifier for the agent this process is, stamped on the
    * resource as `gen_ai.main_agent.id` (and the deprecated `rius.main_agent.id`).
-   * A registry id or a hosted agent's ARN,
-   * NOT a transient in-memory or process-local id: a uuid minted at startup
-   * identifies a run, not an agent, and would split one agent into a fresh
-   * bucket per restart. `service.instance.id` already answers "which
-   * process". Absent by default and never defaulted.
+   * A registry id or a hosted agent's ARN, NOT a transient in-memory or
+   * process-local id: a uuid minted at startup identifies a run, not an
+   * agent, and would split one agent into a fresh bucket per restart.
+   * `service.instance.id` already answers "which process".
    *
-   * Resolution: this option, then `RIUS_MAIN_AGENT_ID`, then unset.
+   * Resolution: this option, then `RIUS_MAIN_AGENT_ID`, then unset. When
+   * unset, `gen_ai.main_agent.id` falls back to the agent name, so RENAMING
+   * THE AGENT CHANGES THE ID unless this is set (a one-time debug log says
+   * so); `rius.main_agent.id` stays absent. With neither an id nor a name
+   * (the `unknown_service` placeholder), no `gen_ai.main_agent.*` key is
+   * emitted: the conventions do not allow the entity without an identifier.
    */
   mainAgentId?: string;
   /**
    * A human-readable description of the agent this process is, stamped as
-   * `gen_ai.main_agent.description` (and the deprecated
-   * `rius.main_agent.description`). This option, then
+   * `rius.main_agent.description`, and as `gen_ai.main_agent.description`
+   * whenever `gen_ai.main_agent.id` is emitted. This option, then
    * `RIUS_MAIN_AGENT_DESCRIPTION`, then unset.
    */
   mainAgentDescription?: string;

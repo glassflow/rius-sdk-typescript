@@ -213,10 +213,8 @@ export const GEN_AI_AGENT_VERSION = "gen_ai.agent.version";
  * the SAME resolved agent name `gen_ai.agent.name` carries, with the same
  * placeholder suppression: not a second identity to configure.
  *
- * The conventions make `gen_ai.main_agent.id` the entity's identity and say
- * the entity is not emitted without one. The name is stamped whether or not an
- * id is configured, as `rius.main_agent.name` always was, because in Rius the
- * agent's name is its identity and most processes have no hosted id.
+ * Emitted only with `gen_ai.main_agent.id`: the conventions make the id the
+ * entity's identity and say the entity is not emitted without one.
  *
  * `gen_ai.agent.name` keeps being stamped alongside them. Dropping it would be
  * a flag day: every deployment between this SDK release and the sink release
@@ -225,19 +223,25 @@ export const GEN_AI_AGENT_VERSION = "gen_ai.agent.version";
  */
 export const GEN_AI_MAIN_AGENT_NAME = "gen_ai.main_agent.name";
 /**
- * A STABLE identifier for the agent this process is, such as a registry id or
- * a hosted agent's ARN. The conventions say it MUST NOT be generated from an
+ * A STABLE identifier for the agent this process is, and the identity of the
+ * conventions' `gen_ai.main_agent` entity: no id, no entity. It is the
+ * configured `mainAgentId` (a registry id, a hosted agent's ARN) when set,
+ * otherwise the resolved agent name as is: stable across restarts and
+ * readable, but renaming the agent changes it, so a one-time debug hint says
+ * a stable id can be set. The conventions say it MUST NOT be generated from an
  * in-memory or process-local id (a uuid minted at startup, an object address,
- * a pod name): that identifies a run rather than an agent and would shatter
- * every agent into one bucket per restart. `service.instance.id` already
- * answers "which process"; this answers "which agent".
+ * a pod name): that identifies a run rather than an agent. With neither an id
+ * nor a usable name (empty, or the `unknown_service` placeholder) no
+ * `gen_ai.main_agent.*` key is emitted at all.
  *
- * Unset by default and never defaulted: unlike the name, it has no service-
- * level value to fall back on, and inventing one would be the `unknown_service`
- * mistake again.
+ * `rius.main_agent.id` was only ever the configured id; the derived value is
+ * never copied into it.
  */
 export const GEN_AI_MAIN_AGENT_ID = "gen_ai.main_agent.id";
-/** A human-readable description of the agent this process is. Never defaulted. */
+/**
+ * A human-readable description of the agent this process is. Never defaulted,
+ * and emitted only with `gen_ai.main_agent.id`.
+ */
 export const GEN_AI_MAIN_AGENT_DESCRIPTION = "gen_ai.main_agent.description";
 /**
  * Deprecated: moved to `gen_ai.main_agent.name`. The same value, stamped

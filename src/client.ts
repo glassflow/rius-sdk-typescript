@@ -17,7 +17,7 @@ import {
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
-import { type RiusOptions, resolveConfig } from "./config.js";
+import { type RiusOptions, namedAgent, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
 import {
@@ -278,9 +278,11 @@ const ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV = [
  */
 /**
  * The main-agent resource attributes, each only when known: the deprecated
- * `rius.main_agent.{name,id,description}` and, derived from them so the two
- * families can never disagree, the conventions' `gen_ai.main_agent.*`.
- * `rius.main_agent.version` has no upstream twin and is stamped separately.
+ * `rius.main_agent.{name,id,description}` (kept through their window so a sink
+ * that reads only the old keys keeps the agent's identity), plus the
+ * conventions' `gen_ai.main_agent.*` entity, whose rule lives in
+ * {@link upstreamMainAgentAttributes}. `rius.main_agent.version` has no
+ * upstream twin and is stamped separately.
  */
 function mainAgentAttributes(config: {
   mainAgentName?: string;
@@ -293,27 +295,53 @@ function mainAgentAttributes(config: {
   if (config.mainAgentDescription !== undefined) {
     rius[RIUS_MAIN_AGENT_DESCRIPTION] = config.mainAgentDescription;
   }
-  return { ...rius, ...upstreamMainAgentAttributes(rius) };
+  return {
+    ...rius,
+    ...upstreamMainAgentAttributes({
+      name: config.mainAgentName,
+      configuredId: config.mainAgentId,
+      description: config.mainAgentDescription,
+    }),
+  };
 }
 
+/** Once per process: the hint is advice about configuration, not news. */
+let derivedMainAgentIdHinted = false;
+
 /**
- * `gen_ai.main_agent.{name,id,description}` from the resolved rius values.
+ * The conventions' `gen_ai.main_agent` entity: id, name, description.
  *
- * The ONE place the rule for emitting the conventions' main-agent entity
- * lives. Today it is stamped whenever the rius key is: the name without an id
- * too, although the conventions make the id the entity's identity, because in
- * Rius the agent's name is its identity.
+ * The ONE place the rule for emitting it lives. The conventions make
+ * `gen_ai.main_agent.id` the entity's identity and say the entity MUST NOT be
+ * emitted without a stable one. So the id is the configured `mainAgentId` when
+ * set, otherwise the resolved agent name, as is: it is stable across restarts
+ * and readable, but renaming the agent changes it. With neither (no id, and
+ * the name empty or the `unknown_service` placeholder) no `gen_ai.main_agent.*`
+ * key is emitted at all. Name and description ride only with the id.
+ *
+ * `rius.main_agent.id` is NOT derived: it stays the configured id only.
+ *
+ * Exported for tests; not part of the public API (not re-exported by index).
  */
-function upstreamMainAgentAttributes(mainAgent: Record<string, string>): Record<string, string> {
-  const upstream: Record<string, string> = {};
-  for (const [ours, theirs] of [
-    [RIUS_MAIN_AGENT_NAME, GEN_AI_MAIN_AGENT_NAME],
-    [RIUS_MAIN_AGENT_ID, GEN_AI_MAIN_AGENT_ID],
-    [RIUS_MAIN_AGENT_DESCRIPTION, GEN_AI_MAIN_AGENT_DESCRIPTION],
-  ] as const) {
-    if (Object.hasOwn(mainAgent, ours)) upstream[theirs] = mainAgent[ours];
+export function upstreamMainAgentAttributes(main: {
+  name?: string;
+  configuredId?: string;
+  description?: string;
+}): Record<string, string> {
+  const named = namedAgent(main.name) || undefined;
+  const entityId = main.configuredId || named;
+  if (!entityId) return {};
+  if (!main.configuredId && !derivedMainAgentIdHinted) {
+    derivedMainAgentIdHinted = true;
+    console.debug(
+      `[rius] gen_ai.main_agent.id is the agent name "${named}" because no mainAgentId is set; set mainAgentId (RIUS_MAIN_AGENT_ID) to a stable identifier so renaming the agent does not change it.`,
+    );
   }
-  return upstream;
+  return {
+    [GEN_AI_MAIN_AGENT_ID]: entityId,
+    ...(named === undefined ? {} : { [GEN_AI_MAIN_AGENT_NAME]: named }),
+    ...(main.description ? { [GEN_AI_MAIN_AGENT_DESCRIPTION]: main.description } : {}),
+  };
 }
 
 function resolveSpanLimits(): SpanLimits {
@@ -399,7 +427,9 @@ export function init(options: InitOptions = {}): RiusClient {
     // the main-agent name must then be ABSENT rather than claim an identity
     // the caller never gave — exactly what the span helpers already do.
     //
-    // The id and description are optional and never defaulted; see config.ts.
+    // The rius id and description are optional and never defaulted; the
+    // conventions' id falls back to the agent name (see
+    // upstreamMainAgentAttributes and config.ts).
     // `service.instance.id` above is the process identity, these describe the
     // AGENT the process runs, which outlives any one process.
     ...mainAgentAttributes(config),

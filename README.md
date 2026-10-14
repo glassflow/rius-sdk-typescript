@@ -424,13 +424,18 @@ is not merged into it, so `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is
 read here by hand as the last tier after the option and `RIUS_SERVICE_VERSION`.
 
 The agent this process *is* is described on the resource under the GenAI
-conventions' `gen_ai.main_agent.*`: `gen_ai.main_agent.name` (the resolved
-`agentName`, absent when nothing was named and it is still the
-`unknown_service` placeholder), plus the optional `gen_ai.main_agent.id` and
-`.description`. The deprecated `rius.main_agent.name`, `.id` and
-`.description` carry the same values through their deprecation window, and
-`rius.main_agent.version`, which has no upstream twin, carries the optional
-agent version. `gen_ai.agent.name` is still stamped alongside them, unchanged:
+conventions' `gen_ai.main_agent.*`. `gen_ai.main_agent.id` is the entity's
+identity: it is `mainAgentId` when you set it, and otherwise falls back to the
+agent name, so **renaming the agent changes the id unless `mainAgentId` is
+set** (a one-time debug log says so). `gen_ai.main_agent.name` is the resolved
+`agentName`, and `gen_ai.main_agent.description` is `mainAgentDescription`
+when set. When there is neither an id nor a name (the `unknown_service`
+placeholder), none of the `gen_ai.main_agent.*` keys is stamped, because the
+conventions do not allow the entity without an identifier. The deprecated
+`rius.main_agent.name`, `.id` and `.description` keep their old behaviour
+through their deprecation window (`rius.main_agent.id` only ever carries a
+configured `mainAgentId`), and `rius.main_agent.version`, which has no
+upstream twin, carries the optional agent version. `gen_ai.agent.name` is still stamped alongside them, unchanged:
 the keys are additive so that no deployment loses its agent identity between
 an SDK upgrade and a backend one. The main-agent keys exist because
 `gen_ai.agent.name` has no resource-level meaning in the conventions and on a

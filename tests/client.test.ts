@@ -1,7 +1,13 @@
 import { ROOT_CONTEXT, TraceFlags, context, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type InitOptions, RiusClient, getTracer, init } from "../src/client.js";
+import {
+  type InitOptions,
+  RiusClient,
+  getTracer,
+  init,
+  upstreamMainAgentAttributes,
+} from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";
 import { REGISTRY } from "../src/instrumentation.js";
 import { GEN_AI_AGENT_NAME, RIUS_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
@@ -543,9 +549,14 @@ describe("main-agent identity on the resource", () => {
     }
   });
 
+  const UPSTREAM_MAIN_AGENT_KEYS = [
+    "gen_ai.main_agent.id",
+    "gen_ai.main_agent.name",
+    "gen_ai.main_agent.description",
+  ];
+
   it("stamps the upstream gen_ai.main_agent.* keys next to rius.main_agent.*", async () => {
-    // The conventions' name for the agent this PROCESS is. Same settings, same
-    // values: the rius keys ride along through their deprecation window.
+    // The conventions' name for the agent this PROCESS is, from the same settings.
     const attributes = await resourceAttributes({
       agentName: "planner",
       mainAgentId: "arn:aws:bedrock:eu-central-1:1:agent/ABC",
@@ -554,9 +565,47 @@ describe("main-agent identity on the resource", () => {
     expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
     expect(attributes["gen_ai.main_agent.id"]).toBe("arn:aws:bedrock:eu-central-1:1:agent/ABC");
     expect(attributes["gen_ai.main_agent.description"]).toBe("plans multi-city trips");
-    for (const field of ["name", "id", "description"]) {
-      expect(attributes[`gen_ai.main_agent.${field}`]).toBe(attributes[`rius.main_agent.${field}`]);
+  });
+
+  it("lets a configured main-agent id win over the name", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner", mainAgentId: "ag_prod_7" });
+    expect(attributes["gen_ai.main_agent.id"]).toBe("ag_prod_7");
+    expect(attributes["rius.main_agent.id"]).toBe("ag_prod_7");
+  });
+
+  it("derives the main-agent id from the agent name when none is configured", async () => {
+    // The conventions make the id the entity's identity: no id, no entity. The
+    // resolved agent name is stable across restarts, so it stands in.
+    const attributes = await resourceAttributes({
+      agentName: "planner",
+      mainAgentDescription: "plans multi-city trips",
+    });
+    expect(attributes["gen_ai.main_agent.id"]).toBe("planner");
+    expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
+    expect(attributes["gen_ai.main_agent.description"]).toBe("plans multi-city trips");
+    // The derived id is never copied into the deprecated key.
+    expect("rius.main_agent.id" in attributes).toBe(false);
+  });
+
+  it("emits no main-agent entity for a placeholder name without an id", async () => {
+    const attributes = await resourceAttributes({ mainAgentDescription: "plans multi-city trips" });
+    expect(attributes["service.name"]).toBe("unknown_service");
+    for (const key of UPSTREAM_MAIN_AGENT_KEYS) {
+      expect(key in attributes, `${key} should be absent`).toBe(false);
     }
+    // rius.main_agent.* is unchanged: the description still rides there.
+    expect(attributes["rius.main_agent.description"]).toBe("plans multi-city trips");
+  });
+
+  it("emits no main-agent entity for an empty name without an id", () => {
+    expect(upstreamMainAgentAttributes({ name: "", description: "d" })).toEqual({});
+    expect(upstreamMainAgentAttributes({ name: "unknown_service", description: "d" })).toEqual({});
+  });
+
+  it("gives a configured id but no name when the name is the placeholder", async () => {
+    const attributes = await resourceAttributes({ mainAgentId: "ag_prod_7" });
+    expect(attributes["gen_ai.main_agent.id"]).toBe("ag_prod_7");
+    expect("gen_ai.main_agent.name" in attributes).toBe(false);
   });
 
   it("reads the upstream main-agent keys from RIUS_MAIN_AGENT_*", async () => {
@@ -571,20 +620,14 @@ describe("main-agent identity on the resource", () => {
     }
   });
 
-  it("omits the upstream main-agent name when the configured name is the placeholder", async () => {
-    const attributes = await resourceAttributes({});
-    expect("gen_ai.main_agent.name" in attributes).toBe(false);
+  it("has no upstream twin for the main-agent version", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner", mainAgentVersion: "7" });
+    expect("gen_ai.main_agent.version" in attributes).toBe(false);
   });
 
-  it("leaves the upstream id and description off when unset, and has no upstream version", async () => {
-    const attributes = await resourceAttributes({ agentName: "planner", mainAgentVersion: "7" });
-    for (const key of [
-      "gen_ai.main_agent.id",
-      "gen_ai.main_agent.description",
-      "gen_ai.main_agent.version",
-    ]) {
-      expect(key in attributes, `${key} should be absent`).toBe(false);
-    }
+  it("leaves an unset description off the upstream entity", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner" });
+    expect("gen_ai.main_agent.description" in attributes).toBe(false);
   });
 
   it("never derives the agent version from service.version, or the reverse", async () => {
