@@ -143,7 +143,10 @@ describe("agent identity keys", () => {
     expect(semconv.GEN_AI_AGENT_VERSION).toBe("gen_ai.agent.version");
   });
 
-  it("spells the process-level agent identity in the rius namespace", () => {
+  it("spells the process-level agent identity in both namespaces", () => {
+    expect(semconv.GEN_AI_MAIN_AGENT_NAME).toBe("gen_ai.main_agent.name");
+    expect(semconv.GEN_AI_MAIN_AGENT_ID).toBe("gen_ai.main_agent.id");
+    expect(semconv.GEN_AI_MAIN_AGENT_DESCRIPTION).toBe("gen_ai.main_agent.description");
     expect(semconv.RIUS_MAIN_AGENT_NAME).toBe("rius.main_agent.name");
     expect(semconv.RIUS_MAIN_AGENT_ID).toBe("rius.main_agent.id");
     expect(semconv.RIUS_MAIN_AGENT_DESCRIPTION).toBe("rius.main_agent.description");

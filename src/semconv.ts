@@ -204,38 +204,54 @@ export const SERVICE_VERSION = ATTR_SERVICE_VERSION;
  */
 export const GEN_AI_AGENT_VERSION = "gen_ai.agent.version";
 /**
- * The agent THIS PROCESS IS, in our own namespace, stamped on the RESOURCE.
+ * The agent THIS PROCESS IS, stamped on the RESOURCE: the GenAI conventions'
+ * `gen_ai.main_agent` entity.
  *
  * `gen_ai.agent.name` has no resource-level meaning in the conventions, and on
  * a span it means the agent being INVOKED, so using it for both made one key
  * carry two questions. These keys ask only the process-level one. The value is
  * the SAME resolved agent name `gen_ai.agent.name` carries, with the same
- * placeholder suppression — this is a move into our namespace, not a second
- * identity to configure.
+ * placeholder suppression: not a second identity to configure.
+ *
+ * Emitted only with `gen_ai.main_agent.id`: the conventions make the id the
+ * entity's identity and say the entity is not emitted without one.
  *
  * `gen_ai.agent.name` keeps being stamped alongside them. Dropping it would be
  * a flag day: every deployment between this SDK release and the sink release
  * would lose its agent identity. Resource attributes ride once per OTLP batch,
  * not once per span, so the duplication is free.
  */
-export const RIUS_MAIN_AGENT_NAME = "rius.main_agent.name";
+export const GEN_AI_MAIN_AGENT_NAME = "gen_ai.main_agent.name";
 /**
- * A STABLE identifier for the agent this process is, such as a registry id or
- * a hosted agent's ARN. The upstream constraint on `gen_ai.agent.id` is
- * adopted here deliberately, even though we own this namespace: a transient
+ * A STABLE identifier for the agent this process is, and the identity of the
+ * conventions' `gen_ai.main_agent` entity: no id, no entity. It is the
+ * configured `mainAgentId` (a registry id, a hosted agent's ARN) when set,
+ * otherwise the resolved agent name as is: stable across restarts and
+ * readable, but renaming the agent changes it, so a one-time debug hint says
+ * a stable id can be set. The conventions say it MUST NOT be generated from an
  * in-memory or process-local id (a uuid minted at startup, an object address,
- * a pod name) must NOT be used, because it identifies a run rather than an
- * agent and would shatter every agent into one bucket per restart.
- * `service.instance.id` already answers "which process"; this answers "which
- * agent". Keeping the constraint now is what makes a later rename to
- * `gen_ai.main_agent.*` mechanical rather than a data-quality problem.
+ * a pod name): that identifies a run rather than an agent. With neither an id
+ * nor a usable name (empty, or the `unknown_service` placeholder) no
+ * `gen_ai.main_agent.*` key is emitted at all.
  *
- * Unset by default and never defaulted: unlike the name, it has no service-
- * level value to fall back on, and inventing one would be the `unknown_service`
- * mistake again.
+ * `rius.main_agent.id` was only ever the configured id; the derived value is
+ * never copied into it.
  */
+export const GEN_AI_MAIN_AGENT_ID = "gen_ai.main_agent.id";
+/**
+ * A human-readable description of the agent this process is. Never defaulted,
+ * and emitted only with `gen_ai.main_agent.id`.
+ */
+export const GEN_AI_MAIN_AGENT_DESCRIPTION = "gen_ai.main_agent.description";
+/**
+ * Deprecated: moved to `gen_ai.main_agent.name`. The same value, stamped
+ * through the deprecation window so a sink that reads only the old key keeps
+ * the agent's identity.
+ */
+export const RIUS_MAIN_AGENT_NAME = "rius.main_agent.name";
+/** Deprecated: moved to `gen_ai.main_agent.id`. Same value, same window. */
 export const RIUS_MAIN_AGENT_ID = "rius.main_agent.id";
-/** A human-readable description of the agent this process is. Never defaulted. */
+/** Deprecated: moved to `gen_ai.main_agent.description`. Same value, same window. */
 export const RIUS_MAIN_AGENT_DESCRIPTION = "rius.main_agent.description";
 /**
  * The version of the AGENT DEFINITION this process runs — its prompt, tools

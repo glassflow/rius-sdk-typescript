@@ -65,7 +65,7 @@ export function resolveAgentName(
 /**
  * The configured name, unless it is the placeholder. The suppression itself
  * lives in `config.ts` (see {@link namedAgent}) because the resource's
- * `rius.main_agent.name` is a third reader of the same value and must answer
+ * `gen_ai.main_agent.name` is a third reader of the same value and must answer
  * identically; this is just the module-state binding of it.
  */
 function namedConfiguredAgent(): string | undefined {

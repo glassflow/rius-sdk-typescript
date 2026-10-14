@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { type Tracer, type TracerProvider, context, propagation, trace } from "@opentelemetry/api";
+import {
+  type Tracer,
+  type TracerProvider,
+  context,
+  diag,
+  propagation,
+  trace,
+} from "@opentelemetry/api";
 import { getNumberFromEnv } from "@opentelemetry/core";
 // The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
 // opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
@@ -17,7 +24,7 @@ import {
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
-import { type RiusOptions, resolveConfig } from "./config.js";
+import { type OperatorMainAgent, type RiusOptions, namedAgent, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
 import {
@@ -37,6 +44,9 @@ import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
 import {
   GEN_AI_AGENT_NAME,
+  GEN_AI_MAIN_AGENT_DESCRIPTION,
+  GEN_AI_MAIN_AGENT_ID,
+  GEN_AI_MAIN_AGENT_NAME,
   RIUS_MAIN_AGENT_DESCRIPTION,
   RIUS_MAIN_AGENT_ID,
   RIUS_MAIN_AGENT_NAME,
@@ -263,6 +273,102 @@ const ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV = [
 ];
 
 /**
+ * The main-agent resource attributes, each only when known: the deprecated
+ * `rius.main_agent.{name,id,description}` (kept through their window so a sink
+ * that reads only the old keys keeps the agent's identity), plus the
+ * conventions' `gen_ai.main_agent.*` entity, whose rule lives in
+ * {@link upstreamMainAgentAttributes}. `rius.main_agent.version` has no
+ * upstream twin and is stamped separately.
+ */
+function mainAgentAttributes(config: {
+  mainAgentName?: string;
+  mainAgentId?: string;
+  mainAgentDescription?: string;
+  operatorMainAgent: OperatorMainAgent;
+}): Record<string, string> {
+  const rius: Record<string, string> = {};
+  if (config.mainAgentName !== undefined) rius[RIUS_MAIN_AGENT_NAME] = config.mainAgentName;
+  if (config.mainAgentId !== undefined) rius[RIUS_MAIN_AGENT_ID] = config.mainAgentId;
+  if (config.mainAgentDescription !== undefined) {
+    rius[RIUS_MAIN_AGENT_DESCRIPTION] = config.mainAgentDescription;
+  }
+  return {
+    ...rius,
+    ...upstreamMainAgentAttributes({
+      name: config.mainAgentName,
+      configuredId: config.mainAgentId,
+      description: config.mainAgentDescription,
+      operator: config.operatorMainAgent,
+    }),
+  };
+}
+
+/** Once per process: the hint is advice about configuration, not news. */
+let derivedMainAgentIdHinted = false;
+
+/** `value`, unless it is unset, empty or only whitespace. */
+function usable(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
+/**
+ * The conventions' `gen_ai.main_agent` entity: id, name, description.
+ *
+ * The ONE place the rule for emitting it lives. The conventions make
+ * `gen_ai.main_agent.id` the entity's identity and say the entity MUST NOT be
+ * emitted without a stable one. So the id is, in order: the configured
+ * `mainAgentId` (the option, then `RIUS_MAIN_AGENT_ID`), then a
+ * `gen_ai.main_agent.id` the operator already put on the resource (`operator`,
+ * from `OTEL_RESOURCE_ATTRIBUTES`), then the resolved agent name, as is: it is
+ * stable across restarts and readable, but renaming the agent changes it. An
+ * empty or whitespace-only value counts as unset. With none of them (and the
+ * name empty or the `unknown_service` placeholder) no `gen_ai.main_agent.*` key
+ * is emitted from the SDK's settings. The SDK's name and description ride only
+ * with the id; an operator-set one is the operator's own and passed through.
+ *
+ * An operator-set id counts as configured, so it logs no hint. An operator-set
+ * name or description is never overwritten.
+ *
+ * `rius.main_agent.id` is NOT derived, nor taken from the operator's value: it
+ * stays the configured id only.
+ *
+ * The hint goes to OpenTelemetry's diag logger at debug level, so it is silent
+ * unless the app installs one (`diag.setLogger(..., DiagLogLevel.DEBUG)`).
+ *
+ * Exported for tests; not part of the public API (not re-exported by index).
+ */
+export function upstreamMainAgentAttributes(main: {
+  name?: string;
+  configuredId?: string;
+  description?: string;
+  operator?: OperatorMainAgent;
+}): Record<string, string> {
+  const operator = main.operator ?? {};
+  const named = usable(namedAgent(main.name));
+  const configured = usable(main.configuredId) ?? usable(operator.id);
+  const entityId = configured ?? named;
+  const attributes: Record<string, string> = {};
+  if (entityId) {
+    if (!configured && !derivedMainAgentIdHinted) {
+      derivedMainAgentIdHinted = true;
+      diag.debug(
+        `[rius] gen_ai.main_agent.id is the agent name "${named}" because no mainAgentId is set; set mainAgentId (RIUS_MAIN_AGENT_ID) to a stable identifier so renaming the agent does not change it.`,
+      );
+    }
+    attributes[GEN_AI_MAIN_AGENT_ID] = entityId;
+    if (named !== undefined) attributes[GEN_AI_MAIN_AGENT_NAME] = named;
+    if (main.description) attributes[GEN_AI_MAIN_AGENT_DESCRIPTION] = main.description;
+  }
+  // The operator's own name and description stand, as they would on any
+  // resource the OTel SDK merges them into.
+  if (usable(operator.name)) attributes[GEN_AI_MAIN_AGENT_NAME] = operator.name as string;
+  if (usable(operator.description)) {
+    attributes[GEN_AI_MAIN_AGENT_DESCRIPTION] = operator.description as string;
+  }
+  return attributes;
+}
+
+/**
  * The limits this SDK applies, resolved the way OpenTelemetry resolves them.
  *
  * An explicit `spanLimits` in the provider config wins over the environment in
@@ -341,7 +447,8 @@ export function init(options: InitOptions = {}): RiusClient {
     // agents view and its trace list disagree. Resolution defaults the agent
     // name to the service name, so nothing changes when they are the same.
     [GEN_AI_AGENT_NAME]: config.agentName,
-    // The same fact in our own namespace, and the one the sink reads first.
+    // The same fact under the conventions' main-agent keys (and, through its
+    // deprecation window, `rius.main_agent.name`), which the sink reads first.
     // `gen_ai.agent.name` above is kept ADDITIVELY and on purpose: it has no
     // resource-level meaning in the conventions and on a span it names the
     // agent being INVOKED, so it was one key answering two questions — but
@@ -354,14 +461,13 @@ export function init(options: InitOptions = {}): RiusClient {
     // that named nothing resolves to the `unknown_service` placeholder, and
     // the main-agent name must then be ABSENT rather than claim an identity
     // the caller never gave — exactly what the span helpers already do.
-    ...(config.mainAgentName === undefined ? {} : { [RIUS_MAIN_AGENT_NAME]: config.mainAgentName }),
-    // Optional and never defaulted; see config.ts. `service.instance.id`
-    // above is the process identity, these describe the AGENT the process
-    // runs, which outlives any one process.
-    ...(config.mainAgentId === undefined ? {} : { [RIUS_MAIN_AGENT_ID]: config.mainAgentId }),
-    ...(config.mainAgentDescription === undefined
-      ? {}
-      : { [RIUS_MAIN_AGENT_DESCRIPTION]: config.mainAgentDescription }),
+    //
+    // The rius id and description are optional and never defaulted; the
+    // conventions' id falls back to the agent name (see
+    // upstreamMainAgentAttributes and config.ts).
+    // `service.instance.id` above is the process identity, these describe the
+    // AGENT the process runs, which outlives any one process.
+    ...mainAgentAttributes(config),
     // The version of the AGENT DEFINITION, never derived from (nor deriving)
     // `service.version` below: the build and the prompt/tools/policy it runs
     // move independently.

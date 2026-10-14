@@ -423,15 +423,29 @@ explicitly, which in OpenTelemetry for JavaScript means the OTel environment
 is not merged into it, so `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is
 read here by hand as the last tier after the option and `RIUS_SERVICE_VERSION`.
 
-The agent this process *is* is described on the resource under
-`rius.main_agent.*`: `rius.main_agent.name` (the resolved `agentName`, absent
-when nothing was named and it is still the `unknown_service` placeholder),
-plus the optional `rius.main_agent.id`, `.description` and `.version`.
-`gen_ai.agent.name` is still stamped alongside them, unchanged: the new keys
-are additive so that no deployment loses its agent identity between an SDK
-upgrade and a backend one. The vendor namespace exists because
-`gen_ai.agent.name` has no resource-level meaning in the conventions and on a
-span means the agent being *invoked*, so one key was answering two questions.
+The agent this process *is* is described on the resource under the GenAI
+conventions' `gen_ai.main_agent.*`. `gen_ai.main_agent.id` is the entity's
+identity: it is `mainAgentId` when you set it (the option, then
+`RIUS_MAIN_AGENT_ID`), then a `gen_ai.main_agent.id` you already put in
+`OTEL_RESOURCE_ATTRIBUTES`, and otherwise it falls back to the agent name, so
+**renaming the agent changes the id unless `mainAgentId` is set**. A one-time
+message says so at debug level on OpenTelemetry's diag logger, which is silent
+unless you install one (`diag.setLogger(new DiagConsoleLogger(),
+DiagLogLevel.DEBUG)`). `gen_ai.main_agent.name` is the resolved `agentName`,
+and `gen_ai.main_agent.description` is `mainAgentDescription` when set; a name
+or description you set in `OTEL_RESOURCE_ATTRIBUTES` is kept instead. When
+there is neither an id nor a name (the `unknown_service` placeholder), none of
+the `gen_ai.main_agent.*` keys is stamped, because the conventions do not
+allow the entity without an identifier. The deprecated `rius.main_agent.name`,
+`.id` and `.description` keep their old behaviour through their deprecation
+window (`rius.main_agent.id` only ever carries a configured `mainAgentId`),
+and `rius.main_agent.version`, which has no upstream twin, carries the
+optional agent version. `gen_ai.agent.name` is still stamped alongside them,
+unchanged: the keys are additive so that no deployment loses its agent
+identity between an SDK upgrade and a backend one. The main-agent keys exist
+because `gen_ai.agent.name` has no resource-level meaning in the conventions
+and on a span means the agent being *invoked*, so one key was answering two
+questions.
 
 `mainAgentId` must be a **stable** identifier — a registry id, a hosted
 agent's ARN. A uuid minted at startup or another process-local id identifies

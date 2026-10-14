@@ -1,7 +1,13 @@
 import { ROOT_CONTEXT, TraceFlags, context, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type InitOptions, RiusClient, getTracer, init } from "../src/client.js";
+import {
+  type InitOptions,
+  RiusClient,
+  getTracer,
+  init,
+  upstreamMainAgentAttributes,
+} from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";
 import { REGISTRY } from "../src/instrumentation.js";
 import { GEN_AI_AGENT_NAME, RIUS_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
@@ -541,6 +547,190 @@ describe("main-agent identity on the resource", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  const UPSTREAM_MAIN_AGENT_KEYS = [
+    "gen_ai.main_agent.id",
+    "gen_ai.main_agent.name",
+    "gen_ai.main_agent.description",
+  ];
+
+  it("stamps the upstream gen_ai.main_agent.* keys next to rius.main_agent.*", async () => {
+    // The conventions' name for the agent this PROCESS is, from the same settings.
+    const attributes = await resourceAttributes({
+      agentName: "planner",
+      mainAgentId: "arn:aws:bedrock:eu-central-1:1:agent/ABC",
+      mainAgentDescription: "plans multi-city trips",
+    });
+    expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
+    expect(attributes["gen_ai.main_agent.id"]).toBe("arn:aws:bedrock:eu-central-1:1:agent/ABC");
+    expect(attributes["gen_ai.main_agent.description"]).toBe("plans multi-city trips");
+  });
+
+  it("lets a configured main-agent id win over the name", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner", mainAgentId: "ag_prod_7" });
+    expect(attributes["gen_ai.main_agent.id"]).toBe("ag_prod_7");
+    expect(attributes["rius.main_agent.id"]).toBe("ag_prod_7");
+  });
+
+  it("derives the main-agent id from the agent name when none is configured", async () => {
+    // The conventions make the id the entity's identity: no id, no entity. The
+    // resolved agent name is stable across restarts, so it stands in.
+    const attributes = await resourceAttributes({
+      agentName: "planner",
+      mainAgentDescription: "plans multi-city trips",
+    });
+    expect(attributes["gen_ai.main_agent.id"]).toBe("planner");
+    expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
+    expect(attributes["gen_ai.main_agent.description"]).toBe("plans multi-city trips");
+    // The derived id is never copied into the deprecated key.
+    expect("rius.main_agent.id" in attributes).toBe(false);
+  });
+
+  it("emits no main-agent entity for a placeholder name without an id", async () => {
+    const attributes = await resourceAttributes({ mainAgentDescription: "plans multi-city trips" });
+    expect(attributes["service.name"]).toBe("unknown_service");
+    for (const key of UPSTREAM_MAIN_AGENT_KEYS) {
+      expect(key in attributes, `${key} should be absent`).toBe(false);
+    }
+    // rius.main_agent.* is unchanged: the description still rides there.
+    expect(attributes["rius.main_agent.description"]).toBe("plans multi-city trips");
+  });
+
+  it("emits no main-agent entity for an empty name without an id", () => {
+    expect(upstreamMainAgentAttributes({ name: "", description: "d" })).toEqual({});
+    expect(upstreamMainAgentAttributes({ name: "unknown_service", description: "d" })).toEqual({});
+  });
+
+  it("gives a configured id but no name when the name is the placeholder", async () => {
+    const attributes = await resourceAttributes({ mainAgentId: "ag_prod_7" });
+    expect(attributes["gen_ai.main_agent.id"]).toBe("ag_prod_7");
+    expect("gen_ai.main_agent.name" in attributes).toBe(false);
+  });
+
+  it("resolves the upstream main-agent identity from the environment", async () => {
+    vi.stubEnv("RIUS_AGENT_NAME", "planner");
+    vi.stubEnv("RIUS_MAIN_AGENT_ID", "ag_prod_7");
+    vi.stubEnv("RIUS_MAIN_AGENT_DESCRIPTION", "plans multi-city trips");
+    try {
+      const attributes = await resourceAttributes({});
+      expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
+      expect(attributes["gen_ai.main_agent.id"]).toBe("ag_prod_7");
+      expect(attributes["gen_ai.main_agent.description"]).toBe("plans multi-city trips");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps an operator-set main-agent id, which counts as configured", async () => {
+    // An operator who already follows the conventions may put the
+    // provider-assigned id in OTEL_RESOURCE_ATTRIBUTES; it is never replaced by
+    // the name-derived fallback, and never copied into the deprecated key.
+    vi.stubEnv(
+      "OTEL_RESOURCE_ATTRIBUTES",
+      "gen_ai.main_agent.id=arn%3Aaws%3Abedrock%3Ax%3Aagent%2F42",
+    );
+    try {
+      const attributes = await resourceAttributes({ agentName: "planner" });
+      expect(attributes["gen_ai.main_agent.id"]).toBe("arn:aws:bedrock:x:agent/42");
+      expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
+      expect("rius.main_agent.id" in attributes).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("takes the last value of an operator key given twice, as the OTel detectors do", async () => {
+    vi.stubEnv(
+      "OTEL_RESOURCE_ATTRIBUTES",
+      "gen_ai.main_agent.id=first,gen_ai.main_agent.id=second",
+    );
+    try {
+      const attributes = await resourceAttributes({ agentName: "planner" });
+      expect(attributes["gen_ai.main_agent.id"]).toBe("second");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("resolves the main-agent id: option, then env, then operator, then name", async () => {
+    vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", "gen_ai.main_agent.id=from-otel");
+    vi.stubEnv("RIUS_MAIN_AGENT_ID", "from-rius-env");
+    try {
+      const fromOption = await resourceAttributes({
+        agentName: "planner",
+        mainAgentId: "from-option",
+      });
+      expect(fromOption["gen_ai.main_agent.id"]).toBe("from-option");
+      await client?.shutdown();
+      const fromEnv = await resourceAttributes({ agentName: "planner" });
+      expect(fromEnv["gen_ai.main_agent.id"]).toBe("from-rius-env");
+      await client?.shutdown();
+      vi.stubEnv("RIUS_MAIN_AGENT_ID", undefined);
+      const fromOtel = await resourceAttributes({ agentName: "planner" });
+      expect(fromOtel["gen_ai.main_agent.id"]).toBe("from-otel");
+      await client?.shutdown();
+      vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", undefined);
+      const fromName = await resourceAttributes({ agentName: "planner" });
+      expect(fromName["gen_ai.main_agent.id"]).toBe("planner");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps an operator-set main-agent id when the name is the placeholder", async () => {
+    vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", "gen_ai.main_agent.id=from-otel");
+    try {
+      const attributes = await resourceAttributes({});
+      expect(attributes["service.name"]).toBe("unknown_service");
+      expect(attributes["gen_ai.main_agent.id"]).toBe("from-otel");
+      expect("gen_ai.main_agent.name" in attributes).toBe(false);
+      expect("rius.main_agent.id" in attributes).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not overwrite an operator-set main-agent name or description", async () => {
+    vi.stubEnv(
+      "OTEL_RESOURCE_ATTRIBUTES",
+      "gen_ai.main_agent.name=Planner,gen_ai.main_agent.description=Set%20by%20ops",
+    );
+    try {
+      const attributes = await resourceAttributes({
+        agentName: "planner",
+        mainAgentDescription: "plans multi-city trips",
+      });
+      expect(attributes["gen_ai.main_agent.id"]).toBe("planner");
+      expect(attributes["gen_ai.main_agent.name"]).toBe("Planner");
+      expect(attributes["gen_ai.main_agent.description"]).toBe("Set by ops");
+      // rius.main_agent.* is unchanged: still the SDK settings.
+      expect(attributes["rius.main_agent.name"]).toBe("planner");
+      expect(attributes["rius.main_agent.description"]).toBe("plans multi-city trips");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("emits no main-agent entity for a whitespace-only name without an id", () => {
+    expect(upstreamMainAgentAttributes({ name: "   ", description: "d" })).toEqual({});
+  });
+
+  it("lets a whitespace-only id fall back to the name", () => {
+    expect(upstreamMainAgentAttributes({ name: "planner", configuredId: "   " })).toEqual({
+      "gen_ai.main_agent.id": "planner",
+      "gen_ai.main_agent.name": "planner",
+    });
+  });
+
+  it("has no upstream twin for the main-agent version", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner", mainAgentVersion: "7" });
+    expect("gen_ai.main_agent.version" in attributes).toBe(false);
+  });
+
+  it("leaves an unset description off the upstream entity", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner" });
+    expect("gen_ai.main_agent.description" in attributes).toBe(false);
   });
 
   it("never derives the agent version from service.version, or the reverse", async () => {
