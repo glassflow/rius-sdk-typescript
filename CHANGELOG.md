@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.2.0...v1.3.0) (2026-10-14)
+
+
+### Features
+
+* stamp gen_ai.main_agent.{id,name,description} on the resource next to rius.main_agent.* ([#135](https://github.com/glassflow/rius-sdk-typescript/issues/135)) ([9d4f1bc](https://github.com/glassflow/rius-sdk-typescript/commit/9d4f1bcf472f2b387673212e74c60e9d566d09fa))
+
 ## [1.2.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.1.1...v1.2.0) (2026-10-13)
 
 
