@@ -276,6 +276,46 @@ const ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV = [
  * the same limits an own span gets: a foreign span cannot stamp more
  * attributes, or longer ones, than Rius would have allowed on its own.
  */
+/**
+ * The main-agent resource attributes, each only when known: the deprecated
+ * `rius.main_agent.{name,id,description}` and, derived from them so the two
+ * families can never disagree, the conventions' `gen_ai.main_agent.*`.
+ * `rius.main_agent.version` has no upstream twin and is stamped separately.
+ */
+function mainAgentAttributes(config: {
+  mainAgentName?: string;
+  mainAgentId?: string;
+  mainAgentDescription?: string;
+}): Record<string, string> {
+  const rius: Record<string, string> = {};
+  if (config.mainAgentName !== undefined) rius[RIUS_MAIN_AGENT_NAME] = config.mainAgentName;
+  if (config.mainAgentId !== undefined) rius[RIUS_MAIN_AGENT_ID] = config.mainAgentId;
+  if (config.mainAgentDescription !== undefined) {
+    rius[RIUS_MAIN_AGENT_DESCRIPTION] = config.mainAgentDescription;
+  }
+  return { ...rius, ...upstreamMainAgentAttributes(rius) };
+}
+
+/**
+ * `gen_ai.main_agent.{name,id,description}` from the resolved rius values.
+ *
+ * The ONE place the rule for emitting the conventions' main-agent entity
+ * lives. Today it is stamped whenever the rius key is: the name without an id
+ * too, although the conventions make the id the entity's identity, because in
+ * Rius the agent's name is its identity.
+ */
+function upstreamMainAgentAttributes(mainAgent: Record<string, string>): Record<string, string> {
+  const upstream: Record<string, string> = {};
+  for (const [ours, theirs] of [
+    [RIUS_MAIN_AGENT_NAME, GEN_AI_MAIN_AGENT_NAME],
+    [RIUS_MAIN_AGENT_ID, GEN_AI_MAIN_AGENT_ID],
+    [RIUS_MAIN_AGENT_DESCRIPTION, GEN_AI_MAIN_AGENT_DESCRIPTION],
+  ] as const) {
+    if (Object.hasOwn(mainAgent, ours)) upstream[theirs] = mainAgent[ours];
+  }
+  return upstream;
+}
+
 function resolveSpanLimits(): SpanLimits {
   const fromEnv = (names: string[]): number | undefined => {
     for (const name of names) {
@@ -358,24 +398,11 @@ export function init(options: InitOptions = {}): RiusClient {
     // that named nothing resolves to the `unknown_service` placeholder, and
     // the main-agent name must then be ABSENT rather than claim an identity
     // the caller never gave — exactly what the span helpers already do.
-    ...(config.mainAgentName === undefined
-      ? {}
-      : {
-          [GEN_AI_MAIN_AGENT_NAME]: config.mainAgentName,
-          [RIUS_MAIN_AGENT_NAME]: config.mainAgentName,
-        }),
-    // Optional and never defaulted; see config.ts. `service.instance.id`
-    // above is the process identity, these describe the AGENT the process
-    // runs, which outlives any one process.
-    ...(config.mainAgentId === undefined
-      ? {}
-      : { [GEN_AI_MAIN_AGENT_ID]: config.mainAgentId, [RIUS_MAIN_AGENT_ID]: config.mainAgentId }),
-    ...(config.mainAgentDescription === undefined
-      ? {}
-      : {
-          [GEN_AI_MAIN_AGENT_DESCRIPTION]: config.mainAgentDescription,
-          [RIUS_MAIN_AGENT_DESCRIPTION]: config.mainAgentDescription,
-        }),
+    //
+    // The id and description are optional and never defaulted; see config.ts.
+    // `service.instance.id` above is the process identity, these describe the
+    // AGENT the process runs, which outlives any one process.
+    ...mainAgentAttributes(config),
     // The version of the AGENT DEFINITION, never derived from (nor deriving)
     // `service.version` below: the build and the prompt/tools/policy it runs
     // move independently.
