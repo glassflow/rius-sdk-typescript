@@ -62,7 +62,7 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
   them and keeps the helper functions. Never edit the vendored file: change the
   registry, release it, then re-pin with `TAG=<tag> scripts/sync-semconv.sh`.
   The `semconv-parity` workflow's `vendored` job fails on drift, and skips with
-  a warning when `SEMCONV_SOURCE_TOKEN` cannot read rius-semconv.
+  a warning when `SEMCONV_READ_TOKEN` cannot read rius-semconv.
 - **Normalization** (`src/normalize.ts`) rewrites third-party dialects in place
   at `onEnd`. Because it mutates in place, an expanding rule that returns its own
   source key is a correctness requirement, not a nicety. Native canonical keys
@@ -72,13 +72,13 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
 ## Parity with the Python SDK
 
 - `tests/fixtures/semconv.json` mirrors the string constants in Python's
-  `semconv.py` and the `_semconv_generated.py` it re-exports, and `tests/semconv.test.ts` requires every one of them to exist
-  here with the same value, or be listed in `PYTHON_ONLY` with the reason.
+  `semconv.py` and the `_semconv_generated.py` it re-exports, and
+  `tests/semconv.test.ts` requires every one of them to exist here with the
+  same value, or be listed in `PYTHON_ONLY` with the reason.
 - Regenerate it from Python's `main`:
   `SEMCONV_SOURCE=<_semconv_generated.py>,<semconv.py> node scripts/gen-semconv-fixture.mjs`.
-  The `semconv-parity` workflow does this on a schedule and on semconv changes.
-  It **skips silently** when `SEMCONV_SOURCE_TOKEN` is unset, so check its log,
-  not just its green check.
+  The `semconv-parity` workflow does this on a schedule and on semconv changes,
+  reading the public rius-sdk-python without a token.
 - When porting a Python change, port its rule order, member lists and type
   guards too, and say in the PR where a language difference forces a divergence.
 

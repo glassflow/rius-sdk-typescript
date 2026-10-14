@@ -1,6 +1,7 @@
 // Extracts NAME = "value" string constants from the Python SDK's semconv
 // modules so a test can assert our values match verbatim. Reads from local
-// paths or URLs, writes tests/fixtures/semconv.json.
+// paths or URLs (rius-sdk-python is public, so read anonymously), writes
+// tests/fixtures/semconv.json.
 //
 // The Python SDK keeps its constants in _semconv_generated.py, vendored from
 // rius-semconv, and its hand-written semconv.py re-exports them, so both are
@@ -14,13 +15,10 @@ const SOURCES = process.env.SEMCONV_SOURCE
   ? process.env.SEMCONV_SOURCE.split(",")
   : [`${PYTHON}/_semconv_generated.py`, `${PYTHON}/semconv.py`];
 
-// Send the token when the source URL requires authentication.
-// raw.githubusercontent.com honors a GitHub token in the Authorization header.
-const token = process.env.SEMCONV_SOURCE_TOKEN;
-
 async function read(source) {
   if (!source.startsWith("http")) return existsSync(source) ? readFileSync(source, "utf8") : null;
-  const r = await fetch(source, { headers: token ? { Authorization: `token ${token}` } : {} });
+  // rius-sdk-python is public: no token.
+  const r = await fetch(source);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`fetch failed: ${r.status} ${source}`);
   return r.text();
