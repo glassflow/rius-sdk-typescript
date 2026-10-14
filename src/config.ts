@@ -68,6 +68,13 @@ export interface RiusOptions {
   /** Seconds between agent-lifetime heartbeat pings. */
   heartbeatInterval?: number;
   heartbeat?: boolean;
+  /**
+   * The agent this process is, which heartbeats and spans group under
+   * (`RIUS_AGENT_NAME`, defaulting to the service name). Stamped as
+   * `gen_ai.main_agent.name` and `gen_ai.agent.name`, and ALSO used as
+   * `gen_ai.main_agent.id` when `mainAgentId` is unset, so renaming the agent
+   * changes that id.
+   */
   agentName?: string;
   /**
    * A STABLE identifier for the agent this process is, stamped on the
@@ -78,9 +85,10 @@ export interface RiusOptions {
    * `service.instance.id` already answers "which process".
    *
    * Resolution: this option, then `RIUS_MAIN_AGENT_ID`, then unset. When
-   * unset, `gen_ai.main_agent.id` falls back to the agent name, so RENAMING
-   * THE AGENT CHANGES THE ID unless this is set (a one-time debug log says
-   * so); `rius.main_agent.id` stays absent. With neither an id nor a name
+   * unset, `gen_ai.main_agent.id` is a `gen_ai.main_agent.id` already in
+   * `OTEL_RESOURCE_ATTRIBUTES`, else the agent name, so RENAMING THE AGENT
+   * CHANGES THE ID unless an id is set (a one-time debug message on
+   * OpenTelemetry's diag logger says so); `rius.main_agent.id` stays absent. With neither an id nor a name
    * (the `unknown_service` placeholder), no `gen_ai.main_agent.*` key is
    * emitted: the conventions do not allow the entity without an identifier.
    */
@@ -155,6 +163,13 @@ export interface ResolvedConfig {
   mainAgentId?: string;
   mainAgentDescription?: string;
   mainAgentVersion?: string;
+  /**
+   * The `gen_ai.main_agent.*` keys an operator put in
+   * `OTEL_RESOURCE_ATTRIBUTES`. The resource never merges that variable (see
+   * `otelResourceAttribute`), so these are read here and kept by the
+   * main-agent rule rather than overwritten or dropped.
+   */
+  operatorMainAgent: OperatorMainAgent;
   partialSpans: boolean;
   partialSpansDelayMs: number;
   sessionId?: string;
@@ -214,28 +229,36 @@ function clamp(name: string, value: number, min: number, max: number, fallback: 
   return clamped;
 }
 
+/** The `gen_ai.main_agent.*` keys an operator set in `OTEL_RESOURCE_ATTRIBUTES`. */
+export interface OperatorMainAgent {
+  id?: string;
+  name?: string;
+  description?: string;
+}
+
 /**
- * `service.version` as `OTEL_RESOURCE_ATTRIBUTES` carries it, or undefined.
+ * One key as `OTEL_RESOURCE_ATTRIBUTES` carries it, or undefined.
  *
  * Parsed here by hand because, unlike Python, the JS SDK never reads that
  * variable on this path: `Resource.create` merges the OTel env detector in
  * Python, whereas `NodeTracerProvider` takes `options.resource ??
  * defaultResource()` and `resourceFromAttributes` merges nothing — so an
  * explicit resource, which is what client.ts builds, shuts the variable out
- * entirely. Only `service.version` is read, and only as the last tier: pulling
- * the whole detector in would also let the variable rewrite `service.name` and
- * the agent name, which resolve through their own precedence rules above.
+ * entirely. Only `service.version` and the `gen_ai.main_agent.*` keys are
+ * read, each as a tier of its own rule: pulling the whole detector in would
+ * also let the variable rewrite `service.name` and the agent name, which
+ * resolve through their own precedence rules above.
  *
  * The format is the spec's: comma-separated `key=value` pairs, values
  * percent-encoded. A malformed pair is skipped rather than thrown on — a
  * broken environment variable must not stop a process from starting.
  */
-function serviceVersionFromOtelEnv(raw: string | undefined): string | undefined {
+function otelResourceAttribute(raw: string | undefined, key: string): string | undefined {
   if (raw === undefined) return undefined;
   for (const pair of raw.split(",")) {
     const separator = pair.indexOf("=");
     if (separator === -1) continue;
-    if (pair.slice(0, separator).trim() !== "service.version") continue;
+    if (pair.slice(0, separator).trim() !== key) continue;
     const value = pair.slice(separator + 1).trim();
     try {
       return decodeURIComponent(value) || undefined;
@@ -280,7 +303,7 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     serviceVersion:
       options.serviceVersion ||
       env.RIUS_SERVICE_VERSION ||
-      serviceVersionFromOtelEnv(env.OTEL_RESOURCE_ATTRIBUTES) ||
+      otelResourceAttribute(env.OTEL_RESOURCE_ATTRIBUTES, "service.version") ||
       undefined,
     disabled: options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false),
     sampleRate: options.sampleRate ?? rate(env.RIUS_SAMPLE_RATE, 1.0),
@@ -304,6 +327,14 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     mainAgentDescription:
       options.mainAgentDescription || env.RIUS_MAIN_AGENT_DESCRIPTION || undefined,
     mainAgentVersion: options.mainAgentVersion || env.RIUS_MAIN_AGENT_VERSION || undefined,
+    operatorMainAgent: {
+      id: otelResourceAttribute(env.OTEL_RESOURCE_ATTRIBUTES, "gen_ai.main_agent.id"),
+      name: otelResourceAttribute(env.OTEL_RESOURCE_ATTRIBUTES, "gen_ai.main_agent.name"),
+      description: otelResourceAttribute(
+        env.OTEL_RESOURCE_ATTRIBUTES,
+        "gen_ai.main_agent.description",
+      ),
+    },
     partialSpans: options.partialSpans ?? bool("RIUS_PARTIAL_SPANS", env.RIUS_PARTIAL_SPANS, false),
     partialSpansDelayMs: partialSpansDelaySeconds * 1000,
     // Empty is unset, like agentName: a blank session id would group every

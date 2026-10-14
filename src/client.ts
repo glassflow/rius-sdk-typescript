@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { type Tracer, type TracerProvider, context, propagation, trace } from "@opentelemetry/api";
+import {
+  type Tracer,
+  type TracerProvider,
+  context,
+  diag,
+  propagation,
+  trace,
+} from "@opentelemetry/api";
 import { getNumberFromEnv } from "@opentelemetry/core";
 // The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
 // opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
@@ -17,7 +24,7 @@ import {
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
-import { type RiusOptions, namedAgent, resolveConfig } from "./config.js";
+import { type OperatorMainAgent, type RiusOptions, namedAgent, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
 import {
@@ -266,17 +273,6 @@ const ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV = [
 ];
 
 /**
- * The limits this SDK applies, resolved the way OpenTelemetry resolves them.
- *
- * An explicit `spanLimits` in the provider config wins over the environment in
- * OpenTelemetry JS, so passing one would silently override the operator unless
- * the environment is consulted here first, in OpenTelemetry's own order and
- * with its own parser (a blank or non-numeric value is ignored). The result is
- * resolved once and shared with the bridge, which gives a bridged span's twin
- * the same limits an own span gets: a foreign span cannot stamp more
- * attributes, or longer ones, than Rius would have allowed on its own.
- */
-/**
  * The main-agent resource attributes, each only when known: the deprecated
  * `rius.main_agent.{name,id,description}` (kept through their window so a sink
  * that reads only the old keys keeps the agent's identity), plus the
@@ -288,6 +284,7 @@ function mainAgentAttributes(config: {
   mainAgentName?: string;
   mainAgentId?: string;
   mainAgentDescription?: string;
+  operatorMainAgent: OperatorMainAgent;
 }): Record<string, string> {
   const rius: Record<string, string> = {};
   if (config.mainAgentName !== undefined) rius[RIUS_MAIN_AGENT_NAME] = config.mainAgentName;
@@ -301,6 +298,7 @@ function mainAgentAttributes(config: {
       name: config.mainAgentName,
       configuredId: config.mainAgentId,
       description: config.mainAgentDescription,
+      operator: config.operatorMainAgent,
     }),
   };
 }
@@ -308,18 +306,33 @@ function mainAgentAttributes(config: {
 /** Once per process: the hint is advice about configuration, not news. */
 let derivedMainAgentIdHinted = false;
 
+/** `value`, unless it is unset, empty or only whitespace. */
+function usable(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
 /**
  * The conventions' `gen_ai.main_agent` entity: id, name, description.
  *
  * The ONE place the rule for emitting it lives. The conventions make
  * `gen_ai.main_agent.id` the entity's identity and say the entity MUST NOT be
- * emitted without a stable one. So the id is the configured `mainAgentId` when
- * set, otherwise the resolved agent name, as is: it is stable across restarts
- * and readable, but renaming the agent changes it. With neither (no id, and
- * the name empty or the `unknown_service` placeholder) no `gen_ai.main_agent.*`
- * key is emitted at all. Name and description ride only with the id.
+ * emitted without a stable one. So the id is, in order: the configured
+ * `mainAgentId` (the option, then `RIUS_MAIN_AGENT_ID`), then a
+ * `gen_ai.main_agent.id` the operator already put on the resource (`operator`,
+ * from `OTEL_RESOURCE_ATTRIBUTES`), then the resolved agent name, as is: it is
+ * stable across restarts and readable, but renaming the agent changes it. An
+ * empty or whitespace-only value counts as unset. With none of them (and the
+ * name empty or the `unknown_service` placeholder) no `gen_ai.main_agent.*` key
+ * is emitted at all. Name and description ride only with the id.
  *
- * `rius.main_agent.id` is NOT derived: it stays the configured id only.
+ * An operator-set id counts as configured, so it logs no hint. An operator-set
+ * name or description is never overwritten.
+ *
+ * `rius.main_agent.id` is NOT derived, nor taken from the operator's value: it
+ * stays the configured id only.
+ *
+ * The hint goes to OpenTelemetry's diag logger at debug level, so it is silent
+ * unless the app installs one (`diag.setLogger(..., DiagLogLevel.DEBUG)`).
  *
  * Exported for tests; not part of the public API (not re-exported by index).
  */
@@ -327,23 +340,44 @@ export function upstreamMainAgentAttributes(main: {
   name?: string;
   configuredId?: string;
   description?: string;
+  operator?: OperatorMainAgent;
 }): Record<string, string> {
-  const named = namedAgent(main.name) || undefined;
-  const entityId = main.configuredId || named;
-  if (!entityId) return {};
-  if (!main.configuredId && !derivedMainAgentIdHinted) {
-    derivedMainAgentIdHinted = true;
-    console.debug(
-      `[rius] gen_ai.main_agent.id is the agent name "${named}" because no mainAgentId is set; set mainAgentId (RIUS_MAIN_AGENT_ID) to a stable identifier so renaming the agent does not change it.`,
-    );
+  const operator = main.operator ?? {};
+  const named = usable(namedAgent(main.name));
+  const configured = usable(main.configuredId) ?? usable(operator.id);
+  const entityId = configured ?? named;
+  const attributes: Record<string, string> = {};
+  if (entityId) {
+    if (!configured && !derivedMainAgentIdHinted) {
+      derivedMainAgentIdHinted = true;
+      diag.debug(
+        `[rius] gen_ai.main_agent.id is the agent name "${named}" because no mainAgentId is set; set mainAgentId (RIUS_MAIN_AGENT_ID) to a stable identifier so renaming the agent does not change it.`,
+      );
+    }
+    attributes[GEN_AI_MAIN_AGENT_ID] = entityId;
+    if (named !== undefined) attributes[GEN_AI_MAIN_AGENT_NAME] = named;
+    if (main.description) attributes[GEN_AI_MAIN_AGENT_DESCRIPTION] = main.description;
   }
-  return {
-    [GEN_AI_MAIN_AGENT_ID]: entityId,
-    ...(named === undefined ? {} : { [GEN_AI_MAIN_AGENT_NAME]: named }),
-    ...(main.description ? { [GEN_AI_MAIN_AGENT_DESCRIPTION]: main.description } : {}),
-  };
+  // The operator's own name and description stand, as they would on any
+  // resource the OTel SDK merges them into.
+  if (usable(operator.name)) attributes[GEN_AI_MAIN_AGENT_NAME] = operator.name as string;
+  if (usable(operator.description)) {
+    attributes[GEN_AI_MAIN_AGENT_DESCRIPTION] = operator.description as string;
+  }
+  return attributes;
 }
 
+/**
+ * The limits this SDK applies, resolved the way OpenTelemetry resolves them.
+ *
+ * An explicit `spanLimits` in the provider config wins over the environment in
+ * OpenTelemetry JS, so passing one would silently override the operator unless
+ * the environment is consulted here first, in OpenTelemetry's own order and
+ * with its own parser (a blank or non-numeric value is ignored). The result is
+ * resolved once and shared with the bridge, which gives a bridged span's twin
+ * the same limits an own span gets: a foreign span cannot stamp more
+ * attributes, or longer ones, than Rius would have allowed on its own.
+ */
 function resolveSpanLimits(): SpanLimits {
   const fromEnv = (names: string[]): number | undefined => {
     for (const name of names) {
