@@ -423,13 +423,16 @@ explicitly, which in OpenTelemetry for JavaScript means the OTel environment
 is not merged into it, so `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is
 read here by hand as the last tier after the option and `RIUS_SERVICE_VERSION`.
 
-The agent this process *is* is described on the resource under
-`rius.main_agent.*`: `rius.main_agent.name` (the resolved `agentName`, absent
-when nothing was named and it is still the `unknown_service` placeholder),
-plus the optional `rius.main_agent.id`, `.description` and `.version`.
-`gen_ai.agent.name` is still stamped alongside them, unchanged: the new keys
-are additive so that no deployment loses its agent identity between an SDK
-upgrade and a backend one. The vendor namespace exists because
+The agent this process *is* is described on the resource under the GenAI
+conventions' `gen_ai.main_agent.*`: `gen_ai.main_agent.name` (the resolved
+`agentName`, absent when nothing was named and it is still the
+`unknown_service` placeholder), plus the optional `gen_ai.main_agent.id` and
+`.description`. The deprecated `rius.main_agent.name`, `.id` and
+`.description` carry the same values through their deprecation window, and
+`rius.main_agent.version`, which has no upstream twin, carries the optional
+agent version. `gen_ai.agent.name` is still stamped alongside them, unchanged:
+the keys are additive so that no deployment loses its agent identity between
+an SDK upgrade and a backend one. The main-agent keys exist because
 `gen_ai.agent.name` has no resource-level meaning in the conventions and on a
 span means the agent being *invoked*, so one key was answering two questions.
 

@@ -543,6 +543,50 @@ describe("main-agent identity on the resource", () => {
     }
   });
 
+  it("stamps the upstream gen_ai.main_agent.* keys next to rius.main_agent.*", async () => {
+    // The conventions' name for the agent this PROCESS is. Same settings, same
+    // values: the rius keys ride along through their deprecation window.
+    const attributes = await resourceAttributes({
+      agentName: "planner",
+      mainAgentId: "arn:aws:bedrock:eu-central-1:1:agent/ABC",
+      mainAgentDescription: "plans multi-city trips",
+    });
+    expect(attributes["gen_ai.main_agent.name"]).toBe("planner");
+    expect(attributes["gen_ai.main_agent.id"]).toBe("arn:aws:bedrock:eu-central-1:1:agent/ABC");
+    expect(attributes["gen_ai.main_agent.description"]).toBe("plans multi-city trips");
+    for (const field of ["name", "id", "description"]) {
+      expect(attributes[`gen_ai.main_agent.${field}`]).toBe(attributes[`rius.main_agent.${field}`]);
+    }
+  });
+
+  it("reads the upstream main-agent keys from RIUS_MAIN_AGENT_*", async () => {
+    vi.stubEnv("RIUS_MAIN_AGENT_ID", "env-agent");
+    vi.stubEnv("RIUS_MAIN_AGENT_DESCRIPTION", "from the environment");
+    try {
+      const attributes = await resourceAttributes({ agentName: "planner" });
+      expect(attributes["gen_ai.main_agent.id"]).toBe("env-agent");
+      expect(attributes["gen_ai.main_agent.description"]).toBe("from the environment");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("omits the upstream main-agent name when the configured name is the placeholder", async () => {
+    const attributes = await resourceAttributes({});
+    expect("gen_ai.main_agent.name" in attributes).toBe(false);
+  });
+
+  it("leaves the upstream id and description off when unset, and has no upstream version", async () => {
+    const attributes = await resourceAttributes({ agentName: "planner", mainAgentVersion: "7" });
+    for (const key of [
+      "gen_ai.main_agent.id",
+      "gen_ai.main_agent.description",
+      "gen_ai.main_agent.version",
+    ]) {
+      expect(key in attributes, `${key} should be absent`).toBe(false);
+    }
+  });
+
   it("never derives the agent version from service.version, or the reverse", async () => {
     const onlyService = await resourceAttributes({ agentName: "a", serviceVersion: "2.3.1" });
     expect(onlyService["service.version"]).toBe("2.3.1");

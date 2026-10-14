@@ -14,7 +14,7 @@ export const DEFAULT_SERVICE_NAME = "unknown_service";
  * fall back to, so emitting it would claim an identity the caller never gave.
  * Every reader of the configured name must suppress it identically — the
  * agent an AGENT span invokes, the agent a TOOL span was executed by, and the
- * process-level `rius.main_agent.name` — or one process would call itself
+ * process-level `gen_ai.main_agent.name` — or one process would call itself
  * `unknown_service` in one place and nothing in another.
  *
  * Lives here rather than in `agent.ts` only because `agent.ts` imports this
@@ -71,7 +71,8 @@ export interface RiusOptions {
   agentName?: string;
   /**
    * A STABLE identifier for the agent this process is, stamped on the
-   * resource as `rius.main_agent.id`. A registry id or a hosted agent's ARN,
+   * resource as `gen_ai.main_agent.id` (and the deprecated `rius.main_agent.id`).
+   * A registry id or a hosted agent's ARN,
    * NOT a transient in-memory or process-local id: a uuid minted at startup
    * identifies a run, not an agent, and would split one agent into a fresh
    * bucket per restart. `service.instance.id` already answers "which
@@ -82,7 +83,8 @@ export interface RiusOptions {
   mainAgentId?: string;
   /**
    * A human-readable description of the agent this process is, stamped as
-   * `rius.main_agent.description`. This option, then
+   * `gen_ai.main_agent.description` (and the deprecated
+   * `rius.main_agent.description`). This option, then
    * `RIUS_MAIN_AGENT_DESCRIPTION`, then unset.
    */
   mainAgentDescription?: string;
