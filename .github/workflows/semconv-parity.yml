@@ -18,11 +18,28 @@
 #
 # On pull_request nothing is filed either way — drift just fails the job, so a
 # PR touching semconv cannot land with a stale mirror.
+#
+# The `vendored` job checks that src/semconv.generated.ts is byte-identical to
+# the module rius-semconv generates (out/typescript/semconv.generated.ts) at
+# the release tag its header pins. The module is vendored, not edited: a key,
+# a value or a table changes in the rius-semconv registry, then is re-pinned
+# here with `TAG=<tag> scripts/sync-semconv.sh`. rius-semconv is private, so
+# the job reads it with SEMCONV_SOURCE_TOKEN, and SKIPS with a warning when the
+# token is missing or cannot read it: check its log, not just its green check.
 name: semconv-parity
 
 on:
   pull_request:
-    paths: ["src/semconv.ts", "tests/fixtures/semconv.json", "scripts/gen-semconv-fixture.mjs"]
+    paths:
+      - "src/semconv.ts"
+      - "src/semconv.generated.ts"
+      - "tests/fixtures/semconv.json"
+      - "scripts/gen-semconv-fixture.mjs"
+      - "scripts/sync-semconv.sh"
+      - ".github/workflows/semconv-parity.yml"
+  push:
+    branches: [main]
+    paths: ["src/semconv.generated.ts", "scripts/sync-semconv.sh"]
   schedule:
     - cron: "0 6 * * 1"
   # For verifying the check end-to-end (it silently skips without
@@ -30,7 +47,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  vendored:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The vendored module matches its pinned rius-semconv release
+        env:
+          GH_TOKEN: ${{ secrets.SEMCONV_SOURCE_TOKEN }}
+          # No sibling checkout in CI: the script reads the file with gh api.
+          RIUS_SEMCONV: /nonexistent
+        run: |
+          skip() {
+            echo "::warning title=Vendored semconv NOT checked::$1 src/semconv.generated.ts was not compared with rius-semconv."
+            { echo "### Vendored semconv NOT checked"; echo "$1"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          if [ -z "$GH_TOKEN" ]; then
+            skip "SEMCONV_SOURCE_TOKEN is not set (or this pull request comes from a fork)."
+          fi
+          if ! gh api repos/glassflow/rius-semconv --silent 2>/dev/null; then
+            skip "SEMCONV_SOURCE_TOKEN cannot read glassflow/rius-semconv."
+          fi
+          scripts/sync-semconv.sh --check
+
   parity:
+    # The fixture refresh below is for schedule and pull_request runs; a push
+    # to main only needs the vendored check.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write # the bot branch carrying a regenerated fixture
