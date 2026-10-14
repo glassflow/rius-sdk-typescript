@@ -60,6 +60,11 @@
       "family": "openinference-langchain-openai",
       "key": "gen_ai.response.time_to_first_chunk",
       "reason": "As openinference-openai: the openai instrumentor's ChatCompletion span of the streamed call."
+    },
+    {
+      "family": "openinference-llama-index-openai",
+      "key": "gen_ai.response.time_to_first_chunk",
+      "reason": "As openinference-openai: the openai instrumentor's ChatCompletion span of the streamed call. The same double precision, though here it comes out high (0.001000192) rather than low."
     }
   ]
 }
