@@ -1426,30 +1426,67 @@ function vercelToolChoice(raw: AttributeValue): AttributeValue | undefined {
   return compactJson(choice);
 }
 
-/** @ai-sdk/otel's reasoning count and its step operation. Source spellings, inline. */
+/**
+ * @ai-sdk/otel's usage details, its reasoning count among them, and its run and
+ * step operations. Source spellings, inline.
+ */
 const VERCEL_OTEL_REASONING_TOKENS = "ai.usage.outputTokenDetails.reasoningTokens";
+const VERCEL_OTEL_USAGE_DETAILS = [
+  "ai.usage.inputTokenDetails.noCacheTokens",
+  "ai.usage.outputTokenDetails.textTokens",
+  VERCEL_OTEL_REASONING_TOKENS,
+] as const;
+const VERCEL_OTEL_RUN = "invoke_agent";
 const VERCEL_OTEL_AGENT_STEP = "agent_step";
 
 /**
- * The reasoning split on @ai-sdk/otel's spans (v7). Its GenAI-native spans
- * carry no `ai.operationId` and write every count under `gen_ai.usage.*`
- * except this one, which the conventions name but the integration writes only
+ * The usage on @ai-sdk/otel's spans (v7). Its GenAI-native spans carry no
+ * `ai.operationId` and write every count under `gen_ai.usage.*` except the
+ * reasoning split, which the conventions name but the integration writes only
  * under the AI SDK's spelling, and only with its `usage` option (which the SDK
- * passes; see registerVercelTelemetry). A step's count repeats its model
- * call's, so it goes under `rius.aggregated_usage.*`; a run's total is moved
- * there by moveAggregatedUsage with the rest of its usage. The other detail
- * keys that option adds have no canonical counterpart and stay.
+ * passes; see registerVercelTelemetry).
+ *
+ * The run span (invoke_agent) reports the whole run's total, which its model
+ * calls' chat spans report again, so the total moves to
+ * `rius.aggregated_usage.*` and is counted once. With the `usage` option the
+ * run is recognisable from the span alone: an invoke_agent span with no
+ * `ai.operationId` carrying the usage details only the AI SDK writes. That
+ * span-local rule is what the sink applies to raw @ai-sdk/otel traffic, so
+ * both paths store the same row; moveAggregatedUsage still covers this SDK's
+ * own runs by their tracer. An invoke_agent span without the details (another
+ * producer, or @ai-sdk/otel without the option) keeps its usage: it may be the
+ * only record of it. An aggregate already on the span wins over the copy, and
+ * the copy goes.
+ *
+ * A step's reasoning count repeats its model call's, so it goes under
+ * `rius.aggregated_usage.*` too; a model call's goes under `gen_ai.usage.*`.
+ * The other detail keys have no canonical counterpart and stay.
  *
  * Only on a span with no `ai.operationId` that names a GenAI operation. The
- * v6 LegacyOpenTelemetry integration writes this key too, but its spans carry
- * `ai.operationId`, so normalizeVercelSpan never sends them here.
+ * v6 LegacyOpenTelemetry integration writes the same detail keys, but its
+ * spans carry `ai.operationId`, so normalizeVercelSpan never sends them here.
  */
-function vercelOtelReasoning(attributes: Record<string, AttributeValue | undefined>): void {
-  if (attributes[VERCEL_OTEL_REASONING_TOKENS] === undefined) return;
+function vercelOtelUsage(attributes: Record<string, AttributeValue | undefined>): void {
   const operation = attributes[GEN_AI_OPERATION_NAME];
   if (typeof operation !== "string") return;
+  const run =
+    operation === VERCEL_OTEL_RUN &&
+    VERCEL_OTEL_USAGE_DETAILS.some((key) => attributes[key] !== undefined);
+  // First, so a native reasoning count moves and then wins over the detail key.
+  if (run) {
+    for (const key of Object.keys(attributes)) {
+      if (!key.startsWith(GEN_AI_USAGE_PREFIX)) continue;
+      const value = attributes[key];
+      delete attributes[key];
+      const target = RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length);
+      if (value !== undefined && attributes[target] === undefined) attributes[target] = value;
+    }
+  }
+  if (attributes[VERCEL_OTEL_REASONING_TOKENS] === undefined) return;
   const prefix =
-    operation === VERCEL_OTEL_AGENT_STEP ? RIUS_AGGREGATED_USAGE_PREFIX : GEN_AI_USAGE_PREFIX;
+    run || operation === VERCEL_OTEL_AGENT_STEP
+      ? RIUS_AGGREGATED_USAGE_PREFIX
+      : GEN_AI_USAGE_PREFIX;
   mapVercel(
     attributes,
     prefix + GEN_AI_USAGE_REASONING_OUTPUT_TOKENS.slice(GEN_AI_USAGE_PREFIX.length),
@@ -1494,14 +1531,14 @@ function vercelUsage(
  *   the conventions define no embedding input.
  *
  * Only on a span whose `ai.operationId` is one of {@link VERCEL_OPERATIONS}; a
- * span with none (@ai-sdk/otel's) gets only its reasoning split mapped (see
- * vercelOtelReasoning). Every canonical key already present wins, and every
+ * span with none (@ai-sdk/otel's) gets only its usage mapped (see
+ * vercelOtelUsage). Every canonical key already present wins, and every
  * mapped source goes.
  */
 export function normalizeVercelSpan(attributes: Record<string, AttributeValue | undefined>): void {
   const operation = vercelOperation(attributes[VERCEL_OPERATION_ID]);
   if (operation === undefined) {
-    if (attributes[VERCEL_OPERATION_ID] === undefined) vercelOtelReasoning(attributes);
+    if (attributes[VERCEL_OPERATION_ID] === undefined) vercelOtelUsage(attributes);
     return;
   }
   vercelUsage(attributes, operation);
