@@ -13,3 +13,15 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(deps)"
+    # OpenTelemetry JS packages pin their siblings exactly, and each
+    # experimental 0.x release pairs with one stable 2.x release. Bumped one
+    # at a time they nest duplicate copies, so they move together.
+    # @ai-sdk/otel pins `ai` exactly for the same reason.
+    groups:
+      opentelemetry:
+        patterns:
+          - "@opentelemetry/*"
+      ai-sdk:
+        patterns:
+          - "ai"
+          - "@ai-sdk/*"
