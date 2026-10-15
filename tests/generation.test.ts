@@ -155,6 +155,33 @@ describe("generations", () => {
     expect(ttfc).toBeGreaterThanOrEqual(0.025);
   });
 
+  // recordFirstToken reads two fields the OpenTelemetry SDK span does not
+  // publish, falling back to the Generation's own clock without them. A
+  // fallback would still pass the tests above by microseconds, so this pins
+  // the fields themselves: if an OpenTelemetry upgrade renames them, fix
+  // elapsedSinceStart in src/generation.ts rather than this test.
+  it("can read the SDK span fields time_to_first_chunk is measured from", () => {
+    const implicit = getTracer().startSpan("chat") as unknown as Record<string, unknown>;
+    const explicit = getTracer().startSpan("chat", {
+      startTime: Date.now() - 1_000,
+    }) as unknown as Record<string, unknown>;
+    try {
+      expect(
+        typeof implicit._performanceStartTime,
+        "the OpenTelemetry SDK span no longer exposes _performanceStartTime",
+      ).toBe("number");
+      expect(
+        implicit._startTimeProvided,
+        "the OpenTelemetry SDK span no longer exposes _startTimeProvided",
+      ).toBe(false);
+      expect(explicit._startTimeProvided).toBe(true);
+      expect(Array.isArray(explicit.startTime)).toBe(true);
+    } finally {
+      (implicit as unknown as { end(): void }).end();
+      (explicit as unknown as { end(): void }).end();
+    }
+  });
+
   it("time_to_first_chunk counts from an explicit start time", async () => {
     const span = getTracer().startSpan("chat", { startTime: Date.now() - 2_000 });
     const gen = new Generation(span);

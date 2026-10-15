@@ -95,7 +95,6 @@ export interface GenerationOptions {
   operation?: string;
 }
 
-/** An LLM call. Content uses gen_ai message keys, never input.value. */
 /**
  * Milliseconds since the span's start, on the clock OpenTelemetry itself
  * stamps the span's later times with, so the duration is exactly what an event
@@ -126,6 +125,7 @@ function elapsedSinceStart(span: unknown, fallbackStartedAt: number): number {
   return performance.now() - fallbackStartedAt;
 }
 
+/** An LLM call. Content uses gen_ai message keys, never input.value. */
 export class Generation extends Observation {
   private firstTokenRecorded = false;
   /**
