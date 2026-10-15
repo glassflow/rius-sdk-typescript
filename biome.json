@@ -1,26 +1,26 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
   },
   "files": {
-    "ignore": ["tests/fixtures/semconv/**", "tests/conformance/_recording.mjs"]
+    "includes": ["**", "!**/tests/fixtures/semconv", "!**/tests/conformance/_recording.mjs"]
   },
-  "organizeImports": { "enabled": true },
-  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
   "formatter": { "enabled": true, "indentStyle": "space", "lineWidth": 100 },
   "overrides": [
     {
-      "include": ["package.json"],
+      "includes": ["**/package.json"],
       "formatter": { "enabled": false }
     },
     {
-      "include": [
-        "tests/fixtures/context_sizes_*.json",
-        "tests/fixtures/openinference_messages.json",
-        "tests/fixtures/vercel_cases.json"
+      "includes": [
+        "**/tests/fixtures/context_sizes_*.json",
+        "**/tests/fixtures/openinference_messages.json",
+        "**/tests/fixtures/vercel_cases.json"
       ],
       "formatter": { "enabled": false }
     }
