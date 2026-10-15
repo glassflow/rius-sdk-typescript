@@ -9,7 +9,24 @@
     "includes": ["**", "!**/tests/fixtures/semconv", "!**/tests/conformance/_recording.mjs"]
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
-  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noParameterAssign": "error",
+        "noUselessElse": "error",
+        "noInferrableTypes": "error",
+        "useNumberNamespace": "error",
+        "useSingleVarDeclarator": "error",
+        "noUnusedTemplateLiteral": "error",
+        "useDefaultParameterLast": "error",
+        "useEnumInitializers": "error",
+        "useSelfClosingElements": "error"
+      },
+      "suspicious": { "noVar": "error" }
+    }
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "lineWidth": 100 },
   "overrides": [
     {
