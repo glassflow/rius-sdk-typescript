@@ -1479,7 +1479,8 @@ function vercelOtelUsage(attributes: Record<string, AttributeValue | undefined>)
       const value = attributes[key];
       delete attributes[key];
       const target = RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length);
-      if (value !== undefined && attributes[target] === undefined) attributes[target] = value;
+      if (value !== undefined && value !== "" && attributes[target] === undefined)
+        attributes[target] = value;
     }
   }
   if (attributes[VERCEL_OTEL_REASONING_TOKENS] === undefined) return;
