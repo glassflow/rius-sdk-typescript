@@ -51,6 +51,12 @@ on:
 permissions:
   contents: read
 
+# Queue rather than cancel, so a scheduled and a dispatched run never race the
+# force-push to bot/semconv-fixture.
+concurrency:
+  group: semconv-parity-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   vendored:
     runs-on: ubuntu-latest
@@ -153,6 +159,10 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The push below uses the PAT in an explicit URL; nothing needs the
+          # job token left in .git/config.
+          persist-credentials: false
       - name: Write the regenerated fixture
         env:
           FIXTURE: ${{ needs.parity.outputs.fixture }}
