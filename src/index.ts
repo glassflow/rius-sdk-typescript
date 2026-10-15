@@ -1,4 +1,4 @@
-export const VERSION = "1.3.0"; // x-release-please-version
+export const VERSION = "1.4.0"; // x-release-please-version
 
 export { RiusClient, getTracer, init } from "./client.js";
 export type { InitOptions } from "./client.js";
