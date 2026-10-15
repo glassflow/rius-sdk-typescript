@@ -5,7 +5,7 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { instrumentMcpClient } from "../src/instrumentationMcp.js";
 import { SpanKind } from "../src/semconv.js";
 import { startAsCurrentSpan } from "../src/spans.js";

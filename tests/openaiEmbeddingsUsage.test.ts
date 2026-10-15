@@ -2,7 +2,7 @@ import http from "node:http";
 import { createRequire } from "node:module";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { GEN_AI_USAGE_INPUT_TOKENS } from "../src/semconv.js";
 
 // Token counts on an OpenAI embeddings call, end to end: a real OpenAI client

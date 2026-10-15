@@ -2,7 +2,7 @@ import http from "node:http";
 import { trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { installLangchainSpanContext } from "../src/langchainSpanContext.js";
 
 // A LangChain chat model call, end to end: a real ChatOpenAI against a local

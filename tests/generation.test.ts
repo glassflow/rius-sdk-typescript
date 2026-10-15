@@ -2,7 +2,7 @@ import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { hrTimeToMilliseconds } from "@opentelemetry/core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
 import { isContentKey } from "../src/masking.js";
 import { startAsCurrentSpan } from "../src/spans.js";

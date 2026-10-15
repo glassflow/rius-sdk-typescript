@@ -14,7 +14,7 @@ import {
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { PENDING_IDENTITY_ATTRIBUTES, RIUS_SPAN_PENDING, WORKSPACE_ROUTE } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 import { registerWorkspace, withWorkspace } from "../src/workspace.js";

@@ -1,7 +1,7 @@
-import { type AttributeValue, type Attributes, SpanStatusCode } from "@opentelemetry/api";
+import { type Attributes, type AttributeValue, SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, getTracer, init } from "../src/client.js";
+import { getTracer, init, type RiusClient } from "../src/client.js";
 import { NormalizingSpanProcessor, reassembleOpenInferenceMessages } from "../src/normalize.js";
 import { GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES } from "../src/semconv.js";
 import { MAX_ATTR_CHARS, TRUNCATION_MARKER } from "../src/serde.js";

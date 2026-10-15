@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  contextSizes,
   DETAIL_WINDOW,
   MAX_SIZES_BYTES,
   SIZES_VERSION,
-  contextSizes,
 } from "../src/contextSizes.js";
 
 type Part = Record<string, unknown>;

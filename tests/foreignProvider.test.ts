@@ -9,13 +9,13 @@
  */
 import {
   type Context,
+  context,
+  defaultTextMapGetter,
   ProxyTracerProvider,
+  propagation,
   ROOT_CONTEXT,
   type Span,
   type TracerProvider,
-  context,
-  defaultTextMapGetter,
-  propagation,
   trace,
 } from "@opentelemetry/api";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
@@ -31,9 +31,9 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type InitOptions, type RiusClient, getTracer, init } from "../src/client.js";
+import { getTracer, type InitOptions, init, type RiusClient } from "../src/client.js";
 import { resolveConfig } from "../src/config.js";
-import { ForeignParentDetector, bridge, foreignGlobalProviderName } from "../src/foreign.js";
+import { bridge, ForeignParentDetector, foreignGlobalProviderName } from "../src/foreign.js";
 import {
   GEN_AI_AGENT_NAME,
   RIUS_PARENT_FOREIGN,

@@ -1,7 +1,7 @@
 import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
 import * as semconv from "../src/semconv.js";
-import { SpanKind, composeSpanName, kindAttributes, otelSpanKind } from "../src/semconv.js";
+import { composeSpanName, kindAttributes, otelSpanKind, SpanKind } from "../src/semconv.js";
 
 describe("semconv", () => {
   it("uses the wire-visible tracer name the backend keys on", () => {

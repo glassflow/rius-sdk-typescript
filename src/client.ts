@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-  type Tracer,
-  type TracerProvider,
   context,
   diag,
   propagation,
+  type Tracer,
+  type TracerProvider,
   trace,
 } from "@opentelemetry/api";
 import { getNumberFromEnv } from "@opentelemetry/core";
@@ -24,21 +24,21 @@ import {
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
-import { type OperatorMainAgent, type RiusOptions, namedAgent, resolveConfig } from "./config.js";
+import { namedAgent, type OperatorMainAgent, type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
 import {
   type Bridge,
   BridgeAwareSampler,
-  ForeignParentDetector,
-  ResourceAdoptingExporter,
   bridge,
+  ForeignParentDetector,
   foreignGlobalProviderName,
   globalTracerProvider,
+  ResourceAdoptingExporter,
   rememberOwnProvider,
 } from "./foreign.js";
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
-import { type InstrumentModules, enableInstrumentations } from "./instrumentation.js";
+import { enableInstrumentations, type InstrumentModules } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
@@ -60,9 +60,9 @@ import { UserSpanProcessor } from "./user.js";
 import { SDK_VERSION } from "./version.js";
 import {
   RoutingSpanExporter,
+  setGlobalRouting,
   type WorkspaceExporterFactory,
   WorkspaceSpanProcessor,
-  setGlobalRouting,
 } from "./workspace.js";
 
 /** Options accepted by {@link init}, extending the shared configuration. */

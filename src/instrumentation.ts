@@ -471,7 +471,10 @@ async function registerVercelTelemetry(
   if (register === undefined) return false; // ai absent, or v5/v6: nothing to register
   const otel = await optional("@ai-sdk/otel");
   const OpenTelemetryIntegration = otel?.OpenTelemetry as
-    | (new (options: { tracer: unknown; usage: boolean }) => unknown)
+    | (new (options: {
+        tracer: unknown;
+        usage: boolean;
+      }) => unknown)
     | undefined;
   if (OpenTelemetryIntegration === undefined) {
     console.warn(

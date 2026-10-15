@@ -1,7 +1,7 @@
-import { ROOT_CONTEXT, context, trace } from "@opentelemetry/api";
+import { context, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { resolveConfig } from "../src/config.js";
 import { HeartbeatSender, type OpenRootSpanTracker } from "../src/heartbeat.js";
 import { SESSION_ID, WORKSPACE_ROUTE } from "../src/semconv.js";

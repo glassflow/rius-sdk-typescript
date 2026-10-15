@@ -10,7 +10,7 @@ import {
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { NormalizingSpanProcessor, normalizeToolDefinitions } from "../src/normalize.js";
 import {
   GEN_AI_OPERATION_NAME,

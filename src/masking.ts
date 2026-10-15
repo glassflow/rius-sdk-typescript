@@ -3,10 +3,10 @@ import type { ExportResult } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { Mask } from "./config.js";
 import {
-  CONTENT_ATTRIBUTES,
   CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES,
   CONTENT_ATTRIBUTE_PREFIXES,
   CONTENT_ATTRIBUTE_SUFFIXES,
+  CONTENT_ATTRIBUTES,
   CONTENT_PREFIX_IDENTITY_ATTRIBUTES,
   EXCEPTION_EVENT,
 } from "./semconv.js";

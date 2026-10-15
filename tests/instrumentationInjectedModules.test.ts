@@ -1,7 +1,7 @@
 import http from "node:http";
 import * as anthropicSdk from "@anthropic-ai/sdk";
-import { AnthropicInstrumentation } from "@arizeai/openinference-instrumentation-anthropic";
 import * as anthropicInstrumentation from "@arizeai/openinference-instrumentation-anthropic";
+import { AnthropicInstrumentation } from "@arizeai/openinference-instrumentation-anthropic";
 import { OpenAIInstrumentation } from "@arizeai/openinference-instrumentation-openai";
 import {
   BasicTracerProvider,
@@ -9,7 +9,7 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { enableInstrumentations } from "../src/instrumentation.js";
 
 // Modules the app imported itself, handed to init() instead of being resolved

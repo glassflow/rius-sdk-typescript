@@ -1,6 +1,6 @@
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type InitOptions, type RiusClient, init } from "../src/client.js";
+import { type InitOptions, init, type RiusClient } from "../src/client.js";
 import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
 import { TRUNCATION_MARKER } from "../src/serde.js";
 

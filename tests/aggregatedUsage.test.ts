@@ -14,7 +14,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
 import { aggregatingTracer } from "../src/aggregatedUsage.js";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import {
   GEN_AI_OPERATION_NAME,

@@ -25,7 +25,7 @@
  *   Starting a span under a different alias than its parent's logs a
  *   warning; switch workspaces at request boundaries, not inside a trace.
  */
-import { type Context, context as apiContext, createContextKey, trace } from "@opentelemetry/api";
+import { context as apiContext, type Context, createContextKey, trace } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
 import { ExportResultCode } from "@opentelemetry/core";
 import type {

@@ -24,7 +24,7 @@
  * on a throw, and follow async continuations the same way the active span
  * does.
  */
-import { type Context, context as apiContext, createContextKey } from "@opentelemetry/api";
+import { context as apiContext, type Context, createContextKey } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { USER_ID } from "./semconv.js";
 

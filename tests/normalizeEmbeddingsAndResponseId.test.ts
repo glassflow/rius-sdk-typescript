@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createRequire } from "node:module";
-import type { AttributeValue, Attributes } from "@opentelemetry/api";
+import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -9,7 +9,7 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { MaskingSpanExporter } from "../src/masking.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { GEN_AI_REQUEST_MODEL, GEN_AI_RESPONSE_ID, OUTPUT_VALUE } from "../src/semconv.js";

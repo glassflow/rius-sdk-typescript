@@ -1,7 +1,7 @@
 import type { Instrumentation } from "@opentelemetry/instrumentation";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { REGISTRY, type RegistryEntry } from "../src/instrumentation.js";
 
 /**

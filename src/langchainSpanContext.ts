@@ -1,4 +1,4 @@
-import { type Span, context, trace } from "@opentelemetry/api";
+import { context, type Span, trace } from "@opentelemetry/api";
 
 /**
  * Nest a LangChain chat model's provider call under LangChain's span.

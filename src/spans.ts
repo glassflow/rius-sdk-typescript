@@ -8,6 +8,7 @@ import { executingAgentName, resolveAgentName, withAgentScope } from "./agent.js
 import { getTracer } from "./client.js";
 import { errorType, exceptionForRecording } from "./errorType.js";
 import {
+  composeSpanName,
   ERROR_TYPE,
   GEN_AI_AGENT_ID,
   GEN_AI_AGENT_NAME,
@@ -18,12 +19,11 @@ import {
   GEN_AI_TOOL_CALL_ID,
   GEN_AI_TOOL_TYPE,
   INPUT_VALUE,
+  kindAttributes,
   OUTPUT_VALUE,
+  otelSpanKind,
   SpanKind,
   USER_ID,
-  composeSpanName,
-  kindAttributes,
-  otelSpanKind,
 } from "./semconv.js";
 import { attributeValue, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";

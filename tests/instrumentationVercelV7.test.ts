@@ -5,7 +5,7 @@ import http from "node:http";
 // bound to our tracer, so a v7 app is traced with zero telemetry code.
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 
 // init() hands back the existing client while one is active, so a client that
 // is never shut down silently becomes every later test's client. A test body

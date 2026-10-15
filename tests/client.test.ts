@@ -1,11 +1,11 @@
-import { ROOT_CONTEXT, TraceFlags, context, trace } from "@opentelemetry/api";
+import { context, ROOT_CONTEXT, TraceFlags, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  type InitOptions,
-  RiusClient,
   getTracer,
+  type InitOptions,
   init,
+  RiusClient,
   upstreamMainAgentAttributes,
 } from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";

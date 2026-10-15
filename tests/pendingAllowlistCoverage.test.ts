@@ -2,14 +2,14 @@ import type { Context } from "@opentelemetry/api";
 import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type RiusClient, init, spanProcessorSink } from "../src/client.js";
+import { init, type RiusClient, spanProcessorSink } from "../src/client.js";
 import { startGeneration } from "../src/generation.js";
 import { instrumentMcpClient } from "../src/instrumentationMcp.js";
 import {
+  kindAttributes,
   PENDING_IDENTITY_ATTRIBUTES,
   PENDING_IDENTITY_PREFIXES,
   SpanKind,
-  kindAttributes,
 } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 

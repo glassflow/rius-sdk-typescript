@@ -31,11 +31,12 @@
  */
 
 import {
-  type AttributeValue,
   type Attributes,
+  type AttributeValue,
   type Context,
   type Exception,
   type HrTime,
+  isSpanContextValid,
   type Link,
   ProxyTracerProvider,
   type SpanContext,
@@ -44,7 +45,6 @@ import {
   SpanStatusCode,
   type TimeInput,
   type TracerProvider,
-  isSpanContextValid,
   trace,
 } from "@opentelemetry/api";
 import type { InstrumentationScope } from "@opentelemetry/core";

@@ -1,4 +1,4 @@
-import type { AttributeValue, Attributes } from "@opentelemetry/api";
+import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { trace } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
 import {
@@ -12,11 +12,11 @@ import { describe, expect, it } from "vitest";
 import { MaskingSpanExporter } from "../src/masking.js";
 import {
   type Converter,
+  copy,
+  jsonMember,
   NORMALIZATION_RULES,
   type NormalizationRule,
   NormalizingSpanProcessor,
-  copy,
-  jsonMember,
   sum,
   toInt,
   wrapInList,

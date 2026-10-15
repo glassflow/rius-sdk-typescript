@@ -2,7 +2,7 @@ import http from "node:http";
 import { createRequire } from "node:module";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { observe } from "../src/observe.js";
 import { EXCEPTION_EVENT, EXCEPTION_TYPE, SpanKind } from "../src/semconv.js";
 
@@ -17,10 +17,18 @@ import { EXCEPTION_EVENT, EXCEPTION_TYPE, SpanKind } from "../src/semconv.js";
 const require = createRequire(import.meta.url);
 
 interface Clients {
-  Anthropic: new (options: { apiKey: string; baseURL: string; maxRetries: number }) => {
+  Anthropic: new (options: {
+    apiKey: string;
+    baseURL: string;
+    maxRetries: number;
+  }) => {
     messages: { create(body: unknown): Promise<unknown> };
   };
-  OpenAI: new (options: { apiKey: string; baseURL: string; maxRetries: number }) => {
+  OpenAI: new (options: {
+    apiKey: string;
+    baseURL: string;
+    maxRetries: number;
+  }) => {
     chat: { completions: { create(body: unknown): Promise<unknown> } };
   };
 }
