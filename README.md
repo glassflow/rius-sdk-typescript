@@ -123,7 +123,7 @@ await handleQuery("hello");
 
 That is the CHAIN case, the default. On every other kind the span is named
 the way the GenAI conventions say to, `{operation} {target}`, and the
-wrapped function's name is used as the target only where it IS the target —
+wrapped function's name is used as the target only where it IS the target,
 a tool:
 
 ```ts
@@ -140,12 +140,12 @@ to override any of this.
 
 An AGENT span (from `observe`, `startSpan` or `startAsCurrentSpan`) can also
 carry `agentId` and `agentVersion`, which describe the agent it *invoked*, as
-`gen_ai.agent.id` and `gen_ai.agent.version`. Both are taken verbatim — the
-conventions' own version examples are `1.0.0` and `2025-05-01` — and both are
+`gen_ai.agent.id` and `gen_ai.agent.version`. Both are taken verbatim (the
+conventions' own version examples are `1.0.0` and `2025-05-01`), and both are
 ignored on every other kind.
 
 An AGENT wrapper also scopes the calls it makes: TOOL spans opened while it
-runs, local or MCP, carry that agent as `gen_ai.agent.name` — on an
+runs, local or MCP, carry that agent as `gen_ai.agent.name`. On an
 execute-tool span the conventions define that key as the agent *executing*
 the tool, where on an invoke-agent span it is the agent being *invoked*.
 Outside any agent, a tool span falls back to the agent `init()` was given.
@@ -174,7 +174,7 @@ optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
 works when you have nothing to configure.
 
 **The name is optional too.** Omit it and the span is named the way the
-OpenTelemetry GenAI conventions say to — `{operation} {target}` — composed
+OpenTelemetry GenAI conventions say to, `{operation} {target}`, composed
 from the attributes the span already carries. The callback still comes last,
 so `startAsCurrentSpan(options, fn)` and `startAsCurrentSpan(fn)` are both
 valid:
@@ -187,7 +187,7 @@ valid:
 | AGENT | `invoke_agent planner` | `invoke_agent` |
 | RETRIEVER | `retrieval docs-index` | `retrieval` |
 | RERANKER | `rerank rerank-v3.5` (`{operation} {gen_ai.request.model}`) | `rerank` |
-| CHAIN | the function name for `observe`, else `chain` | — |
+| CHAIN | the function name for `observe`, else `chain` | n/a |
 
 ```ts
 // Named "execute_tool get_weather", with gen_ai.tool.name "get_weather".
@@ -394,7 +394,7 @@ the process `require`d the provider before `init()`, the ESM build
 otherwise. Two combinations therefore stay uncovered until the
 upstream fix lands: a CommonJS application whose *only* `require` of
 the provider happens lazily after `init()` (requiring it anywhere
-before `init()` avoids this), and — the mirror image — an ESM
+before `init()` avoids this), and (the mirror image) an ESM
 application where some CommonJS dependency `require`d the provider
 before `init()`, which wins the choice away from the ESM build the
 application itself is calling. The `langchain`, `vercel-ai` and `mcp`
@@ -470,7 +470,7 @@ because `gen_ai.agent.name` has no resource-level meaning in the conventions
 and on a span means the agent being *invoked*, so one key was answering two
 questions.
 
-`mainAgentId` must be a **stable** identifier — a registry id, a hosted
+`mainAgentId` must be a **stable** identifier, such as a registry id or a hosted
 agent's ARN. A uuid minted at startup or another process-local id identifies
 a *run*, not an agent, and would split one agent into a fresh bucket per
 restart; `service.instance.id` already answers "which process".
@@ -480,7 +480,7 @@ Three versions travel separately and none is ever derived from another:
 | Key                        | Answers                                             |
 | -------------------------- | --------------------------------------------------- |
 | `service.version`          | which build of the deployment is running             |
-| `rius.main_agent.version`  | which version of the agent *definition* it runs — its prompt, tools and policy |
+| `rius.main_agent.version`  | which version of the agent *definition* it runs: its prompt, tools and policy |
 | `gen_ai.agent.version`     | which version of the agent a given AGENT span *invoked* |
 
 A service can sit at `2.3.1` while the agent definition it runs is at `7` and
@@ -517,7 +517,7 @@ created and are simply dropped.
 OpenTelemetry has one global tracer provider per process, and the first
 registration wins. If another SDK (Langfuse v3, for one) claims it before
 `init()`, your own job and tool spans go to that SDK only, while the LLM spans
-inside them still reach Rius — so Rius receives traces whose parents it never
+inside them still reach Rius, so Rius receives traces whose parents it never
 gets. Rius detects this whatever you configure: those LLM spans carry
 `rius.parent.foreign=true`, the resource records
 `rius.sdk.global_provider=foreign:<class>`, and the first one logs a warning.
