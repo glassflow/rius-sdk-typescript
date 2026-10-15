@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/glassflow/rius-sdk-typescript/main/docs/assets/banner.png" alt="Rius by GlassFlow: trace your AI agents with OpenTelemetry" width="100%">
+</p>
+
 # @glassflow-ai/rius
 
 OpenTelemetry-native tracing for AI agents and LLM applications.
@@ -7,7 +11,26 @@ tool calls and chains, generations for LLM calls, and a function wrapper
 that turns a plain `async` function into an instrumented one. Traces are
 sent as OTLP over HTTP, so any OTLP-compatible backend can receive them.
 
-> Status: alpha and unpublished (0.1.0). APIs may change before the first release.
+<p>
+  <a href="https://docs.glassflow.ai/rius/sdk"><b>Docs</b></a> ·
+  <a href="https://docs.glassflow.ai/rius/sdk/reference/typescript">TypeScript reference</a> ·
+  <a href="https://console.rius-glassflow.com">Console</a> ·
+  <a href="https://github.com/glassflow/rius-sdk-typescript/blob/main/CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/glassflow/rius-sdk-typescript/issues">Issues</a>
+</p>
+
+[![npm](https://img.shields.io/npm/v/@glassflow-ai/rius?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/@glassflow-ai/rius)
+[![npm downloads](https://img.shields.io/npm/dw/@glassflow-ai/rius?style=flat-square)](https://www.npmjs.com/package/@glassflow-ai/rius)
+[![Node](https://img.shields.io/node/v/@glassflow-ai/rius?style=flat-square&logo=nodedotjs&logoColor=white)](https://github.com/glassflow/rius-sdk-typescript/blob/main/package.json)
+[![CI](https://img.shields.io/github/actions/workflow/status/glassflow/rius-sdk-typescript/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/glassflow/rius-sdk-typescript/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6b7280?style=flat-square)](https://github.com/glassflow/rius-sdk-typescript/blob/main/LICENSE)
+![OpenTelemetry GenAI](https://img.shields.io/badge/OpenTelemetry-GenAI-425cc7?style=flat-square&logo=opentelemetry&logoColor=white)
+![TypeScript types included](https://img.shields.io/badge/types-included-3178c6?style=flat-square&logo=typescript&logoColor=white)
+
+Releases follow [Conventional Commits](https://www.conventionalcommits.org/):
+a breaking change ships as a new major version. The
+[changelog](https://github.com/glassflow/rius-sdk-typescript/blob/main/CHANGELOG.md)
+lists what changed in each release.
 
 ## Install
 
