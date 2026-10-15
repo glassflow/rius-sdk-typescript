@@ -1,9 +1,9 @@
 import http from "node:http";
 import { createRequire } from "node:module";
-import { SpanStatusCode, context, trace } from "@opentelemetry/api";
+import { context, SpanStatusCode, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { REGISTRY } from "../src/instrumentation.js";
 import { observe } from "../src/observe.js";
 import { ERROR_TYPE, EXCEPTION_EVENT, EXCEPTION_TYPE, SpanKind } from "../src/semconv.js";

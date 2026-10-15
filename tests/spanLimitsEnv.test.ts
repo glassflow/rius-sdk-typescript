@@ -1,7 +1,11 @@
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, getTracer, init } from "../src/client.js";
-import { DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT } from "../src/client.js";
+import {
+  DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT,
+  getTracer,
+  init,
+  type RiusClient,
+} from "../src/client.js";
 
 /**
  * The span attribute COUNT limit init() applies, and the environment variables

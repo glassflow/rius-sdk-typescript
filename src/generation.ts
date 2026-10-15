@@ -4,6 +4,7 @@ import { contextSizes } from "./contextSizes.js";
 import { type Message, normalizeMessages } from "./messages.js";
 import { REQUEST_PARAMETER_GUARDS } from "./normalize.js";
 import {
+  composeSpanName,
   GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_INPUT_MESSAGES,
   GEN_AI_OPERATION_NAME,
@@ -24,14 +25,13 @@ import {
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-  RIUS_CONTEXT_SIZES,
-  RIUS_REQUEST_PREFIX,
-  SpanKind,
-  USER_ID,
-  composeSpanName,
   kindAttributes,
   otelSpanKind,
+  RIUS_CONTEXT_SIZES,
+  RIUS_REQUEST_PREFIX,
   requestAttributeKey,
+  SpanKind,
+  USER_ID,
 } from "./semconv.js";
 import { attributeValue, toAttributeValue } from "./serde.js";
 import { Observation, runActive, splitScopedArgs } from "./spans.js";

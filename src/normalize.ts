@@ -1,6 +1,6 @@
 import {
-  type AttributeValue,
   type Attributes,
+  type AttributeValue,
   type Context,
   SpanStatusCode,
 } from "@opentelemetry/api";
@@ -46,14 +46,15 @@ import {
   GEN_AI_USAGE_PREFIX,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   INVOCATION_PARAMETERS_CONTENT_MEMBERS,
+  kindForOperation,
   LLM_INPUT_MESSAGES_PREFIX,
   LLM_INVOCATION_PARAMETERS,
   LLM_MESSAGE_CONTENT,
-  LLM_MESSAGE_CONTENTS_PREFIX,
   LLM_MESSAGE_CONTENT_PREFIX,
+  LLM_MESSAGE_CONTENTS_PREFIX,
   LLM_MESSAGE_ROLE,
-  LLM_MESSAGE_TOOL_CALLS_PREFIX,
   LLM_MESSAGE_TOOL_CALL_ID,
+  LLM_MESSAGE_TOOL_CALLS_PREFIX,
   LLM_OUTPUT_MESSAGES_PREFIX,
   LLM_TOOL_CALL_FUNCTION_ARGUMENTS,
   LLM_TOOL_CALL_FUNCTION_NAME,
@@ -61,11 +62,10 @@ import {
   LLM_TOOL_CALL_PREFIX,
   OPENINFERENCE_SPAN_KIND,
   OUTPUT_VALUE,
+  operationForKind,
   RIUS_AGGREGATED_USAGE_PREFIX,
   RIUS_REQUEST_TOOL_CHOICE,
   SpanKind,
-  kindForOperation,
-  operationForKind,
 } from "./semconv.js";
 import { toAttributeValue } from "./serde.js";
 

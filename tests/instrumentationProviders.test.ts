@@ -5,8 +5,8 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { describe, expect, it, vi } from "vitest";
-import { REGISTRY, enableInstrumentations } from "../src/instrumentation.js";
+import { describe, expect, it } from "vitest";
+import { enableInstrumentations, REGISTRY } from "../src/instrumentation.js";
 import { reassembleOpenInferenceMessages } from "../src/normalize.js";
 
 // The Anthropic and LangChain entries are asserted end to end against the real
@@ -58,7 +58,10 @@ const ANTHROPIC_REPLY = {
 };
 
 interface AnthropicModule {
-  default: new (options: { apiKey: string; baseURL: string }) => {
+  default: new (options: {
+    apiKey: string;
+    baseURL: string;
+  }) => {
     messages: { create(body: unknown): Promise<{ content: { text?: string }[] }> };
   };
 }

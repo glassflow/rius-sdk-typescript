@@ -1,4 +1,4 @@
-import { type Span, context, trace } from "@opentelemetry/api";
+import { context, type Span, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   BasicTracerProvider,

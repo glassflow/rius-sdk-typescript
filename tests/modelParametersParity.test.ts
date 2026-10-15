@@ -1,7 +1,7 @@
 import type { Attributes } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { startGeneration } from "../src/generation.js";
 import { GEN_AI_REQUEST_PREFIX, RIUS_REQUEST_PREFIX } from "../src/semconv.js";
 import expected from "./fixtures/model_parameters_expected.json" with { type: "json" };

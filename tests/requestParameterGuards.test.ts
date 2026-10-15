@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startGeneration } from "../src/generation.js";
 import {
   INVOCATION_PARAMETER_MEMBERS,
-  REQUEST_PARAMETER_GUARDS,
   invocationParameters,
+  REQUEST_PARAMETER_GUARDS,
 } from "../src/normalize.js";
 import {
   GEN_AI_REQUEST_PARAMETERS,

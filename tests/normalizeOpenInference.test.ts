@@ -1,5 +1,5 @@
+import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
-import type { AttributeValue, Attributes } from "@opentelemetry/api";
 import {
   InMemorySpanExporter,
   type ReadableSpan,
@@ -7,7 +7,7 @@ import {
   type TimedEvent,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import {
   INVOCATION_PARAMETER_MEMBERS,
   NORMALIZATION_RULES,
@@ -15,7 +15,7 @@ import {
   OPENINFERENCE_FIRST_TOKEN_EVENT,
   PROVIDER_NAME_ALIASES,
 } from "../src/normalize.js";
-import { SpanKind, kindForOperation, operationForKind } from "../src/semconv.js";
+import { kindForOperation, operationForKind, SpanKind } from "../src/semconv.js";
 import { startSpan } from "../src/spans.js";
 
 /**

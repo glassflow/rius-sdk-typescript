@@ -9,7 +9,7 @@ import {
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init, spanProcessorSink } from "../src/client.js";
+import { init, type RiusClient, spanProcessorSink } from "../src/client.js";
 import { isContentKey } from "../src/masking.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { PendingSpanProcessor } from "../src/pending.js";

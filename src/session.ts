@@ -20,7 +20,7 @@
  * way the active span does.
  */
 import { randomUUID } from "node:crypto";
-import { type Context, context as apiContext, createContextKey, trace } from "@opentelemetry/api";
+import { context as apiContext, type Context, createContextKey, trace } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { twinOf } from "./foreign.js";
 import { SESSION_ID } from "./semconv.js";

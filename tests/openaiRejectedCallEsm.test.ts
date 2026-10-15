@@ -2,7 +2,7 @@ import http from "node:http";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { ERROR_TYPE, EXCEPTION_EVENT } from "../src/semconv.js";
 
 // The ESM half of openaiRejectedCall.test.ts. It matters on its own: only when

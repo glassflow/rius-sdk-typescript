@@ -1,6 +1,6 @@
 import { InMemorySpanExporter, type SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type RiusClient, init, spanProcessorSink } from "../src/client.js";
+import { init, type RiusClient, spanProcessorSink } from "../src/client.js";
 import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
 import { VERSION } from "../src/index.js";
 import { instrumentMcpClient } from "../src/instrumentationMcp.js";

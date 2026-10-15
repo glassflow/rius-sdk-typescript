@@ -20,7 +20,7 @@
 // an integer-valued double as an intValue where the Python encoder writes a
 // doubleValue; that is a difference of encoding, not of normalization.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ROOT_CONTEXT, type Tracer, trace } from "@opentelemetry/api";

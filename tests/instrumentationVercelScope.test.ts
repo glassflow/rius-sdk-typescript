@@ -5,7 +5,7 @@ import http from "node:http";
 // llm.*, input/output.mime_type, a duplicated input/output.value) rides along.
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, getTracer, init } from "../src/client.js";
+import { getTracer, init, type RiusClient } from "../src/client.js";
 
 let live: RiusClient | undefined;
 

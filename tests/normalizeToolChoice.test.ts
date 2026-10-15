@@ -1,4 +1,4 @@
-import type { AttributeValue, Attributes } from "@opentelemetry/api";
+import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -7,7 +7,7 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type RiusClient, getTracer, init } from "../src/client.js";
+import { getTracer, init, type RiusClient } from "../src/client.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { LLM_INVOCATION_PARAMETERS, RIUS_REQUEST_TOOL_CHOICE } from "../src/semconv.js";
 import fixture from "./fixtures/tool_choice_cases.json" with { type: "json" };

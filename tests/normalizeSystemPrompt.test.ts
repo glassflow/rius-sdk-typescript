@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createRequire } from "node:module";
-import type { AttributeValue, Attributes } from "@opentelemetry/api";
+import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -9,7 +9,7 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { MaskingSpanExporter } from "../src/masking.js";
 import { NormalizingSpanProcessor, promoteSystemInstruction } from "../src/normalize.js";
 import { GEN_AI_INPUT_MESSAGES, LLM_INVOCATION_PARAMETERS } from "../src/semconv.js";
@@ -256,7 +256,11 @@ describe("never at span start", () => {
 const require = createRequire(import.meta.url);
 const Anthropic = (
   require("@anthropic-ai/sdk") as {
-    default: new (options: { apiKey: string; baseURL: string; maxRetries: number }) => {
+    default: new (options: {
+      apiKey: string;
+      baseURL: string;
+      maxRetries: number;
+    }) => {
       messages: { create(body: unknown): Promise<unknown> };
     };
   }

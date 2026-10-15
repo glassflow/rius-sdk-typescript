@@ -3,9 +3,9 @@ import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import {
   GEN_AI_OPERATION_NAME,
   GEN_AI_USAGE_PREFIX,
+  operationForKind,
   RIUS_AGGREGATED_USAGE_PREFIX,
   SpanKind,
-  operationForKind,
 } from "./semconv.js";
 
 /**

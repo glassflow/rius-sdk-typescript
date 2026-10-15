@@ -1,4 +1,4 @@
-import { DiagLogLevel, type DiagLogger, diag } from "@opentelemetry/api";
+import { type DiagLogger, DiagLogLevel, diag } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InitOptions, RiusClient } from "../src/client.js";

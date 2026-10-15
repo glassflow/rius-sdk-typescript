@@ -1,11 +1,11 @@
-import { ROOT_CONTEXT, TraceFlags, context, trace } from "@opentelemetry/api";
+import { context, ROOT_CONTEXT, TraceFlags, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  type InitOptions,
-  RiusClient,
   getTracer,
+  type InitOptions,
   init,
+  RiusClient,
   upstreamMainAgentAttributes,
 } from "../src/client.js";
 import type { HeartbeatTransport } from "../src/heartbeat.js";
@@ -312,7 +312,7 @@ describe("init: heartbeat", () => {
 
     await client?.shutdown();
     expect(transport).toHaveBeenCalledTimes(1);
-    expect((transport.mock.calls[0]?.[0] as { stopped?: boolean }).stopped).toBe(true);
+    expect((transport.mock.calls[0]?.[0] as { stopped?: boolean } | undefined)?.stopped).toBe(true);
 
     await client?.shutdown();
     expect(transport).toHaveBeenCalledTimes(1);

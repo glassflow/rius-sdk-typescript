@@ -5,8 +5,8 @@ import {
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
-import { type InitOptions, type RiusClient, getTracer, init } from "../src/client.js";
-import { MaskingSpanExporter, isContentKey } from "../src/masking.js";
+import { getTracer, type InitOptions, init, type RiusClient } from "../src/client.js";
+import { isContentKey, MaskingSpanExporter } from "../src/masking.js";
 
 function span(attributes: Record<string, unknown>): ReadableSpan {
   return { attributes } as unknown as ReadableSpan;

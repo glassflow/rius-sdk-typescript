@@ -1,6 +1,6 @@
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { PENDING_IDENTITY_ATTRIBUTES, RIUS_SPAN_PENDING, SESSION_ID } from "../src/semconv.js";
 import { withSession } from "../src/session.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";

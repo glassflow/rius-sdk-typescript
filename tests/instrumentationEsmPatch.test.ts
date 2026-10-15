@@ -5,7 +5,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { enableInstrumentations } from "../src/instrumentation.js";
 
 // The ESM half of the dual-build behaviour: nothing in this file requires the

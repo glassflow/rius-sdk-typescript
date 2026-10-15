@@ -5,13 +5,13 @@ import { pathToFileURL } from "node:url";
 import type { TracerProvider } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RiusClient, init } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import {
-  REGISTRY,
-  type RegistryEntry,
   enableInstrumentations,
   isUnresolved,
   optional,
+  REGISTRY,
+  type RegistryEntry,
   readDeclaredDependencies,
 } from "../src/instrumentation.js";
 

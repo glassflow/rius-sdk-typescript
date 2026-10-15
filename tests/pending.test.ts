@@ -1,11 +1,11 @@
 import type { Context } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
+import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PendingSpanProcessor } from "../src/pending.js";
 import {
