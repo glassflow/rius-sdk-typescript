@@ -61,7 +61,7 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
   pinned release, as `src/semconv.generated.ts`; `src/semconv.ts` re-exports
   them and keeps the helper functions. Never edit the vendored file: change the
   registry, release it, then re-pin with `TAG=<tag> scripts/sync-semconv.sh`.
-  The `semconv-parity` workflow's `vendored` job fails on drift. rius-semconv
+  The `semconv-vendored` workflow's `vendored` job fails on drift. rius-semconv
   is public, so it reads the pinned file with the workflow's own token and also
   runs on pull requests from forks.
 - **Normalization** (`src/normalize.ts`) rewrites third-party dialects in place
@@ -72,20 +72,11 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
 
 ## Parity with the Python SDK
 
-- `tests/fixtures/semconv.json` mirrors the string constants in Python's
-  `semconv.py` and the `_semconv_generated.py` it re-exports, and
-  `tests/semconv.test.ts` requires every one of them to exist here with the
-  same value, or be listed in `PYTHON_ONLY` with the reason.
-- Regenerate it from Python's `main`:
-  `SEMCONV_SOURCE=<_semconv_generated.py>,<semconv.py> node scripts/gen-semconv-fixture.mjs`.
-  The `semconv-parity` workflow does this on a schedule and on semconv changes,
-  reading the public rius-sdk-python without a token. Its `parity` job runs
-  with a read-only token. On a scheduled or dispatched run, drift that keeps
-  the suite green goes to `refresh-pr`, which opens a fixture PR with the
-  `SEMCONV_PR_TOKEN` secret (a fine-grained PAT on this repo with Contents and
-  Pull requests write, so the PR triggers CI; without it the job falls back to
-  the workflow token and CI must be started by hand). Drift that breaks the
-  suite goes to `file-issue`. Neither job runs on pull requests.
+- Constants are shared with Python through the registry, not through a
+  mirror: both SDKs vendor the module rius-semconv generates, so at the same
+  pinned release their constants are equal by construction. A key both SDKs
+  emit belongs in the registry, never hand-defined in either SDK.
+  rius-semconv's `parity` workflow reports an SDK pinned behind the registry.
 - When porting a Python change, port its rule order, member lists and type
   guards too, and say in the PR where a language difference forces a divergence.
 

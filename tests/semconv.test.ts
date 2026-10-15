@@ -2,30 +2,10 @@ import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
 import * as semconv from "../src/semconv.js";
 import { SpanKind, composeSpanName, kindAttributes, otelSpanKind } from "../src/semconv.js";
-import fixture from "./fixtures/semconv.json" with { type: "json" };
 
 describe("semconv", () => {
   it("uses the wire-visible tracer name the backend keys on", () => {
     expect(semconv.TRACER_NAME).toBe("rius");
-  });
-
-  it("matches every Python constant verbatim", () => {
-    // Constants Python has that this SDK deliberately does not implement.
-    // Declared explicitly: a NEW unported constant must fail here so a human
-    // decides whether to port it, rather than being skipped silently.
-    const PYTHON_ONLY = new Set<string>([]);
-
-    for (const [name, value] of Object.entries(fixture as Record<string, string>)) {
-      const ours = (semconv as Record<string, unknown>)[name];
-      if (ours === undefined) {
-        expect(
-          PYTHON_ONLY.has(name),
-          `${name} exists in Python but not here, and is not declared in PYTHON_ONLY`,
-        ).toBe(true);
-        continue;
-      }
-      expect(ours, `${name} drifted from Python`).toBe(value);
-    }
   });
 
   it("maps LLM spans to the chat operation", () => {
