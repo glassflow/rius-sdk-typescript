@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/glassflow/rius-sdk-typescript/main/docs/assets/banner.png" alt="Rius by GlassFlow: trace your AI agents with OpenTelemetry" width="100%">
+</p>
+
 # @glassflow-ai/rius
 
 OpenTelemetry-native tracing for AI agents and LLM applications.
@@ -7,7 +11,26 @@ tool calls and chains, generations for LLM calls, and a function wrapper
 that turns a plain `async` function into an instrumented one. Traces are
 sent as OTLP over HTTP, so any OTLP-compatible backend can receive them.
 
-> Status: alpha and unpublished (0.1.0). APIs may change before the first release.
+<p>
+  <a href="https://docs.glassflow.ai/rius/sdk"><b>Docs</b></a> ·
+  <a href="https://docs.glassflow.ai/rius/sdk/reference/typescript">TypeScript reference</a> ·
+  <a href="https://console.rius-glassflow.com">Console</a> ·
+  <a href="https://github.com/glassflow/rius-sdk-typescript/blob/main/CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/glassflow/rius-sdk-typescript/issues">Issues</a>
+</p>
+
+[![npm](https://img.shields.io/npm/v/@glassflow-ai/rius?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/@glassflow-ai/rius)
+[![npm downloads](https://img.shields.io/npm/dw/@glassflow-ai/rius?style=flat-square)](https://www.npmjs.com/package/@glassflow-ai/rius)
+[![Node](https://img.shields.io/node/v/@glassflow-ai/rius?style=flat-square&logo=nodedotjs&logoColor=white)](https://github.com/glassflow/rius-sdk-typescript/blob/main/package.json)
+[![CI](https://img.shields.io/github/actions/workflow/status/glassflow/rius-sdk-typescript/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/glassflow/rius-sdk-typescript/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6b7280?style=flat-square)](https://github.com/glassflow/rius-sdk-typescript/blob/main/LICENSE)
+![OpenTelemetry GenAI](https://img.shields.io/badge/OpenTelemetry-GenAI-425cc7?style=flat-square&logo=opentelemetry&logoColor=white)
+![TypeScript types included](https://img.shields.io/badge/types-included-3178c6?style=flat-square&logo=typescript&logoColor=white)
+
+Releases follow [Conventional Commits](https://www.conventionalcommits.org/):
+a breaking change ships as a new major version. The
+[changelog](https://github.com/glassflow/rius-sdk-typescript/blob/main/CHANGELOG.md)
+lists what changed in each release.
 
 ## Install
 
@@ -100,7 +123,7 @@ await handleQuery("hello");
 
 That is the CHAIN case, the default. On every other kind the span is named
 the way the GenAI conventions say to, `{operation} {target}`, and the
-wrapped function's name is used as the target only where it IS the target —
+wrapped function's name is used as the target only where it IS the target,
 a tool:
 
 ```ts
@@ -117,12 +140,12 @@ to override any of this.
 
 An AGENT span (from `observe`, `startSpan` or `startAsCurrentSpan`) can also
 carry `agentId` and `agentVersion`, which describe the agent it *invoked*, as
-`gen_ai.agent.id` and `gen_ai.agent.version`. Both are taken verbatim — the
-conventions' own version examples are `1.0.0` and `2025-05-01` — and both are
+`gen_ai.agent.id` and `gen_ai.agent.version`. Both are taken verbatim (the
+conventions' own version examples are `1.0.0` and `2025-05-01`), and both are
 ignored on every other kind.
 
 An AGENT wrapper also scopes the calls it makes: TOOL spans opened while it
-runs, local or MCP, carry that agent as `gen_ai.agent.name` — on an
+runs, local or MCP, carry that agent as `gen_ai.agent.name`. On an
 execute-tool span the conventions define that key as the agent *executing*
 the tool, where on an invoke-agent span it is the agent being *invoked*.
 Outside any agent, a tool span falls back to the agent `init()` was given.
@@ -151,7 +174,7 @@ optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
 works when you have nothing to configure.
 
 **The name is optional too.** Omit it and the span is named the way the
-OpenTelemetry GenAI conventions say to — `{operation} {target}` — composed
+OpenTelemetry GenAI conventions say to, `{operation} {target}`, composed
 from the attributes the span already carries. The callback still comes last,
 so `startAsCurrentSpan(options, fn)` and `startAsCurrentSpan(fn)` are both
 valid:
@@ -164,7 +187,7 @@ valid:
 | AGENT | `invoke_agent planner` | `invoke_agent` |
 | RETRIEVER | `retrieval docs-index` | `retrieval` |
 | RERANKER | `rerank rerank-v3.5` (`{operation} {gen_ai.request.model}`) | `rerank` |
-| CHAIN | the function name for `observe`, else `chain` | — |
+| CHAIN | the function name for `observe`, else `chain` | n/a |
 
 ```ts
 // Named "execute_tool get_weather", with gen_ai.tool.name "get_weather".
@@ -371,7 +394,7 @@ the process `require`d the provider before `init()`, the ESM build
 otherwise. Two combinations therefore stay uncovered until the
 upstream fix lands: a CommonJS application whose *only* `require` of
 the provider happens lazily after `init()` (requiring it anywhere
-before `init()` avoids this), and — the mirror image — an ESM
+before `init()` avoids this), and (the mirror image) an ESM
 application where some CommonJS dependency `require`d the provider
 before `init()`, which wins the choice away from the ESM build the
 application itself is calling. The `langchain`, `vercel-ai` and `mcp`
@@ -447,7 +470,7 @@ because `gen_ai.agent.name` has no resource-level meaning in the conventions
 and on a span means the agent being *invoked*, so one key was answering two
 questions.
 
-`mainAgentId` must be a **stable** identifier — a registry id, a hosted
+`mainAgentId` must be a **stable** identifier, such as a registry id or a hosted
 agent's ARN. A uuid minted at startup or another process-local id identifies
 a *run*, not an agent, and would split one agent into a fresh bucket per
 restart; `service.instance.id` already answers "which process".
@@ -457,7 +480,7 @@ Three versions travel separately and none is ever derived from another:
 | Key                        | Answers                                             |
 | -------------------------- | --------------------------------------------------- |
 | `service.version`          | which build of the deployment is running             |
-| `rius.main_agent.version`  | which version of the agent *definition* it runs — its prompt, tools and policy |
+| `rius.main_agent.version`  | which version of the agent *definition* it runs: its prompt, tools and policy |
 | `gen_ai.agent.version`     | which version of the agent a given AGENT span *invoked* |
 
 A service can sit at `2.3.1` while the agent definition it runs is at `7` and
@@ -494,7 +517,7 @@ created and are simply dropped.
 OpenTelemetry has one global tracer provider per process, and the first
 registration wins. If another SDK (Langfuse v3, for one) claims it before
 `init()`, your own job and tool spans go to that SDK only, while the LLM spans
-inside them still reach Rius — so Rius receives traces whose parents it never
+inside them still reach Rius, so Rius receives traces whose parents it never
 gets. Rius detects this whatever you configure: those LLM spans carry
 `rius.parent.foreign=true`, the resource records
 `rius.sdk.global_provider=foreign:<class>`, and the first one logs a warning.
