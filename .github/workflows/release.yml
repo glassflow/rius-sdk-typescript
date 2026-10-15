@@ -171,7 +171,7 @@ jobs:
         if: ${{ steps.key.outputs.present == 'true' }}
         with:
           fetch-depth: 0 # the sync scans history back to the last recorded release
-      - uses: linear/linear-release-action@53ad0f863963e7f8e270fba18426bbb55ef55384 # v0.17.2
+      - uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # v0.18.1
         if: ${{ steps.key.outputs.present == 'true' }}
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
