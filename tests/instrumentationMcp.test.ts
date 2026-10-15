@@ -73,11 +73,13 @@ describe("instrumentMcpClient", () => {
     expect(span.attributes["gen_ai.operation.name"]).toBe("execute_tool");
   });
 
-  it("marks an interim input-required round and records no output", async () => {
+  // No convention defines mcp.result_type and nothing reads it; an interim
+  // round stays identifiable as a tool span carrying mcp.method.name.
+  it("emits no result-type attribute and records no output on an interim round", async () => {
     await new FakeClient().callTool({ name: "asks" });
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.attributes["mcp.result_type"]).toBe("input_required");
+    expect(span.attributes["mcp.result_type"]).toBeUndefined();
     expect(span.attributes["output.value"]).toBeUndefined();
   });
 
@@ -85,7 +87,7 @@ describe("instrumentMcpClient", () => {
     await new FakeClient().callTool({ name: "asks-camel" });
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.attributes["mcp.result_type"]).toBe("input_required");
+    expect(span.attributes["mcp.result_type"]).toBeUndefined();
     expect(span.attributes["output.value"]).toBeUndefined();
   });
 
@@ -168,11 +170,11 @@ describe("instrumentMcpClient", () => {
     expect(span.attributes["mcp.method.name"]).toBe("tools/call");
   });
 
-  it("carries the marker on an interim input-required round, not only mcp.result_type", async () => {
+  it("carries the method marker on an interim input-required round", async () => {
     await new FakeClient().callTool({ name: "asks" });
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.attributes["mcp.result_type"]).toBe("input_required");
+    expect(span.attributes["mcp.result_type"]).toBeUndefined();
     expect(span.attributes["mcp.method.name"]).toBe("tools/call");
   });
 
