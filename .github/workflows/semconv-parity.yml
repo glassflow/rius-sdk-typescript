@@ -17,15 +17,17 @@
 # value, and the one-line fixture refresh sat as an open issue for days.
 #
 # On pull_request nothing is filed either way — drift just fails the job, so a
-# PR touching semconv cannot land with a stale mirror.
+# PR touching semconv cannot land with a stale mirror. The `parity` job runs
+# the PR's own code, so it holds a read-only token; opening the PR and filing
+# the issue live in separate jobs that never run on pull_request.
 #
 # The `vendored` job checks that src/semconv.generated.ts is byte-identical to
 # the module rius-semconv generates (out/typescript/semconv.generated.ts) at
 # the release tag its header pins. The module is vendored, not edited: a key,
 # a value or a table changes in the rius-semconv registry, then is re-pinned
-# here with `TAG=<tag> scripts/sync-semconv.sh`. rius-semconv is private, so
-# the job reads it with SEMCONV_READ_TOKEN, and SKIPS with a warning when the
-# token is missing or cannot read it: check its log, not just its green check.
+# here with `TAG=<tag> scripts/sync-semconv.sh`. rius-semconv is public, so
+# the workflow's own token reads it and the check also runs on pull requests
+# from forks (which get no secrets).
 name: semconv-parity
 
 on:
@@ -42,9 +44,12 @@ on:
     paths: ["src/semconv.generated.ts", "scripts/sync-semconv.sh"]
   schedule:
     - cron: "0 6 * * 1"
-  # For verifying the checks end to end. The parity job reads the public
-  # rius-sdk-python anonymously; only the vendored job needs a token.
+  # For verifying the checks end to end. Both upstreams are public:
+  # rius-sdk-python is read anonymously, rius-semconv with the job token.
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   vendored:
@@ -52,40 +57,31 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: The vendored module matches its pinned rius-semconv release
         env:
-          GH_TOKEN: ${{ secrets.SEMCONV_READ_TOKEN }}
+          # rius-semconv is public; the job token only lifts the API rate limit.
+          GH_TOKEN: ${{ github.token }}
           # No sibling checkout in CI: the script reads the file with gh api.
           RIUS_SEMCONV: /nonexistent
-        run: |
-          skip() {
-            echo "::warning title=Vendored semconv NOT checked::$1 src/semconv.generated.ts was not compared with rius-semconv."
-            { echo "### Vendored semconv NOT checked"; echo "$1"; } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          }
-          if [ -z "$GH_TOKEN" ]; then
-            skip "SEMCONV_READ_TOKEN is not set (or this pull request comes from a fork)."
-          fi
-          # Probe a file read, which is what the check does, and keep GitHub's
-          # answer for the warning (it names the status, never the token).
-          if ! err=$(gh api repos/glassflow/rius-semconv/contents/version.txt --silent 2>&1); then
-            skip "SEMCONV_READ_TOKEN cannot read glassflow/rius-semconv (${err})."
-          fi
-          scripts/sync-semconv.sh --check
+        run: scripts/sync-semconv.sh --check
 
+  # Runs the PR's own code (the generator and the parity suite), so it gets a
+  # read-only token and hands its findings to the jobs below as outputs.
   parity:
-    # The fixture refresh below is for schedule and pull_request runs; a push
-    # to main only needs the vendored check.
+    # A push to main only needs the vendored check.
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # the bot branch carrying a regenerated fixture
-      issues: write
-      pull-requests: write
+      contents: read
+    outputs:
+      drifted: ${{ steps.drift.outputs.drifted }}
+      diff: ${{ steps.drift.outputs.diff }}
+      fixture: ${{ steps.drift.outputs.fixture }}
+      mechanical: ${{ steps.classify.outputs.mechanical }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
       # rius-sdk-python is public, so the fixture is read without a token.
@@ -106,6 +102,11 @@ jobs:
             {
               echo 'diff<<SEMCONV_EOF'
               git diff -- tests/fixtures/semconv.json
+              echo 'SEMCONV_EOF'
+              # The whole regenerated file, so the refresh job commits exactly
+              # what was classified here without running the generator again.
+              echo 'fixture<<SEMCONV_EOF'
+              cat tests/fixtures/semconv.json
               echo 'SEMCONV_EOF'
             } >> "$GITHUB_OUTPUT"
             { echo '```diff'; git diff -- tests/fixtures/semconv.json; echo '```'; } \
@@ -130,10 +131,33 @@ jobs:
             echo "drift needs review: the regenerated fixture fails the parity test" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Open or update the fixture-refresh PR
+      # A pull request touching semconv must not land with a stale mirror.
+      # Scheduled and dispatched runs leave the drift to the jobs below.
+      - name: Fail on drift
         if: >-
-          steps.classify.outputs.mechanical == 'true' &&
-          github.event_name != 'pull_request'
+          steps.drift.outputs.drifted == 'true' &&
+          github.event_name == 'pull_request'
+        run: |
+          echo "::error::tests/fixtures/semconv.json is behind rius-sdk-python."
+          echo "Regenerate it with: node scripts/gen-semconv-fixture.mjs"
+          exit 1
+
+  refresh-pr:
+    needs: parity
+    if: >-
+      github.event_name != 'pull_request' &&
+      needs.parity.outputs.mechanical == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the bot branch carrying a regenerated fixture
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Write the regenerated fixture
+        env:
+          FIXTURE: ${{ needs.parity.outputs.fixture }}
+        run: printf '%s\n' "$FIXTURE" > tests/fixtures/semconv.json
+      - name: Open or update the fixture-refresh PR
         env:
           # A PAT, not github.token: PRs opened by GITHUB_TOKEN do not trigger
           # `pull_request` workflows at all, so the PR would arrive with no CI
@@ -142,11 +166,11 @@ jobs:
           #
           # Fine-grained, scoped to this repo, and it needs exactly two
           # permissions: Pull requests (write) to open and update the PR, and
-          # Contents (write) for the branch push below. Not Issues — the
-          # review-issue step deliberately stays on GITHUB_TOKEN.
+          # Contents (write) for the branch push below. Not Issues: the
+          # file-issue job deliberately stays on the job token.
           GH_TOKEN: ${{ secrets.SEMCONV_PR_TOKEN || secrets.GITHUB_TOKEN }}
           BRANCH: bot/semconv-fixture
-          DIFF: ${{ steps.drift.outputs.diff }}
+          DIFF: ${{ needs.parity.outputs.diff }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -160,6 +184,8 @@ jobs:
           # after the first would quietly arrive unchecked.
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
           title="chore: refresh the semconv fixture from the Python SDK"
+          # The backticks in the printf format are literal Markdown.
+          # shellcheck disable=SC2016
           body=$(printf 'The weekly parity check found the fixture behind `rius-sdk-python`:\n\n```diff\n%s\n```\n\nThis is the MECHANICAL class of drift: `src/semconv.ts` already agrees with Python and only the committed mirror lagged, so the regenerated fixture keeps `tests/semconv.test.ts` green. Had Python added a constant this SDK genuinely lacks, or changed a value, the suite would be red and this would have been filed as an issue instead — that is a wire change and needs a human.\n\nRe-run the workflow to refresh this PR; the branch is force-pushed.\n' "$DIFF")
           # REST rather than `gh pr create`: the porcelain still requests the
           # deprecated projectCards GraphQL field and hard-fails on some gh
@@ -177,16 +203,25 @@ jobs:
             echo "updated PR #${existing}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  file-issue:
+    needs: parity
+    if: >-
+      github.event_name != 'pull_request' &&
+      needs.parity.outputs.mechanical == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # files or updates the review issue
+    steps:
       - name: Open or update the review issue
-        if: >-
-          steps.classify.outputs.mechanical == 'false' &&
-          github.event_name != 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DIFF: ${{ steps.drift.outputs.diff }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DIFF: ${{ needs.parity.outputs.diff }}
         run: |
           set -euo pipefail
           title="semconv drifted from rius-sdk-python"
+          # The backticks in the printf format are literal Markdown.
+          # shellcheck disable=SC2016
           body=$(printf 'The parity check found differences the regenerated fixture cannot resolve on its own: `tests/semconv.test.ts` fails against it.\n\n```diff\n%s\n```\n\nA changed attribute key is a WIRE change. Resolve it deliberately — port the constant to `src/semconv.ts`, declare it in the `PYTHON_ONLY` set in `tests/semconv.test.ts` as intentionally unported, or fix `rius-sdk-python` if that is the side that is wrong.\n\n[Run](%s/%s/actions/runs/%s)\n' \
             "$DIFF" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
           # Comment on the standing issue rather than filing a new one every
@@ -200,15 +235,6 @@ jobs:
             gh issue comment "$existing" --body "$body"
             echo "commented on #${existing}" >> "$GITHUB_STEP_SUMMARY"
           fi
-
-      # Last, so the filing steps above still run. A PR touching semconv must
-      # not land with a stale mirror, and a scheduled run that found reviewable
-      # drift should read red on the Actions tab.
-      - name: Fail on unresolved drift
-        if: >-
-          steps.drift.outputs.drifted == 'true' &&
-          (github.event_name == 'pull_request' || steps.classify.outputs.mechanical == 'false')
-        run: |
-          echo "::error::tests/fixtures/semconv.json is behind rius-sdk-python."
-          echo "Regenerate it with: node scripts/gen-semconv-fixture.mjs"
+          # Reviewable drift should read red on the Actions tab.
+          echo "::error::tests/fixtures/semconv.json drifted from rius-sdk-python in a way that needs review."
           exit 1
