@@ -312,7 +312,7 @@ describe("init: heartbeat", () => {
 
     await client?.shutdown();
     expect(transport).toHaveBeenCalledTimes(1);
-    expect((transport.mock.calls[0]?.[0] as { stopped?: boolean }).stopped).toBe(true);
+    expect((transport.mock.calls[0]?.[0] as { stopped?: boolean } | undefined)?.stopped).toBe(true);
 
     await client?.shutdown();
     expect(transport).toHaveBeenCalledTimes(1);
