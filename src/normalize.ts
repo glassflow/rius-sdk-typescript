@@ -11,7 +11,6 @@ import {
   ERROR_TYPE,
   EXCEPTION_EVENT,
   EXCEPTION_TYPE,
-  GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_INPUT_MESSAGES,
   GEN_AI_OPERATION_NAME,
   GEN_AI_OUTPUT_MESSAGES,
@@ -887,8 +886,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     convert: toInt,
   },
   // Time to first chunk under the conventions' metric name, which @ai-sdk/otel
-  // and pydantic-ai write as a span attribute. onEnd then gives such a span
-  // the first-token event it lacks (firstTokenEventFromDuration).
+  // and pydantic-ai write as a span attribute. The duration is the whole
+  // signal: no first-token event is added.
   { source: GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK, expand: firstChunkFromMetric },
   // The request bag, last: the dedicated model rules above take precedence
   // over its `model` member. Identity, because what it promotes is.
@@ -1525,8 +1524,9 @@ function vercelUsage(
  *   that cannot be read is left where it is, whole.
  * - `ai.response.msToFirstChunk` (`ai.stream.msToFirstChunk` on streamObject)
  *   is milliseconds; `time_to_first_chunk` is seconds, and only a stream has
- *   a first chunk. The backend reads the
- *   `ai.stream.firstChunk` event, renamed by {@link normalizeFirstTokenEvent}.
+ *   a first chunk. The `ai.stream.firstChunk` event stays as recorded; it
+ *   only fills the duration where the span lacks one (see
+ *   {@link firstChunkFromEvent}).
  * - Embedding vectors (`ai.embedding`, `ai.embeddings`) go, as OpenInference's
  *   do (see dropEmbeddingVectors). The inputs (`ai.value`, `ai.values`) stay:
  *   the conventions define no embedding input.
@@ -1768,25 +1768,27 @@ export const OPENINFERENCE_FIRST_TOKEN_EVENT = "First Token Stream Event";
  */
 export const VERCEL_FIRST_CHUNK_EVENT = "ai.stream.firstChunk";
 
-/** A dialect's first-token event: renamed to the canonical one. */
+/** A dialect's first-token marker: the source of a derived time to first chunk. */
 function isDialectFirstTokenEvent(name: string): boolean {
   return name === OPENINFERENCE_FIRST_TOKEN_EVENT || name === VERCEL_FIRST_CHUNK_EVENT;
 }
 
 /**
- * Map a dialect's first-token event (OpenInference's or the Vercel AI SDK's)
- * onto the canonical shape: the
- * `gen_ai.first_token` event, `gen_ai.request.stream`, and
- * `gen_ai.response.time_to_first_chunk` derived from the span's start.
+ * The canonical streaming attributes for a span a dialect marked with its
+ * first-token event (OpenInference's or the Vercel AI SDK's):
+ * `gen_ai.request.stream`, and `gen_ai.response.time_to_first_chunk` as the
+ * seconds from the span's start to its first marker.
  *
- * Returns the canonical attributes to add; the events are renamed in place,
- * the same seam masking already uses for events. This cannot go through the
- * rule table: the table maps attribute keys and the source here is an event.
+ * Returns the attributes to add. The marker event itself is left as recorded:
+ * no `gen_ai.first_token` event is ever written, since the backend derives the
+ * one it stores from the duration. This cannot go through the rule table: the
+ * table maps attribute keys and the source here is an event.
  *
- * Native wins, as for attributes: a span already carrying a
- * `gen_ai.first_token` event keeps it and the source is dropped rather than
- * kept alongside, where it would double-count as a second first-token marker.
- * Canonical attributes already present are never overwritten.
+ * Native wins, as for attributes: a key the span already carries is left out,
+ * and the caller adds the rest only where still unset, so a value the table
+ * produced is never overwritten either. The duration is never negative, and a
+ * marker after the span's end counts as the end, as the backend places a
+ * first chunk.
  *
  * `gen_ai.request.stream` is INFERRED from the event's presence, so a stream
  * that errors or yields nothing before the first chunk is not marked as
@@ -1798,35 +1800,21 @@ function isDialectFirstTokenEvent(name: string): boolean {
  * Unit: `gen_ai.response.time_to_first_chunk` is SECONDS, as a float, which
  * is what the native path emits and what the conventions specify.
  */
-export function normalizeFirstTokenEvent(span: ReadableSpan): Record<string, AttributeValue> {
-  const events = span.events;
-  if (events === undefined || events.length === 0) return {};
-  if (!events.some((event) => isDialectFirstTokenEvent(event.name))) return {};
-
+export function firstChunkFromEvent(span: ReadableSpan): Record<string, AttributeValue> {
+  const marker = span.events?.find((event) => isDialectFirstTokenEvent(event.name));
+  if (marker === undefined) return {};
   const attributes = span.attributes ?? {};
-  let canonicalSeen = events.some((event) => event.name === GEN_AI_FIRST_TOKEN_EVENT);
-  let firstTokenTime: TimedEvent["time"] | undefined;
-  const rebuilt: TimedEvent[] = [];
-  for (const event of events) {
-    if (!isDialectFirstTokenEvent(event.name)) {
-      rebuilt.push(event);
-      continue;
-    }
-    firstTokenTime ??= event.time;
-    // A duplicate marker; the canonical one is authoritative.
-    if (canonicalSeen) continue;
-    canonicalSeen = true;
-    rebuilt.push({ ...event, name: GEN_AI_FIRST_TOKEN_EVENT });
-  }
-  // Order is preserved: the rename keeps each event where it was.
-  (span.events as TimedEvent[]).splice(0, events.length, ...rebuilt);
-
   const added: Record<string, AttributeValue> = {};
   // A first chunk arriving is what proves the request streamed — the same
   // inference recordFirstToken makes.
   if (attributes[GEN_AI_REQUEST_STREAM] === undefined) added[GEN_AI_REQUEST_STREAM] = true;
-  if (attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] === undefined && firstTokenTime) {
-    const elapsedNanos = hrTimeToNanos(firstTokenTime) - hrTimeToNanos(span.startTime);
+  if (attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] === undefined) {
+    let at = marker.time;
+    const end = span.endTime;
+    if (end !== undefined && (end[0] !== 0 || end[1] !== 0) && isAfter(at, end)) at = end;
+    // On [seconds, nanos] pairs, not one nanosecond count: a timestamp near
+    // 1.7e18 ns is past a double's exact range and would lose tens of nanos.
+    const elapsedNanos = (at[0] - span.startTime[0]) * 1e9 + (at[1] - span.startTime[1]);
     added[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] = Math.max(elapsedNanos, 0) / 1e9;
   }
   return added;
@@ -1843,49 +1831,8 @@ export function firstChunkFromMetric(raw: AttributeValue | undefined): Expansion
   return { [GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK]: seconds, [GEN_AI_REQUEST_STREAM]: true };
 }
 
-/**
- * A `gen_ai.first_token` event for a span that measured time to first chunk
- * but has no first-token event.
- *
- * The backend reads time to first chunk from the first-token event alone, so a
- * span carrying only the measured duration (@ai-sdk/otel, pydantic-ai) would
- * show none. The event is placed at the span's start plus that duration, so
- * the event and the attribute agree, and never later than the span's end: a
- * duration measured on another clock can overshoot a span that ended right
- * after its first chunk. A span that already has a first-token event, of
- * either spelling, is left alone.
- */
-export function firstTokenEventFromDuration(
-  span: ReadableSpan,
-  attributes: Record<string, AttributeValue | undefined>,
-): void {
-  const events = span.events as TimedEvent[] | undefined;
-  if (
-    events === undefined ||
-    events.some(
-      (event) => event.name === GEN_AI_FIRST_TOKEN_EVENT || isDialectFirstTokenEvent(event.name),
-    )
-  ) {
-    return;
-  }
-  const seconds = asNumber(attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK]) as number | undefined;
-  if (seconds === undefined || seconds < 0) return;
-  // On [seconds, nanos] pairs, not one nanosecond count: a timestamp near
-  // 1.7e18 ns is past a double's exact range and would lose tens of nanos.
-  const nanos = span.startTime[1] + Math.round(seconds * 1e9);
-  let time: TimedEvent["time"] = [span.startTime[0] + Math.floor(nanos / 1e9), nanos % 1e9];
-  const end = span.endTime;
-  if (end !== undefined && (end[0] !== 0 || end[1] !== 0) && isAfter(time, end)) time = end;
-  events.push({ name: GEN_AI_FIRST_TOKEN_EVENT, attributes: {}, time });
-}
-
 function isAfter(a: TimedEvent["time"], b: TimedEvent["time"]): boolean {
   return a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]);
-}
-
-/** An OTel `HrTime` ([seconds, nanos]) as a single nanosecond count. */
-function hrTimeToNanos(time: TimedEvent["time"]): number {
-  return time[0] * 1e9 + time[1];
 }
 
 /**
@@ -2602,15 +2549,12 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // failure happens. setDefault semantics — a key the table produced read
     // the span's own data and wins over anything inferred here.
     for (const [key, value] of Object.entries({
-      ...normalizeFirstTokenEvent(span),
+      ...firstChunkFromEvent(span),
       ...errorTypeFromExceptionEvent(span),
       ...responseIdFromOutput(attributes),
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }
-    // After the passes above, on the final attributes: the duration may come
-    // from the table (the metric spelling) or from the span itself.
-    firstTokenEventFromDuration(span, attributes);
     // Export-stage only, like the event passes, and for a reason of its own:
     // messages are content, so they must never be written at span start, where
     // a pending snapshot could carry them. The sources are an indexed family,
