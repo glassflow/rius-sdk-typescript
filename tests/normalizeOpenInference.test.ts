@@ -709,6 +709,17 @@ describe("taxonomy", () => {
     });
   });
 
+  it.each(["decide", "ai.generateSpeech", "ai.transcribe", "ai.streamTranscribe"])(
+    "places @ai-sdk/otel's %s on LLM and keeps the operation as written",
+    (operation) => {
+      // Model calls whose operation no convention names: kept, not rewritten to chat.
+      expect(normalized({ "gen_ai.operation.name": operation })).toEqual({
+        "gen_ai.operation.name": operation,
+        "openinference.span.kind": "LLM",
+      });
+    },
+  );
+
   it("keeps an unrecognised operation and derives nothing from it", () => {
     expect(normalized({ "gen_ai.operation.name": "teleport" })).toEqual({
       "gen_ai.operation.name": "teleport",
