@@ -614,20 +614,25 @@ long agent calls lose their usage and output.
 ## Development
 
 ```bash
-npm install
+npm ci
 npm run lint
 npm run typecheck
-npm test
 npm run build
+npm test
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, and
+[SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Releasing
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please)
 and published to npm.
 
-1. Merge changes to `main` using [Conventional Commits](https://www.conventionalcommits.org/)
-   (`feat:` → minor, `fix:` → patch, `feat!:`/`BREAKING CHANGE` → major).
+1. Merge changes to `main` with [Conventional Commit](https://www.conventionalcommits.org/)
+   PR titles (`feat:` → minor, `fix:` → patch). Mark a breaking change with `!`
+   in the PR title (`feat!:` → major); PRs are squash-merged with a blank body,
+   so a `BREAKING CHANGE:` footer is lost.
 2. release-please keeps a **Release PR** open that bumps the package
    version and updates the changelog. Merge it when you want to cut a
    release.
@@ -636,13 +641,6 @@ and published to npm.
    required.
 
 Non-conventional commits are ignored for versioning.
-
-The package has not been published yet, so the very first release cannot
-use trusted publishing: npm requires a package to already exist before
-it can be linked to a trusted publisher. That first publish needs either
-a one-time manual `npm publish` or a temporary `NPM_TOKEN` secret; once
-the package exists on npm, trusted publishing takes over and the token
-can be removed.
 
 ## License
 

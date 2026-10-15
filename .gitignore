@@ -4,6 +4,8 @@ node_modules/
 # Build output
 dist/
 *.tsbuildinfo
+# npm pack output (CI packs into /tmp)
+*.tgz
 
 # Test and tooling caches
 coverage/

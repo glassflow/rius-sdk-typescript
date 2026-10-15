@@ -61,8 +61,9 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
   pinned release, as `src/semconv.generated.ts`; `src/semconv.ts` re-exports
   them and keeps the helper functions. Never edit the vendored file: change the
   registry, release it, then re-pin with `TAG=<tag> scripts/sync-semconv.sh`.
-  The `semconv-parity` workflow's `vendored` job fails on drift, and skips with
-  a warning when `SEMCONV_READ_TOKEN` cannot read rius-semconv.
+  The `semconv-parity` workflow's `vendored` job fails on drift. rius-semconv
+  is public, so it reads the pinned file with the workflow's own token and also
+  runs on pull requests from forks.
 - **Normalization** (`src/normalize.ts`) rewrites third-party dialects in place
   at `onEnd`. Because it mutates in place, an expanding rule that returns its own
   source key is a correctness requirement, not a nicety. Native canonical keys
@@ -78,7 +79,13 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
 - Regenerate it from Python's `main`:
   `SEMCONV_SOURCE=<_semconv_generated.py>,<semconv.py> node scripts/gen-semconv-fixture.mjs`.
   The `semconv-parity` workflow does this on a schedule and on semconv changes,
-  reading the public rius-sdk-python without a token.
+  reading the public rius-sdk-python without a token. Its `parity` job runs
+  with a read-only token. On a scheduled or dispatched run, drift that keeps
+  the suite green goes to `refresh-pr`, which opens a fixture PR with the
+  `SEMCONV_PR_TOKEN` secret (a fine-grained PAT on this repo with Contents and
+  Pull requests write, so the PR triggers CI; without it the job falls back to
+  the workflow token and CI must be started by hand). Drift that breaks the
+  suite goes to `file-issue`. Neither job runs on pull requests.
 - When porting a Python change, port its rule order, member lists and type
   guards too, and say in the PR where a language difference forces a divergence.
 
