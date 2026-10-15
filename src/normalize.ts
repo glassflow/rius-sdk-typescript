@@ -4,7 +4,7 @@ import {
   type Context,
   SpanStatusCode,
 } from "@opentelemetry/api";
-import type { ReadableSpan, Span, SpanProcessor, TimedEvent } from "@opentelemetry/sdk-trace-base";
+import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { moveAggregatedUsage, moveWrappedCallUsage, noteWrapperStart } from "./aggregatedUsage.js";
 import { qualifyRecordedExceptions } from "./errorType.js";
 import {
@@ -1786,9 +1786,10 @@ function isDialectFirstTokenEvent(name: string): boolean {
  *
  * Native wins, as for attributes: a key the span already carries is left out,
  * and the caller adds the rest only where still unset, so a value the table
- * produced is never overwritten either. The duration is never negative, and a
- * marker after the span's end counts as the end, as the backend places a
- * first chunk.
+ * produced is never overwritten either. The duration is never negative. A
+ * marker after the span's end is not clamped: it is when the chunk arrived
+ * (LlamaIndex ends its stream_chat span before the first chunk), and the
+ * backend keeps a recorded marker's time as it is.
  *
  * `gen_ai.request.stream` is INFERRED from the event's presence, so a stream
  * that errors or yields nothing before the first chunk is not marked as
@@ -1809,9 +1810,7 @@ export function firstChunkFromEvent(span: ReadableSpan): Record<string, Attribut
   // inference recordFirstToken makes.
   if (attributes[GEN_AI_REQUEST_STREAM] === undefined) added[GEN_AI_REQUEST_STREAM] = true;
   if (attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] === undefined) {
-    let at = marker.time;
-    const end = span.endTime;
-    if (end !== undefined && (end[0] !== 0 || end[1] !== 0) && isAfter(at, end)) at = end;
+    const at = marker.time;
     // On [seconds, nanos] pairs, not one nanosecond count: a timestamp near
     // 1.7e18 ns is past a double's exact range and would lose tens of nanos.
     const elapsedNanos = (at[0] - span.startTime[0]) * 1e9 + (at[1] - span.startTime[1]);
@@ -1829,10 +1828,6 @@ export function firstChunkFromMetric(raw: AttributeValue | undefined): Expansion
   const seconds = asNumber(raw);
   if (seconds === undefined || (seconds as number) < 0) return {};
   return { [GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK]: seconds, [GEN_AI_REQUEST_STREAM]: true };
-}
-
-function isAfter(a: TimedEvent["time"], b: TimedEvent["time"]): boolean {
-  return a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]);
 }
 
 /**

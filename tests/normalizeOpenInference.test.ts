@@ -764,12 +764,15 @@ describe("the first-token event", () => {
     expect(out["gen_ai.response.time_to_first_chunk"]).toBeCloseTo(0.25, 6);
   });
 
-  it("clamps an event after the span's end to the end", () => {
+  // LlamaIndex's stream_chat span ends when it hands back the generator, before
+  // the first chunk. The backend keeps a recorded marker's time as it is (it
+  // clamps only an event it places itself), so the duration must agree with it.
+  it("does not clamp a marker recorded after the span's end", () => {
     const out = normalized(
       {},
       { events: [firstTokenAt([5, 0])], startTime: [0, 0], endTime: [1, 0] },
     );
-    expect(out["gen_ai.response.time_to_first_chunk"]).toBe(1);
+    expect(out["gen_ai.response.time_to_first_chunk"]).toBe(5);
   });
 
   it("is never negative", () => {
