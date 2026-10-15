@@ -4,7 +4,7 @@ import * as generated from "../src/semconv.generated.js";
 import * as semconv from "../src/semconv.js";
 
 // src/semconv.ts re-exports the module vendored from rius-semconv rather than
-// redefining it. The semconv-parity workflow checks the vendored copy is
+// redefining it. The semconv-vendored workflow checks the vendored copy is
 // byte-identical to its pinned release; these check the hand-written module
 // serves it unchanged, so no constant is shadowed by a stale hand-typed copy.
 describe("the vendored semconv module", () => {
