@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.3.0...v1.4.0) (2026-10-15)
+
+
+### Features
+
+* classify @ai-sdk/otel's decide, speech and transcription spans as LLM ([#139](https://github.com/glassflow/rius-sdk-typescript/issues/139)) ([19acb40](https://github.com/glassflow/rius-sdk-typescript/commit/19acb405bbdc6e7245cf1f39bc72d0621453c715))
+
+
+### Bug Fixes
+
+* **deps:** move OpenTelemetry and the AI SDK in lockstep ([#152](https://github.com/glassflow/rius-sdk-typescript/issues/152)) ([4252363](https://github.com/glassflow/rius-sdk-typescript/commit/425236370779308daad0ef9b783086798d951e23))
+* **deps:** raise stable OpenTelemetry floors to ^2.12.0 ([#156](https://github.com/glassflow/rius-sdk-typescript/issues/156)) ([2c9c398](https://github.com/glassflow/rius-sdk-typescript/commit/2c9c39885741b1b2c31708134fcf4b98fbaad09e))
+* recognise an @ai-sdk/otel run span by its usage details and move its total aside ([#138](https://github.com/glassflow/rius-sdk-typescript/issues/138)) ([2edea07](https://github.com/glassflow/rius-sdk-typescript/commit/2edea07b90bdd49af94a5b34951c0cb75dff5911))
+
 ## [1.3.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.2.0...v1.3.0) (2026-10-14)
 
 
