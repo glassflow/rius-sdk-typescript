@@ -51,6 +51,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@opentelemetry/core": "^2.10.0",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.223.0",
     "@opentelemetry/instrumentation": "^0.223.0",
     "@opentelemetry/resources": "^2.10.0",
@@ -94,6 +95,7 @@
     "@langchain/core": "^1.2.5",
     "@langchain/openai": "1.6.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opentelemetry/context-async-hooks": "^2.10.0",
     "@types/node": "^20.0.0",
     "ai": "^7.0.141",
     "openai": "^7.4.0",
