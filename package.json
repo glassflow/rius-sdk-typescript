@@ -91,7 +91,7 @@
     "@arizeai/openinference-instrumentation-anthropic": "0.2.7",
     "@arizeai/openinference-instrumentation-langchain": "4.1.4",
     "@arizeai/openinference-instrumentation-openai": "^4.4.1",
-    "@biomejs/biome": "^1.9.0",
+    "@biomejs/biome": "^2.5.15",
     "@langchain/core": "^1.2.5",
     "@langchain/openai": "1.6.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
