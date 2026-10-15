@@ -5,7 +5,6 @@ import {
   MCP_METHOD_NAME,
   MCP_METHOD_TOOLS_CALL,
   MCP_PROTOCOL_VERSION,
-  MCP_RESULT_TYPE,
   OUTPUT_VALUE,
   SpanKind,
 } from "./semconv.js";
@@ -52,8 +51,9 @@ function resultIsError(result: unknown): boolean {
  *
  * An interim input-required result is NOT the tool's output: its input requests
  * carry elicitation/sampling content, so recording them as `output.value` would
- * leak conversation content onto a tool span. Interim rounds get only the
- * `mcp.result_type` marker; the final round records output as usual.
+ * leak conversation content onto a tool span. Interim rounds record nothing
+ * here (they stay identifiable as tool spans carrying `mcp.method.name`); the
+ * final round records output as usual.
  *
  * Both `result_type` and `resultType` are read. `result_type` is the spelling
  * seen on the wire; `resultType` is a speculative fallback in case a server
@@ -64,10 +64,7 @@ function resultIsError(result: unknown): boolean {
 function recordResult(observation: Observation, result: unknown): void {
   const record = asRecord(result);
   const resultType = record?.result_type ?? record?.resultType;
-  if (resultType === INPUT_REQUIRED) {
-    observation.setAttribute(MCP_RESULT_TYPE, INPUT_REQUIRED);
-    return;
-  }
+  if (resultType === INPUT_REQUIRED) return;
   observation.setAttribute(OUTPUT_VALUE, serializeResult(result));
   // The protocol reports tool failures as a normal result carrying an error
   // flag, so a resolved call can still be a failure. The output above is kept:
