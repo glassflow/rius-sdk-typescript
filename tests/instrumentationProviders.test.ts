@@ -5,7 +5,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { enableInstrumentations, REGISTRY } from "../src/instrumentation.js";
 import { reassembleOpenInferenceMessages } from "../src/normalize.js";
 

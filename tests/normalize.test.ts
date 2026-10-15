@@ -1,5 +1,4 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
-import { trace } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
 import {
   BasicTracerProvider,

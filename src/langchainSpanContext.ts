@@ -199,7 +199,7 @@ const wrappedOwners: Array<{ owner: Record<string, unknown>; name: string }> = [
 function ensureWrapped(model: unknown, base: Record<string, unknown>): void {
   for (const [name, wrap] of Object.entries(CONCRETE)) {
     let owner = Object.getPrototypeOf(model) as Record<string, unknown> | null;
-    while (owner !== null && !Object.prototype.hasOwnProperty.call(owner, name)) {
+    while (owner !== null && !Object.hasOwn(owner, name)) {
       owner = Object.getPrototypeOf(owner) as Record<string, unknown> | null;
     }
     // The base class's own method is a stub the concrete class overrides.

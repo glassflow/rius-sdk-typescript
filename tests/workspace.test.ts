@@ -181,7 +181,7 @@ describe("lifecycle", () => {
     const shut: string[] = [];
     defaultExporter = new InMemorySpanExporter();
     const recording = (name: string): SpanExporter => ({
-      export: (spans: ReadableSpan[], cb) => cb({ code: ExportResultCode.SUCCESS }),
+      export: (_spans: ReadableSpan[], cb) => cb({ code: ExportResultCode.SUCCESS }),
       forceFlush: async () => {},
       shutdown: async () => {
         shut.push(name);
