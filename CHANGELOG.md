@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.4.0...v1.4.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* stop emitting mcp.result_type on interim MCP rounds ([#162](https://github.com/glassflow/rius-sdk-typescript/issues/162)) ([e557db0](https://github.com/glassflow/rius-sdk-typescript/commit/e557db09a49a86efd16115889963b9d82c6a6ed8))
+* stop emitting the gen_ai.first_token event ([#164](https://github.com/glassflow/rius-sdk-typescript/issues/164)) ([8692dc8](https://github.com/glassflow/rius-sdk-typescript/commit/8692dc80ee99b0b5e1e578fd267fd721fb1553d2))
+
 ## [1.4.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.3.0...v1.4.0) (2026-10-15)
 
 
