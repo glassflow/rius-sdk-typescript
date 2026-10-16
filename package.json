@@ -1,7 +1,7 @@
 {
   "name": "@glassflow-ai/rius",
   "version": "1.4.1",
-  "description": "OpenTelemetry-native tracing for AI agents and LLM applications",
+  "description": "OpenTelemetry-native agent observability: trace every LLM call, tool call and agent step, with cost per call, alerts, and Claude Code / Codex / Cursor session tracing.",
   "keywords": [
     "opentelemetry",
     "otel",
@@ -12,7 +12,12 @@
     "genai",
     "instrumentation",
     "rius",
-    "glassflow"
+    "glassflow",
+    "llm-observability",
+    "agent-observability",
+    "llm-cost",
+    "cost-tracking",
+    "monitoring"
   ],
   "license": "MIT",
   "repository": {
