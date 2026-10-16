@@ -35,6 +35,7 @@ function endedSpan(
     events?: TimedEvent[];
     status?: ReadableSpan["status"];
     startTime?: [number, number];
+    endTime?: [number, number];
   } = {},
 ): ReadableSpan {
   return {
@@ -42,6 +43,7 @@ function endedSpan(
     events: extra.events ?? [],
     status: extra.status ?? { code: SpanStatusCode.UNSET },
     startTime: extra.startTime ?? [0, 0],
+    ...(extra.endTime === undefined ? {} : { endTime: extra.endTime }),
   } as unknown as ReadableSpan;
 }
 
@@ -744,13 +746,17 @@ describe("taxonomy", () => {
 });
 
 describe("the first-token event", () => {
+  // The canonical signal is gen_ai.response.time_to_first_chunk alone. The
+  // dialect's marker event stays as recorded; no gen_ai.first_token event is
+  // ever written, since the backend derives the one it stores from the
+  // duration.
   const firstTokenAt = (time: [number, number]): TimedEvent =>
     ({ name: OPENINFERENCE_FIRST_TOKEN_EVENT, time, attributes: {} }) as TimedEvent;
 
-  it("becomes the canonical event plus the streaming attributes", () => {
+  it("gains the streaming attributes and keeps its event as recorded", () => {
     const events = [firstTokenAt([0, 250_000_000])];
     const out = normalized({}, { events, startTime: [0, 0] });
-    expect(events.map((event) => event.name)).toEqual(["gen_ai.first_token"]);
+    expect(events.map((event) => event.name)).toEqual([OPENINFERENCE_FIRST_TOKEN_EVENT]);
     expect(out["gen_ai.request.stream"]).toBe(true);
     // Seconds, as a float: what the native path emits and what the
     // conventions specify. 250ms, so a nanosecond or millisecond slip fails
@@ -758,13 +764,34 @@ describe("the first-token event", () => {
     expect(out["gen_ai.response.time_to_first_chunk"]).toBeCloseTo(0.25, 6);
   });
 
-  it("keeps a canonical event already present and drops the duplicate source", () => {
-    const events = [
-      { name: "gen_ai.first_token", time: [0, 1], attributes: {} } as TimedEvent,
-      firstTokenAt([0, 999]),
-    ];
-    normalized({}, { events });
+  // LlamaIndex's stream_chat span ends when it hands back the generator, before
+  // the first chunk. The backend keeps a recorded marker's time as it is (it
+  // clamps only an event it places itself), so the duration must agree with it.
+  it("does not clamp a marker recorded after the span's end", () => {
+    const out = normalized(
+      {},
+      { events: [firstTokenAt([5, 0])], startTime: [0, 0], endTime: [1, 0] },
+    );
+    expect(out["gen_ai.response.time_to_first_chunk"]).toBe(5);
+  });
+
+  it("is never negative", () => {
+    const out = normalized({}, { events: [firstTokenAt([0, 0])], startTime: [1, 0] });
+    expect(out["gen_ai.response.time_to_first_chunk"]).toBe(0);
+  });
+
+  it("takes the first of several markers as the first chunk", () => {
+    const events = [firstTokenAt([1, 500_000_000]), firstTokenAt([2, 0])];
+    const out = normalized({}, { events, startTime: [0, 0] });
+    expect(out["gen_ai.response.time_to_first_chunk"]).toBe(1.5);
+    expect(events).toHaveLength(2);
+  });
+
+  it("leaves an older SDK's gen_ai.first_token event alone", () => {
+    const events = [{ name: "gen_ai.first_token", time: [0, 1], attributes: {} } as TimedEvent];
+    const out = normalized({}, { events });
     expect(events.map((event) => event.name)).toEqual(["gen_ai.first_token"]);
+    expect(out).toEqual({});
   });
 
   it("never overwrites canonical attributes the span already carries", () => {
@@ -776,14 +803,18 @@ describe("the first-token event", () => {
     expect(out["gen_ai.response.time_to_first_chunk"]).toBe(9);
   });
 
-  it("preserves event order and leaves unrelated events untouched", () => {
+  it("preserves every event in order", () => {
     const events = [
       { name: "before", time: [0, 1], attributes: {} } as TimedEvent,
       firstTokenAt([0, 2]),
       { name: "after", time: [0, 3], attributes: {} } as TimedEvent,
     ];
     normalized({}, { events });
-    expect(events.map((event) => event.name)).toEqual(["before", "gen_ai.first_token", "after"]);
+    expect(events.map((event) => event.name)).toEqual([
+      "before",
+      OPENINFERENCE_FIRST_TOKEN_EVENT,
+      "after",
+    ]);
   });
 
   it("gains nothing on a span with no such event", () => {
@@ -828,42 +859,43 @@ describe("the first-token event", () => {
 });
 
 /**
- * The metric spelling: a measured duration with no first-token event.
+ * The metric spelling: a measured duration and no event.
  *
  * @ai-sdk/otel and pydantic-ai write the conventions' METRIC name onto the chat
- * span, in seconds, and record no event. The backend reads time to first chunk
- * from the event alone, so onEnd both maps the attribute and places the event
- * the span is missing.
+ * span, in seconds, and record no event. onEnd maps it onto the canonical
+ * attribute and adds no event: the duration is the whole signal.
  */
 describe("time to first chunk under its metric name", () => {
   const METRIC = "gen_ai.client.operation.time_to_first_chunk";
   const start: [number, number] = [1_700_000_000, 0];
 
-  function ended(attributes: Attributes, events: TimedEvent[] = [], end?: [number, number]) {
+  function ended(attributes: Attributes, events: TimedEvent[] = []) {
     const span = endedSpan(attributes, { events, startTime: start });
-    if (end !== undefined) (span as unknown as { endTime: [number, number] }).endTime = end;
     new NormalizingSpanProcessor().onEnd(span);
     return { attributes, events: span.events.map((event) => [event.name, event.time]) };
   }
 
-  it("becomes the canonical attribute, the stream flag and a first-token event", () => {
+  it("becomes the canonical attribute and the stream flag, and no event", () => {
     const out = ended({ [METRIC]: 1.5 });
     expect(out.attributes[METRIC]).toBeUndefined();
     expect(out.attributes["gen_ai.response.time_to_first_chunk"]).toBe(1.5);
     expect(out.attributes["gen_ai.request.stream"]).toBe(true);
-    expect(out.events).toEqual([["gen_ai.first_token", [1_700_000_001, 500_000_000]]]);
+    expect(out.events).toEqual([]);
   });
 
-  it("gives a canonical duration alone its event too", () => {
-    const out = ended({ "gen_ai.response.time_to_first_chunk": 1.5 });
-    expect(out.events).toEqual([["gen_ai.first_token", [1_700_000_001, 500_000_000]]]);
+  it("gives a canonical duration alone no event", () => {
+    expect(ended({ "gen_ai.response.time_to_first_chunk": 1.5 }).events).toEqual([]);
   });
 
-  it("never duplicates a first-token event the span already has", () => {
-    const event = { name: "gen_ai.first_token", time: [1_700_000_000, 7] } as TimedEvent;
-    expect(ended({ [METRIC]: 0.2 }, [event]).events).toEqual([
-      ["gen_ai.first_token", [1_700_000_000, 7]],
-    ]);
+  it("wins over a marker-derived duration: the measured value is the instrumentor's own", () => {
+    const marker = {
+      name: OPENINFERENCE_FIRST_TOKEN_EVENT,
+      time: [1_700_000_001, 500_000_000],
+      attributes: {},
+    } as TimedEvent;
+    const out = ended({ [METRIC]: 0.2 }, [marker]);
+    expect(out.attributes["gen_ai.response.time_to_first_chunk"]).toBe(0.2);
+    expect(out.events).toEqual([[OPENINFERENCE_FIRST_TOKEN_EVENT, [1_700_000_001, 500_000_000]]]);
   });
 
   it("lets native values win over the metric spelling", () => {
@@ -877,12 +909,7 @@ describe("time to first chunk under its metric name", () => {
     expect(out.attributes[METRIC]).toBeUndefined();
   });
 
-  it("never places the event after the span ends", () => {
-    const out = ended({ [METRIC]: 5 }, [], [1_700_000_000, 1_000_000]);
-    expect(out.events).toEqual([["gen_ai.first_token", [1_700_000_000, 1_000_000]]]);
-  });
-
-  it.each([-1, "1.5", true])("drops an unusable duration (%s) without an event", (value) => {
+  it.each([-1, "1.5", true])("drops an unusable duration (%s)", (value) => {
     const out = ended({ [METRIC]: value as AttributeValue });
     expect(out.attributes["gen_ai.response.time_to_first_chunk"]).toBeUndefined();
     expect(out.attributes["gen_ai.request.stream"]).toBeUndefined();

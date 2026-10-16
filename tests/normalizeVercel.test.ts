@@ -2,7 +2,6 @@ import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import type { ReadableSpan, Span, TimedEvent } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
 import { NormalizingSpanProcessor, VERCEL_FIRST_CHUNK_EVENT } from "../src/normalize.js";
-import { GEN_AI_FIRST_TOKEN_EVENT } from "../src/semconv.js";
 import fixture from "./fixtures/vercel_cases.json" with { type: "json" };
 
 /**
@@ -129,22 +128,25 @@ describe("the first-chunk event", () => {
     attributes: { "ai.response.msToFirstChunk": 250 },
   });
 
-  it("becomes the first-token event the backend reads, and no second one is added", () => {
+  it("stays as recorded, and no gen_ai.first_token event is added", () => {
     const events = [firstChunk()];
     const attributes: Attributes = {
       "ai.operationId": "ai.streamText.doStream",
       "ai.response.msToFirstChunk": 250,
     };
     new NormalizingSpanProcessor().onEnd(ended(attributes, events));
-    expect(events.map((e) => e.name)).toEqual([GEN_AI_FIRST_TOKEN_EVENT]);
+    expect(events.map((e) => e.name)).toEqual([VERCEL_FIRST_CHUNK_EVENT]);
     expect(events[0]?.time).toEqual([1700000000, 250_000_000]);
     expect(attributes["gen_ai.response.time_to_first_chunk"]).toBe(0.25);
     expect(attributes["gen_ai.request.stream"]).toBe(true);
   });
 
-  it("is renamed on a span the table does not map, as the sink renames it", () => {
+  it("gives a span the table does not map the duration from the event's time", () => {
     const events = [firstChunk()];
-    new NormalizingSpanProcessor().onEnd(ended({}, events));
-    expect(events.map((e) => e.name)).toEqual([GEN_AI_FIRST_TOKEN_EVENT]);
+    const attributes: Attributes = {};
+    new NormalizingSpanProcessor().onEnd(ended(attributes, events));
+    expect(events.map((e) => e.name)).toEqual([VERCEL_FIRST_CHUNK_EVENT]);
+    expect(attributes["gen_ai.response.time_to_first_chunk"]).toBe(0.25);
+    expect(attributes["gen_ai.request.stream"]).toBe(true);
   });
 });

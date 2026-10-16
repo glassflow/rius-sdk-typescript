@@ -2,8 +2,8 @@ import { SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import { hrTimeToMilliseconds } from "@opentelemetry/core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { init, type RiusClient } from "../src/client.js";
-import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
+import { getTracer, init, type RiusClient } from "../src/client.js";
+import { Generation, startAsCurrentGeneration, startGeneration } from "../src/generation.js";
 import { isContentKey } from "../src/masking.js";
 import { startAsCurrentSpan } from "../src/spans.js";
 
@@ -93,68 +93,39 @@ describe("generations", () => {
     expect(exporter.getFinishedSpans()[0].attributes["input.value"]).toBeUndefined();
   });
 
-  it("records the first-token event for TTFT", async () => {
+  // Time to first chunk is the conventions' gen_ai.response.time_to_first_chunk
+  // attribute alone: no gen_ai.first_token event. The backend derives the one
+  // it stores from the attribute, at span start plus the duration.
+  const firstTokenEvents = (span: { events: { name: string }[] }) =>
+    span.events.filter((e) => e.name === "gen_ai.first_token");
+
+  it("recordFirstToken records the duration and no event", async () => {
     const gen = startGeneration("chat", { model: "m" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
     gen.recordFirstToken();
     gen.end();
     await client.flush();
-    expect(exporter.getFinishedSpans()[0].events.map((e) => e.name)).toContain(
-      "gen_ai.first_token",
-    );
+    const span = exporter.getFinishedSpans()[0];
+    expect(firstTokenEvents(span)).toHaveLength(0);
+    const ttfc = span.attributes["gen_ai.response.time_to_first_chunk"];
+    expect(typeof ttfc).toBe("number");
+    expect(ttfc as number).toBeGreaterThan(0.005);
+    expect(span.attributes["gen_ai.request.stream"]).toBe(true);
   });
 
-  it("recordFirstToken called twice produces exactly one gen_ai.first_token event", async () => {
-    const gen = startGeneration("chat", { model: "m" });
-    gen.recordFirstToken();
-    gen.recordFirstToken();
-    gen.end();
-    await client.flush();
-    const events = exporter
-      .getFinishedSpans()[0]
-      .events.filter((e) => e.name === "gen_ai.first_token");
-    expect(events).toHaveLength(1);
-  });
-
-  it("recordFirstToken called ten times in a streaming loop still produces exactly one event", async () => {
+  it("recordFirstToken called ten times in a streaming loop still records no event", async () => {
     const gen = startGeneration("chat", { model: "m" });
     for (let i = 0; i < 10; i++) {
       gen.recordFirstToken();
     }
     gen.end();
     await client.flush();
-    const events = exporter
-      .getFinishedSpans()[0]
-      .events.filter((e) => e.name === "gen_ai.first_token");
-    expect(events).toHaveLength(1);
+    const span = exporter.getFinishedSpans()[0];
+    expect(firstTokenEvents(span)).toHaveLength(0);
+    expect(span.attributes["gen_ai.response.time_to_first_chunk"]).toBeDefined();
   });
 
-  it("recordFirstToken records the timestamp of the FIRST call, not the last", async () => {
-    // Real, monotonically increasing delays between calls (no clock mocking):
-    // the assertion only needs event time to be ordered closer to the first
-    // call than the last, which a real delay establishes deterministically
-    // as long as the gap comfortably exceeds scheduling jitter (tens of ms
-    // here vs. sub-ms overhead per call).
-    const gen = startGeneration("chat", { model: "m" });
-    gen.recordFirstToken();
-    const firstCallTime = Date.now();
-    for (let i = 0; i < 9; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      gen.recordFirstToken();
-    }
-    const lastCallTime = Date.now();
-    gen.end();
-    await client.flush();
-    const events = exporter
-      .getFinishedSpans()[0]
-      .events.filter((e) => e.name === "gen_ai.first_token");
-    expect(events).toHaveLength(1);
-    const eventTimeMs = hrTimeToMilliseconds(events[0].time);
-    const distanceToFirst = Math.abs(eventTimeMs - firstCallTime);
-    const distanceToLast = Math.abs(eventTimeMs - lastCallTime);
-    expect(distanceToFirst).toBeLessThan(distanceToLast);
-  });
-
-  it("recordFirstToken's guard is per-instance: a second Generation still records its own event", async () => {
+  it("recordFirstToken's guard is per-instance: a second Generation records its own duration", async () => {
     const first = startGeneration("chat", { model: "m" });
     first.recordFirstToken();
     first.recordFirstToken();
@@ -165,46 +136,76 @@ describe("generations", () => {
     second.end();
 
     await client.flush();
-    const spans = exporter.getFinishedSpans();
-    const firstEvents = spans
-      .find((s) => s.name === "chat")
-      ?.events.filter((e) => e.name === "gen_ai.first_token");
-    const secondEvents = spans
-      .find((s) => s.name === "chat2")
-      ?.events.filter((e) => e.name === "gen_ai.first_token");
-    expect(firstEvents).toHaveLength(1);
-    expect(secondEvents).toHaveLength(1);
+    for (const span of exporter.getFinishedSpans()) {
+      expect(firstTokenEvents(span)).toHaveLength(0);
+      expect(span.attributes["gen_ai.response.time_to_first_chunk"]).toBeDefined();
+    }
   });
 
-  it("recordFirstToken sets time_to_first_chunk and request.stream next to the event", async () => {
+  it("time_to_first_chunk is measured from the span's start, not from when the Generation wrapped it", async () => {
+    const span = getTracer().startSpan("chat");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const gen = new Generation(span);
+    gen.recordFirstToken();
+    gen.end();
+    await client.flush();
+    const ttfc = exporter.getFinishedSpans()[0].attributes[
+      "gen_ai.response.time_to_first_chunk"
+    ] as number;
+    expect(ttfc).toBeGreaterThanOrEqual(0.025);
+  });
+
+  // recordFirstToken reads two fields the OpenTelemetry SDK span does not
+  // publish, falling back to the Generation's own clock without them. A
+  // fallback would still pass the tests above by microseconds, so this pins
+  // the fields themselves: if an OpenTelemetry upgrade renames them, fix
+  // elapsedSinceStart in src/generation.ts rather than this test.
+  it("can read the SDK span fields time_to_first_chunk is measured from", () => {
+    const implicit = getTracer().startSpan("chat") as unknown as Record<string, unknown>;
+    const explicit = getTracer().startSpan("chat", {
+      startTime: Date.now() - 1_000,
+    }) as unknown as Record<string, unknown>;
+    try {
+      expect(
+        typeof implicit._performanceStartTime,
+        "the OpenTelemetry SDK span no longer exposes _performanceStartTime",
+      ).toBe("number");
+      expect(
+        implicit._startTimeProvided,
+        "the OpenTelemetry SDK span no longer exposes _startTimeProvided",
+      ).toBe(false);
+      expect(explicit._startTimeProvided).toBe(true);
+      expect(Array.isArray(explicit.startTime)).toBe(true);
+    } finally {
+      (implicit as unknown as { end(): void }).end();
+      (explicit as unknown as { end(): void }).end();
+    }
+  });
+
+  it("time_to_first_chunk counts from an explicit start time", async () => {
+    const span = getTracer().startSpan("chat", { startTime: Date.now() - 2_000 });
+    const gen = new Generation(span);
+    gen.recordFirstToken();
+    gen.end();
+    await client.flush();
+    const ttfc = exporter.getFinishedSpans()[0].attributes[
+      "gen_ai.response.time_to_first_chunk"
+    ] as number;
+    expect(ttfc).toBeGreaterThanOrEqual(1.9);
+    expect(ttfc).toBeLessThan(5);
+  });
+
+  it("time_to_first_chunk never exceeds the span's duration", async () => {
     const gen = startGeneration("chat", { model: "m" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 15));
     gen.recordFirstToken();
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    const ttfc = span.attributes["gen_ai.response.time_to_first_chunk"];
-    expect(typeof ttfc).toBe("number");
-    expect(ttfc as number).toBeGreaterThan(0);
-    expect(span.attributes["gen_ai.request.stream"]).toBe(true);
-    // The event is kept: it is the timestamp the backend keys on.
-    expect(span.events.filter((e) => e.name === "gen_ai.first_token")).toHaveLength(1);
-  });
-
-  it("time_to_first_chunk agrees with the event timestamp minus span start", async () => {
-    const gen = startGeneration("chat", { model: "m" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    gen.recordFirstToken();
-    gen.end();
-    await client.flush();
-    const span = exporter.getFinishedSpans()[0];
-    const [event] = span.events.filter((e) => e.name === "gen_ai.first_token");
-    expect(event).toBeDefined();
-    const fromEventSeconds =
-      (hrTimeToMilliseconds(event.time) - hrTimeToMilliseconds(span.startTime)) / 1000;
     const ttfc = span.attributes["gen_ai.response.time_to_first_chunk"] as number;
-    // Two clocks (performance.now vs the span's hrtime); allow scheduling jitter.
-    expect(Math.abs(ttfc - fromEventSeconds)).toBeLessThan(0.01);
+    const durationSeconds =
+      (hrTimeToMilliseconds(span.endTime) - hrTimeToMilliseconds(span.startTime)) / 1000;
+    expect(ttfc).toBeLessThanOrEqual(durationSeconds + 0.001);
   });
 
   it("a second recordFirstToken does not change time_to_first_chunk", async () => {
@@ -227,12 +228,12 @@ describe("generations", () => {
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.events.filter((e) => e.name === "gen_ai.first_token")).toHaveLength(0);
+    expect(firstTokenEvents(span)).toHaveLength(0);
     expect(span.attributes["gen_ai.response.time_to_first_chunk"]).toBeUndefined();
     expect(span.attributes["gen_ai.request.stream"]).toBeUndefined();
   });
 
-  it("scoped form records time_to_first_chunk from span creation", async () => {
+  it("scoped form records time_to_first_chunk from span start", async () => {
     await startAsCurrentGeneration("chat", { model: "m" }, async (gen) => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       gen.recordFirstToken();

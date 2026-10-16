@@ -5,7 +5,6 @@ import { type Message, normalizeMessages } from "./messages.js";
 import { REQUEST_PARAMETER_GUARDS } from "./normalize.js";
 import {
   composeSpanName,
-  GEN_AI_FIRST_TOKEN_EVENT,
   GEN_AI_INPUT_MESSAGES,
   GEN_AI_OPERATION_NAME,
   GEN_AI_OUTPUT_MESSAGES,
@@ -96,13 +95,43 @@ export interface GenerationOptions {
   operation?: string;
 }
 
+/**
+ * Milliseconds since the span's start, on the clock OpenTelemetry itself
+ * stamps the span's later times with, so the duration is exactly what an event
+ * recorded now would be offset by.
+ *
+ * The SDK span records its start as wall time and every later time as that
+ * start plus a monotonic delta from the moment it was created; when the caller
+ * gave an explicit start time, later times are wall time. Its creation moment
+ * is not public API, so it is read defensively: a span without one (not an SDK
+ * span, or an SDK that renamed the field) falls back to `fallbackStartedAt`,
+ * the monotonic time the Generation wrapped it.
+ */
+function elapsedSinceStart(span: unknown, fallbackStartedAt: number): number {
+  const sdk = span as {
+    startTime?: unknown;
+    _startTimeProvided?: unknown;
+    _performanceStartTime?: unknown;
+  };
+  const start = sdk.startTime;
+  const hasStart =
+    Array.isArray(start) && typeof start[0] === "number" && typeof start[1] === "number";
+  if (hasStart && sdk._startTimeProvided === true) {
+    return Date.now() - (start[0] * 1e3 + start[1] / 1e6);
+  }
+  if (typeof sdk._performanceStartTime === "number") {
+    return performance.now() - sdk._performanceStartTime;
+  }
+  return performance.now() - fallbackStartedAt;
+}
+
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
 export class Generation extends Observation {
   private firstTokenRecorded = false;
   /**
-   * Monotonic clock at construction, which is span creation for both
-   * `startGeneration` and the scoped form. The API `Span` exposes no start
-   * time, so this is what `recordFirstToken` measures the first chunk against.
+   * Monotonic clock at construction: what `recordFirstToken` measures the
+   * first chunk against only when the span is not an SDK span, which is the
+   * one case where its start cannot be read (see {@link elapsedSinceStart}).
    */
   private readonly startedAt = performance.now();
   /**
@@ -265,10 +294,9 @@ export class Generation extends Observation {
   }
 
   /**
-   * Mark the arrival of the first streamed token. Records the
-   * `gen_ai.first_token` event (the timestamp the backend derives TTFT from)
-   * and, per the GenAI conventions, the derived
-   * `gen_ai.response.time_to_first_chunk` (seconds since span creation) plus
+   * Mark the arrival of the first streamed token. Records, per the GenAI
+   * conventions, `gen_ai.response.time_to_first_chunk` (seconds since the
+   * span's start; the backend derives time to first token from it) plus
    * `gen_ai.request.stream = true`: a first chunk arriving is what tells the
    * SDK the request streamed. Idempotent: only the first call records, so a
    * streaming loop can call this unconditionally on every chunk without
@@ -278,8 +306,7 @@ export class Generation extends Observation {
     if (this.firstTokenRecorded || !this.span.isRecording()) {
       return this;
     }
-    const elapsedSeconds = Math.max(performance.now() - this.startedAt, 0) / 1000;
-    this.span.addEvent(GEN_AI_FIRST_TOKEN_EVENT);
+    const elapsedSeconds = Math.max(elapsedSinceStart(this.span, this.startedAt), 0) / 1000;
     this.firstTokenRecorded = true;
     this.span.setAttribute(GEN_AI_REQUEST_STREAM, true);
     this.span.setAttribute(GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, elapsedSeconds);
