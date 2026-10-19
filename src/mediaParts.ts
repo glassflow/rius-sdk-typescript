@@ -850,8 +850,10 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * is already in it (or is not a media part this can read), to be kept as it
  * is. A blob carrying content is rebuilt without it, its size and
  * `not_captured` in its place, and takes its modality from its MIME type
- * first (@ai-sdk/otel labels a PDF an image). Any other part keeps a modality
- * it has; a part missing one is rebuilt with it filled from the MIME type.
+ * first (@ai-sdk/otel labels a PDF an image), else its own modality, else
+ * document. Any other part keeps a modality it has; a part missing one is
+ * rebuilt with it filled from the MIME type, and left as it is when it has no
+ * MIME type either.
  * A rebuilt part has exactly the normalized members.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
@@ -859,7 +861,9 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
   const kind = (own ? part.modality : "document") as Modality;
   const content = part.type === "blob" && typeof part.content === "string";
   if (own && !content) return undefined;
-  if (!own && !isMime(part.mime_type)) return undefined;
+  // A blob carrying content is always rebuilt: with no MIME type and no
+  // modality it falls back to document.
+  if (!own && !content && !isMime(part.mime_type)) return undefined;
   switch (part.type) {
     case "blob": {
       if (typeof part.content === "string") {

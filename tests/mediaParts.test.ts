@@ -9,30 +9,39 @@ import { describe, expect, it } from "vitest";
 import {
   BUFFER_RULE,
   base64Size,
+  blobPart,
   DATA_URL_PATTERN,
+  fileIdPart,
   isReplacement,
   KEYED_RULE,
   MAX_DEPTH,
+  type MediaToken,
   MIME_PATTERN,
   providerMediaParts,
   REPLACEMENT_FORMAT,
   REPLACEMENT_UNKNOWN,
   strip,
   stripRawPayload,
+  uriPart,
 } from "../src/mediaParts.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+type GoldenToken = { rule: string; mime: string; byte_size: number | string };
 type Golden = {
   name: string;
   input: string;
   output: string;
-  tokens: { rule: string; mime: string; byte_size: number | string }[];
+  tokens: GoldenToken[];
+  // Present only where a second pass changes the output (see idempotence).
+  second_output?: string;
+  second_tokens?: GoldenToken[];
 };
 type Rule = Record<string, unknown> & { id: string };
 const REGISTRY = JSON.parse(
   readFileSync(join(HERE, "fixtures/semconv/media_parts.json"), "utf8"),
 ) as {
   stripped_reasons: Record<string, string>;
+  part_shapes: { members: Record<string, string[]> };
   raw_payloads: {
     golden: Golden[];
     detection: Rule[];
@@ -40,6 +49,11 @@ const REGISTRY = JSON.parse(
   };
 };
 const RAW = REGISTRY.raw_payloads;
+const asGolden = (t: MediaToken): GoldenToken => ({
+  rule: t.rule,
+  mime: t.mime ?? "unknown",
+  byte_size: t.byteSize ?? "unknown",
+});
 const rule = (id: string) => RAW.detection.find((r) => r.id === id) as Rule;
 
 describe("the raw-payload strip", () => {
@@ -77,6 +91,13 @@ describe("the raw-payload strip", () => {
     ]);
   });
 
+  it("builds parts with the registry's members, in its order", () => {
+    const members = REGISTRY.part_shapes.members;
+    expect(Object.keys(blobPart("image", "image/png", 8, "not_captured"))).toEqual(members.blob);
+    expect(Object.keys(uriPart("image", "image/png", "https://x.test/a.png"))).toEqual(members.uri);
+    expect(Object.keys(fileIdPart("image", "image/png", "f"))).toEqual(members.file);
+  });
+
   it("has golden examples to run", () => {
     expect(RAW.golden.length).toBeGreaterThan(30);
   });
@@ -85,19 +106,14 @@ describe("the raw-payload strip", () => {
     it(`turns ${golden.name} into exactly its output`, () => {
       const result = strip(golden.input);
       expect(result.text).toBe(golden.output);
-      expect(
-        result.tokens.map((t) => ({
-          rule: t.rule,
-          mime: t.mime ?? "unknown",
-          byte_size: t.byteSize ?? "unknown",
-        })),
-      ).toEqual(golden.tokens);
+      expect(result.tokens.map(asGolden)).toEqual(golden.tokens);
     });
 
-    it(`leaves ${golden.name} unchanged on a second pass`, () => {
-      const once = stripRawPayload(golden.input);
-      expect(stripRawPayload(once)).toBe(once);
-      expect(stripRawPayload(golden.output)).toBe(golden.output);
+    it(`gives ${golden.name} its second-pass output, then nothing changes`, () => {
+      const second = strip(golden.output);
+      expect(second.text).toBe(golden.second_output ?? golden.output);
+      expect(second.tokens.map(asGolden)).toEqual(golden.second_tokens ?? []);
+      expect(stripRawPayload(second.text)).toBe(second.text);
     });
   }
 
@@ -311,6 +327,13 @@ describe("provider media items as parts", () => {
     expect(
       providerMediaParts({ type: "file", mime_type: "application/pdf", file_id: "f", extra: 1 }),
     ).toEqual([{ type: "file", modality: "document", mime_type: "application/pdf", file_id: "f" }]);
+  });
+
+  it("always rebuilds a blob carrying content, document when nothing names its modality", () => {
+    expect(providerMediaParts({ type: "blob", content: "QUFB", extra: true })).toEqual([
+      { type: "blob", modality: "document", byte_size: 3, stripped_reason: "not_captured" },
+    ]);
+    expect(providerMediaParts({ type: "uri", uri: "https://x.test/a" })).toBeUndefined();
   });
 
   it("keeps a native uri or file part that has a modality, and an already stripped blob", () => {
