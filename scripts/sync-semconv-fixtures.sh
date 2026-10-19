@@ -9,7 +9,10 @@
 # normalized result; tests/conformance.test.ts replays them through this SDK's
 # processors. Only the data is copied (manifests, recordings, expected results
 # and the format README), never the recorders, plus the module that encodes a
-# replayed span, vendored unchanged as tests/conformance/_recording.mjs.
+# replayed span, vendored unchanged as tests/conformance/_recording.mjs, and
+# the media parts registry (registry/media_parts.yaml) as JSON, whose golden
+# strip examples tests/mediaParts.test.ts runs. Converting it needs python3
+# with PyYAML.
 # SOURCE records the commit the copy came from. Both copies are excluded from
 # biome (biome.json) so they stay byte-for-byte what rius-semconv wrote.
 set -euo pipefail
@@ -31,7 +34,7 @@ COMMIT="$(git -C "$SRC" rev-parse "$REF^{commit}")"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-git -C "$SRC" archive "$COMMIT" fixtures | tar -x -C "$WORK"
+git -C "$SRC" archive "$COMMIT" fixtures registry/media_parts.yaml | tar -x -C "$WORK"
 
 rm -rf "$DATA"
 mkdir -p "$DATA/fixtures"
@@ -47,6 +50,9 @@ for family in "$WORK"/fixtures/*/; do
     cp "$file" "$DATA/fixtures/$name/"
   done
 done
+python3 -c 'import json, sys, yaml
+json.dump(yaml.safe_load(open(sys.argv[1], encoding="utf-8")), sys.stdout, ensure_ascii=False, indent=2)
+print()' "$WORK/registry/media_parts.yaml" >"$DATA/media_parts.json"
 printf 'rius-semconv %s\n' "$COMMIT" >"$DATA/SOURCE"
 
 mkdir -p "$CODE"
