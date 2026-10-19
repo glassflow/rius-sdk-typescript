@@ -329,26 +329,65 @@ describe("provider media items as parts", () => {
     ).toEqual([{ type: "file", modality: "document", mime_type: "application/pdf", file_id: "f" }]);
   });
 
-  it("always rebuilds a blob carrying content, document when nothing names its modality", () => {
-    expect(providerMediaParts({ type: "blob", content: "QUFB", extra: true })).toEqual([
+  it("always rebuilds a native part into the normalized shape", () => {
+    expect(providerMediaParts({ type: "blob", content: "QUJD", extra: true })).toEqual([
       { type: "blob", modality: "document", byte_size: 3, stripped_reason: "not_captured" },
     ]);
-    expect(providerMediaParts({ type: "uri", uri: "https://x.test/a" })).toBeUndefined();
-  });
-
-  it("keeps a native uri or file part that has a modality, and an already stripped blob", () => {
+    expect(providerMediaParts({ type: "uri", uri: "https://x" })).toEqual([
+      { type: "uri", modality: "document", uri: "https://x" },
+    ]);
     expect(
       providerMediaParts({
         type: "uri",
-        modality: "document",
-        mime_type: "image/png",
-        uri: "https://x.test/a.png",
+        uri: "https://x",
+        modality: "image",
+        mime_type: "application/pdf",
       }),
-    ).toBeUndefined();
-    expect(providerMediaParts({ type: "file", modality: "audio", file_id: "f" })).toBeUndefined();
+    ).toEqual([{ type: "uri", modality: "image", mime_type: "application/pdf", uri: "https://x" }]);
     expect(
-      providerMediaParts({ type: "blob", modality: "image", stripped_reason: "redacted_upstream" }),
-    ).toBeUndefined();
+      providerMediaParts({
+        type: "uri",
+        modality: "audio",
+        mime_type: "text/plain;charset=x",
+        uri: "https://x",
+      }),
+    ).toEqual([{ type: "uri", modality: "audio", uri: "https://x" }]);
+    expect(
+      providerMediaParts({ type: "file", modality: "audio", file_id: "f", name: "a.wav" }),
+    ).toEqual([{ type: "file", modality: "audio", file_id: "f" }]);
+    expect(
+      providerMediaParts({
+        type: "blob",
+        modality: "image",
+        mime_type: null,
+        stripped_reason: "redacted_upstream",
+      }),
+    ).toEqual([{ type: "blob", modality: "image", stripped_reason: "redacted_upstream" }]);
+  });
+
+  it("makes a blob of a uri holding a data URL, native or Gemini's file_data", () => {
+    expect(providerMediaParts({ type: "uri", uri: "data:image/png;base64,QUFB" })).toEqual([
+      {
+        type: "blob",
+        modality: "image",
+        mime_type: "image/png",
+        byte_size: 3,
+        stripped_reason: "not_captured",
+      },
+    ]);
+    expect(
+      providerMediaParts({ type: "uri", modality: "document", uri: "data:text/plain,hi" }),
+    ).toEqual([
+      {
+        type: "blob",
+        modality: "document",
+        mime_type: "text/plain",
+        stripped_reason: "not_captured",
+      },
+    ]);
+    expect(providerMediaParts({ file_data: { file_uri: "data:None;url,None" } })).toEqual([
+      { type: "blob", modality: "document", stripped_reason: "redacted_upstream" },
+    ]);
   });
 
   it("leaves a part it does not know alone", () => {

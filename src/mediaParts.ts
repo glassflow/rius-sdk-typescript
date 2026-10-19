@@ -828,7 +828,10 @@ function documentContent(content: unknown): Part[] | undefined {
   return parts;
 }
 
-/** A Gemini part, which has no type: `inline_data` is a blob, `file_data` a uri. */
+/**
+ * A Gemini part, which has no type: `inline_data` is a blob, `file_data` a uri
+ * (a blob when its URI is a data URL).
+ */
 function geminiPart(item: Record<string, unknown>): Part[] | undefined {
   const inline = item.inline_data ?? item.inlineData;
   if (isRecord(inline) && typeof inline.data === "string") {
@@ -837,7 +840,7 @@ function geminiPart(item: Record<string, unknown>): Part[] | undefined {
   const file = item.file_data ?? item.fileData;
   if (isRecord(file)) {
     const uri = file.file_uri ?? file.fileUri;
-    if (typeof uri === "string") return [uriPart("document", file.mime_type ?? file.mimeType, uri)];
+    if (typeof uri === "string") return [urlPart(uri, "document", file.mime_type ?? file.mimeType)];
   }
   return undefined;
 }
@@ -846,46 +849,52 @@ const MODALITIES: readonly string[] = ["image", "video", "audio", "document"];
 const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
 
 /**
- * A native semconv media part in its normalized shape, or undefined when it
- * is already in it (or is not a media part this can read), to be kept as it
- * is. A blob carrying content is rebuilt without it, its size and
- * `not_captured` in its place, and takes its modality from its MIME type
- * first (@ai-sdk/otel labels a PDF an image), else its own modality, else
- * document. Any other part keeps a modality it has; a part missing one is
- * rebuilt with it filled from the MIME type, and left as it is when it has no
- * MIME type either.
- * A rebuilt part has exactly the normalized members.
+ * A native semconv media part rebuilt into the normalized shape: the pinned
+ * members in their order, extra members dropped, `mime_type` only when it is
+ * token/token. A modality the part has is kept, else it is filled from the
+ * MIME type, else document. A blob carrying content is stripped of it (sized
+ * from it, `not_captured`) and takes its modality from its MIME type first
+ * (@ai-sdk/otel labels a PDF an image). A uri holding a data URL is a blob,
+ * since a data URL is never a uri. Undefined when it is not a media part
+ * this can read, which stays as it came.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
   const kind = (own ? part.modality : "document") as Modality;
-  const content = part.type === "blob" && typeof part.content === "string";
-  if (own && !content) return undefined;
-  // A blob carrying content is always rebuilt: with no MIME type and no
-  // modality it falls back to document.
-  if (!own && !content && !isMime(part.mime_type)) return undefined;
+  const mime = part.mime_type;
+  const modality = own ? kind : (modalityOf(mime) ?? "document");
+  const shaped = (type: string): Part => {
+    const out: Part = { type, modality };
+    if (isMime(mime)) out.mime_type = mime;
+    return out;
+  };
   switch (part.type) {
     case "blob": {
-      if (typeof part.content === "string") {
-        return [base64Blob(part.content, kind, part.mime_type)];
-      }
+      if (typeof part.content === "string") return [base64Blob(part.content, kind, mime)];
+      const out = shaped("blob");
       const size = part.byte_size;
-      const byteSize =
-        Number.isSafeInteger(size) && (size as number) >= 0 ? (size as number) : undefined;
-      const reason =
+      if (Number.isSafeInteger(size) && (size as number) >= 0) out.byte_size = size;
+      out.stripped_reason =
         typeof part.stripped_reason === "string" && STRIPPED_REASONS.includes(part.stripped_reason)
           ? part.stripped_reason
           : part.content === undefined || part.content === null
             ? REDACTED_UPSTREAM
             : NOT_CAPTURED;
-      return [blobPart(kind, part.mime_type, byteSize, reason)];
+      return [out];
     }
-    case "uri":
-      return typeof part.uri === "string" ? [uriPart(kind, part.mime_type, part.uri)] : undefined;
-    case "file":
-      return typeof part.file_id === "string"
-        ? [fileIdPart(kind, part.mime_type, part.file_id)]
-        : undefined;
+    case "uri": {
+      if (typeof part.uri !== "string") return undefined;
+      if (isDataUrl(part.uri)) return [dataUrlBlob(part.uri, kind, mime)];
+      const out = shaped("uri");
+      out.uri = part.uri;
+      return [out];
+    }
+    case "file": {
+      if (typeof part.file_id !== "string") return undefined;
+      const out = shaped("file");
+      out.file_id = part.file_id;
+      return [out];
+    }
     default:
       return undefined;
   }
