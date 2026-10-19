@@ -860,11 +860,12 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * A native semconv media part rebuilt into the normalized shape: the pinned
  * members in their order, extra members dropped, `mime_type` only when it is
  * token/token. A modality the part has is kept, else it is filled from the
- * MIME type, else (a uri) from its filename extension, else document. A blob carrying content is stripped of it (sized
- * from it, `not_captured`) and takes its modality from its MIME type first
- * (@ai-sdk/otel labels a PDF an image). A uri holding a data URL is a blob,
- * since a data URL is never a uri. Undefined when it is not a media part
- * this can read, which stays as it came.
+ * MIME type, else (a uri) from its filename extension, else document. A blob
+ * carrying content is stripped of it (sized from it, `not_captured`) and
+ * takes its modality from its MIME type first (@ai-sdk/otel labels a PDF an
+ * image). A uri holding a data URL is a blob, since a data URL is never a
+ * uri. Undefined when it is not a media part this can read, which stays as
+ * it came.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);

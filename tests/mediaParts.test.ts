@@ -365,6 +365,32 @@ describe("provider media items as parts", () => {
     ).toEqual([{ type: "blob", modality: "image", stripped_reason: "redacted_upstream" }]);
   });
 
+  it("writes a rebuilt part's members in the pinned order", () => {
+    expect(
+      JSON.stringify(
+        providerMediaParts({
+          uri: "https://x",
+          mime_type: "application/pdf",
+          modality: "image",
+          type: "uri",
+        }),
+      ),
+    ).toBe('[{"type":"uri","modality":"image","mime_type":"application/pdf","uri":"https://x"}]');
+    expect(
+      JSON.stringify(
+        providerMediaParts({
+          content: "QUJD",
+          extra: 1,
+          mime_type: "image/png",
+          modality: "document",
+          type: "blob",
+        }),
+      ),
+    ).toBe(
+      '[{"type":"blob","modality":"image","mime_type":"image/png","byte_size":3,"stripped_reason":"not_captured"}]',
+    );
+  });
+
   it("takes a uri's modality from its extension when nothing else names it", () => {
     expect(providerMediaParts({ type: "uri", uri: "https://example.com/clip.mov?x=1#t" })).toEqual([
       { type: "uri", modality: "video", uri: "https://example.com/clip.mov?x=1#t" },
