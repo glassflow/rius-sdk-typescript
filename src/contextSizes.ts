@@ -24,9 +24,13 @@
  *   {type: "text", bytes}                       raw UTF-8 bytes of the content
  *   {type: "tool_call", tool, bytes}            canonical bytes of the part
  *   {type: "tool_call_response", tool, bytes}   canonical bytes of the part
- *   {type: <other type or "unknown">}           media and unknown parts, unsized
+ *   {type: "blob" | "uri" | "file", modality, byte_size?}
+ *                                               a media part: its modality and,
+ *                                               when known, the media's own size
+ *   {type: <other type or "unknown">}           other parts, unsized
  * where `tool` is the tool NAME (a tool result's name is resolved through its
- * call id) or null when unknown.
+ * call id) or null when unknown. A media entry never carries `bytes`: its
+ * size is the media's, not that of any content, which a blob does not carry.
  *
  * Folding: only the last DETAIL_WINDOW input messages keep per-part detail;
  * older ones collapse into `folded`:
@@ -53,6 +57,7 @@ type ToolName = string | null;
 type PartEntry =
   | { type: "text"; bytes: number }
   | { type: "tool_call" | "tool_call_response"; tool: ToolName; bytes: number }
+  | { type: "blob" | "uri" | "file"; modality?: string; byte_size?: number }
   | { type: string };
 
 interface MessageEntry {
@@ -161,6 +166,17 @@ class Context {
       case "tool_call_response": {
         const name = typeof part.id === "string" ? this.callNames.get(part.id) : undefined;
         return { type: "tool_call_response", tool: asToolName(name), bytes: canonicalBytes(part) };
+      }
+      case "blob":
+      case "uri":
+      case "file": {
+        const entry: { type: string; modality?: string; byte_size?: number } = { type: part.type };
+        if (typeof part.modality === "string") entry.modality = part.modality;
+        const size = part.byte_size;
+        if (typeof size === "number" && Number.isSafeInteger(size) && size >= 0) {
+          entry.byte_size = size;
+        }
+        return entry;
       }
       default:
         return { type: typeof part.type === "string" ? part.type : "unknown" };

@@ -8,6 +8,17 @@ import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace
 import { moveAggregatedUsage, moveWrappedCallUsage, noteWrapperStart } from "./aggregatedUsage.js";
 import { qualifyRecordedExceptions } from "./errorType.js";
 import {
+  base64Blob,
+  blobPart,
+  NOT_CAPTURED,
+  nativeMediaPart,
+  OPENINFERENCE_REDACTED,
+  REDACTED_UPSTREAM,
+  stripRawPayload,
+  uriPart,
+  urlPart,
+} from "./mediaParts.js";
+import {
   ERROR_TYPE,
   EXCEPTION_EVENT,
   EXCEPTION_TYPE,
@@ -1178,37 +1189,31 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The modality of a file part, as @ai-sdk/otel derives it: image unless the
- * media type says video or audio.
+ * A file or image as a semconv media part: a `uri` when its data is a web
+ * address, else a `blob`, which never keeps the bytes (their size and
+ * `not_captured` in their place). The modality comes from the media type, so
+ * a PDF or a text/plain file is a document, never an image; with no media
+ * type, from the part kind. The AI SDK serializes binary data as base64
+ * before it reaches the span, so data is a string here; any other shape is
+ * not one we can vouch for, and the part keeps only its type.
  */
-function modality(mediaType: unknown): string {
-  if (typeof mediaType !== "string") return "image";
-  if (mediaType.startsWith("video/")) return "video";
-  if (mediaType.startsWith("audio/")) return "audio";
-  return "image";
-}
-
-/**
- * A file or image as a `uri` part when its data is a web address, a `blob`
- * part otherwise. The AI SDK serializes binary data as base64 before it
- * reaches the span, so data is a string here; any other shape is not one we
- * can vouch for, and the part keeps only its type.
- */
-function filePart(type: string, data: unknown, mediaType: unknown, fixed?: string) {
+function filePart(type: string, data: unknown, mediaType: unknown) {
+  const kind = type === "image" ? "image" : "document";
   let value = data;
   // v7's tagged file data, which v6 spans may carry from a v7 caller.
   if (isObject(value) && typeof value.type === "string") {
     const tag = value.type;
-    value =
-      tag === "data" ? value.data : tag === "url" ? value.url : tag === "text" ? value.text : "";
+    if (tag === "text") {
+      const text = typeof value.text === "string" ? value.text : "";
+      return blobPart(kind, mediaType, Buffer.byteLength(text), NOT_CAPTURED);
+    }
+    value = tag === "data" ? value.data : tag === "url" ? value.url : "";
   }
   if (typeof value !== "string") return { type };
-  const kind = fixed ?? modality(mediaType);
-  const mime = mediaType ?? null;
   if (value.startsWith("http://") || value.startsWith("https://")) {
-    return { type: "uri", modality: kind, mime_type: mime, uri: value };
+    return uriPart(kind, mediaType, value);
   }
-  return { type: "blob", modality: kind, mime_type: mime, content: value };
+  return base64Blob(value, kind, mediaType);
 }
 
 /** A tool result's payload, unwrapped from the AI SDK's tagged output. */
@@ -1231,9 +1236,14 @@ function toolResponse(output: unknown): unknown {
  * One AI SDK message part as a GenAI message part, as @ai-sdk/otel converts
  * it. A part with no string type is not a part we can read, and makes the
  * whole message set unreadable (the caller then leaves the source alone).
+ * Null when the part makes no part: an image or file read from a raw payload
+ * (`ai.prompt`, the caller's arguments, where a Buffer is a byte array), since
+ * media parts come only from message keys; the model call's
+ * `ai.prompt.messages` carries the same file as a part.
  */
-function vercelPart(part: unknown): Record<string, unknown> | undefined {
+function vercelPart(part: unknown, raw: boolean): Record<string, unknown> | null | undefined {
   if (!isObject(part) || typeof part.type !== "string") return undefined;
+  if (raw && (part.type === "image" || part.type === "file")) return null;
   switch (part.type) {
     case "text":
       return { type: "text", content: part.text };
@@ -1253,7 +1263,7 @@ function vercelPart(part: unknown): Record<string, unknown> | undefined {
         response: toolResponse(part.output),
       };
     case "image":
-      return filePart(part.type, part.image, part.mediaType, "image");
+      return filePart(part.type, part.image, part.mediaType);
     case "file":
       return filePart(part.type, part.data, part.mediaType);
     default:
@@ -1262,7 +1272,7 @@ function vercelPart(part: unknown): Record<string, unknown> | undefined {
 }
 
 /** One AI SDK message (a model message or a prompt message) as a GenAI message. */
-function vercelMessage(message: unknown): Record<string, unknown> | undefined {
+function vercelMessage(message: unknown, raw: boolean): Record<string, unknown> | undefined {
   if (!isObject(message) || typeof message.role !== "string") return undefined;
   const { content } = message;
   if (typeof content === "string") {
@@ -1271,9 +1281,9 @@ function vercelMessage(message: unknown): Record<string, unknown> | undefined {
   if (!Array.isArray(content)) return undefined;
   const parts: Record<string, unknown>[] = [];
   for (const item of content) {
-    const part = vercelPart(item);
+    const part = vercelPart(item, raw);
     if (part === undefined) return undefined;
-    parts.push(part);
+    if (part !== null) parts.push(part);
   }
   return { role: message.role, parts };
 }
@@ -1298,16 +1308,17 @@ function systemParts(system: unknown): Record<string, unknown>[] | undefined {
  */
 function splitMessages(
   messages: unknown,
+  raw: boolean,
 ): { input: Record<string, unknown>[]; system: Record<string, unknown>[] } | undefined {
   if (!Array.isArray(messages)) return undefined;
   const input: Record<string, unknown>[] = [];
   const system: Record<string, unknown>[] = [];
-  for (const raw of messages) {
-    if (isObject(raw) && raw.role === "system") {
-      system.push({ type: "text", content: raw.content });
+  for (const item of messages) {
+    if (isObject(item) && item.role === "system") {
+      system.push({ type: "text", content: item.content });
       continue;
     }
-    const message = vercelMessage(raw);
+    const message = vercelMessage(item, raw);
     if (message === undefined) return undefined;
     input.push(message);
   }
@@ -1327,7 +1338,7 @@ function vercelPrompt(
   | { source: string; input: Record<string, unknown>[]; system: Record<string, unknown>[] }
   | undefined {
   if (attributes["ai.prompt.messages"] !== undefined) {
-    const split = splitMessages(parseJson(attributes["ai.prompt.messages"]));
+    const split = splitMessages(parseJson(attributes["ai.prompt.messages"]), false);
     return split && { source: "ai.prompt.messages", ...split };
   }
   if (attributes["ai.prompt"] === undefined) return undefined;
@@ -1346,7 +1357,7 @@ function vercelPrompt(
       input.push({ role: "user", parts: [{ type: "text", content: list }] });
       continue;
     }
-    const split = splitMessages(list);
+    const split = splitMessages(list, true);
     if (split === undefined) return undefined;
     input.push(...split.input);
     system.push(...split.system);
@@ -1944,8 +1955,9 @@ function fieldRecord(): Record<string, string> {
  *   under `message.tool_calls.J` and as a contents item, so the call is
  *   already a `tool_call` part. It must hold nothing but the call's fields,
  *   each equal to one tool call's; otherwise it is not provably a copy.
- * - Anything else (an image, a reasoning block, a text item carrying an id or
- *   a signature, an item without a type) becomes a text part holding the item
+ * - An image item is a media part (see {@link openInferenceImage}).
+ * - Anything else (a reasoning block, a text item carrying an id or a
+ *   signature, an item without a type) becomes a text part holding the item
  *   serialized. The item is its fields by name (`message_content.` cut,
  *   `tool_call.` kept), sorted, so no field is lost and every producer orders
  *   it the same way.
@@ -1959,9 +1971,34 @@ function contentPart(
     return { type: "text", content: item.text };
   }
   if (item.type === "tool_use" && repeatsToolCall(item, toolCalls)) return undefined;
+  if (item.type === OPENINFERENCE_IMAGE) return openInferenceImage(item);
   const sorted = fieldRecord();
   for (const name of names) sorted[name] = item[name];
   return { type: "text", content: toAttributeValue(sorted) };
+}
+
+/** An OpenInference image item's type, and its fields with `message_content.` cut. */
+const OPENINFERENCE_IMAGE = "image";
+const OPENINFERENCE_IMAGE_URL = "image.image.url";
+const OPENINFERENCE_IMAGE_MEDIA_TYPE = "image.media_type";
+
+/**
+ * An OpenInference image item as a media part. A data URL is a blob (its
+ * bytes not kept), an http(s) URL a uri. `__REDACTED__` (the instrumentor
+ * dropped an image over its size limit), a data URL holding no bytes
+ * (`data:None;url,None`, the Anthropic instrumentor's url image) and an item
+ * with no url at all (the JS Anthropic instrumentor keeps only
+ * `image.media_type`) are blobs whose bytes never reached us.
+ */
+function openInferenceImage(item: Record<string, string>): Record<string, unknown> {
+  const url = Object.hasOwn(item, OPENINFERENCE_IMAGE_URL) ? item[OPENINFERENCE_IMAGE_URL] : "";
+  const mime = Object.hasOwn(item, OPENINFERENCE_IMAGE_MEDIA_TYPE)
+    ? item[OPENINFERENCE_IMAGE_MEDIA_TYPE]
+    : undefined;
+  if (url === "" || url === OPENINFERENCE_REDACTED) {
+    return blobPart("image", mime, undefined, REDACTED_UPSTREAM);
+  }
+  return urlPart(url, "image", mime);
 }
 
 /**
@@ -2140,6 +2177,84 @@ export function reassembleOpenInferenceMessages(
     attributes[target] = value;
   }
   return writes.length > 0;
+}
+
+/** A part list with its native media parts normalized; undefined when none changed. */
+function normalizedPartList(parts: unknown): unknown[] | undefined {
+  if (!Array.isArray(parts)) return undefined;
+  let changed = false;
+  const out = parts.flatMap((part) => {
+    if (!isObject(part)) return [part];
+    const media = nativeMediaPart(part);
+    if (media === undefined || JSON.stringify(media) === JSON.stringify([part])) return [part];
+    changed = true;
+    return media;
+  });
+  return changed ? out : undefined;
+}
+
+/**
+ * Native semconv media parts in the message keys, in their normalized shape,
+ * in place: a blob loses its content (any instrumentor writing blob parts,
+ * pydantic-ai and @ai-sdk/otel among them), and each media part takes its
+ * modality from its MIME type (@ai-sdk/otel labels a PDF or a text/plain file
+ * an image). A key that does not parse, or holds no part to change, is left
+ * byte for byte as it came.
+ */
+export function normalizeNativeMediaParts(
+  attributes: Record<string, AttributeValue | undefined>,
+): void {
+  for (const key of [GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES]) {
+    const messages = parseJson(attributes[key]);
+    if (!Array.isArray(messages)) continue;
+    let changed = false;
+    const out = messages.map((message) => {
+      if (!isObject(message)) return message;
+      const parts = normalizedPartList(message.parts);
+      if (parts === undefined) return message;
+      changed = true;
+      return { ...message, parts };
+    });
+    if (changed) attributes[key] = toAttributeValue(out);
+  }
+  const system = normalizedPartList(parseJson(attributes[GEN_AI_SYSTEM_INSTRUCTIONS]));
+  if (system !== undefined) attributes[GEN_AI_SYSTEM_INSTRUCTIONS] = toAttributeValue(system);
+}
+
+/** Every string, and every string of a string array, of a bag stripped in place. */
+function stripBag(attributes: Record<string, AttributeValue | undefined> | undefined): void {
+  if (attributes === undefined) return;
+  for (const [key, value] of Object.entries(attributes)) {
+    if (typeof value === "string") {
+      const stripped = stripRawPayload(value);
+      if (stripped !== value) attributes[key] = stripped;
+    } else if (Array.isArray(value) && value.some((item) => typeof item === "string")) {
+      const stripped = value.map((item) =>
+        typeof item === "string" ? stripRawPayload(item) : item,
+      );
+      if (stripped.some((item, i) => item !== value[i])) {
+        attributes[key] = stripped as AttributeValue;
+      }
+    }
+  }
+}
+
+/**
+ * Inline media stripped from every string of the span, in place: its
+ * attributes (raw payloads such as `input.value`, `output.value` and
+ * `ai.prompt`, the message keys too) and its events' and links' attributes.
+ * Each media token is replaced where it sits and every other byte is kept
+ * (see mediaParts.ts). The resource and scope attributes are shared across
+ * spans and are not ours to rewrite here.
+ */
+export function stripSpanPayloads(span: ReadableSpan): void {
+  stripBag(span.attributes as Record<string, AttributeValue | undefined>);
+  for (const event of span.events ?? []) {
+    stripBag(event.attributes as Record<string, AttributeValue | undefined> | undefined);
+  }
+  for (const link of span.links ?? []) {
+    stripBag(link.attributes as Record<string, AttributeValue | undefined> | undefined);
+  }
 }
 
 /**
@@ -2558,10 +2673,16 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // After the reassembly, whose messages it extends; end-only for the same
     // reason, since a system prompt is content.
     promoteSystemInstruction(attributes);
+    // After every pass that writes message keys, on what they wrote and on
+    // what the instrumentor did.
+    normalizeNativeMediaParts(attributes);
     // Last, so the table has already renamed legacy usage spellings, and
     // end-only because a run's usage is only known once it ends.
     moveAggregatedUsage(span, attributes);
     moveWrappedCallUsage(span, attributes);
+    // Truly last: over every string the span will carry, including the
+    // message keys every pass above produced.
+    stripSpanPayloads(span);
   }
 
   private normalize(
