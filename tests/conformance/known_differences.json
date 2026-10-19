@@ -40,6 +40,186 @@
       "family": "openinference-litellm-openai",
       "key": "rius.aggregated_usage.reasoning.output_tokens",
       "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-js-langchain-openai",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-js-langchain-openai",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-js-langchain-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-js-langchain-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-js-openai",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-js-openai",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-js-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-js-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-langchain-openai",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-langchain-openai",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-langchain-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-langchain-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-langchain",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-langchain",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-langchain",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-langchain",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-litellm",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-litellm",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-litellm",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-litellm",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-llama-index-openai",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-llama-index-openai",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-llama-index-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-llama-index-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-llama-index",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-llama-index",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-llama-index",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-llama-index",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-openai",
+      "key": "llm.token_count.prompt_details.audio",
+      "reason": "This SDK maps OpenInference's audio token details to the audio usage subsets, as rius-semconv's media parts change decides; the Python SDK, whose output is this family's expected result, makes the same change in its own media parts work, and the regenerated expected result retires this entry. The registry's usage_keys.yaml still says ignored until then."
+    },
+    {
+      "family": "openinference-openai",
+      "key": "llm.token_count.completion_details.audio",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
+    },
+    {
+      "family": "openinference-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As llm.token_count.prompt_details.audio."
     }
   ],
   "awaiting_expected": [

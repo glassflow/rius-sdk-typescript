@@ -2,7 +2,7 @@
   "normalizer": {
     "package": "@glassflow-ai/rius",
     "version": "1.4.1",
-    "commit": "913d52dfa84f9f1d0ed6deaab90d325a23bd463e"
+    "commit": "1523bf5dce342097d32555635567e412372b1940"
   },
   "recordings": [
     {
@@ -2115,7 +2115,7 @@
                 }
               },
               {
-                "key": "gen_ai.usage.input_token_details.audio_tokens",
+                "key": "gen_ai.usage.audio.input_tokens",
                 "value": {
                   "intValue": "14"
                 }
