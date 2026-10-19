@@ -846,14 +846,19 @@ const MODALITIES: readonly string[] = ["image", "video", "audio", "document"];
 const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
 
 /**
- * A native semconv media part in its normalized shape: a blob loses its
- * content (its size and `not_captured` in its place), and every part takes
- * its modality from its MIME type when it has one. Undefined when it is not a
- * media part this can read.
+ * A native semconv media part in its normalized shape, or undefined when it
+ * is already in it (or is not a media part this can read), to be kept as it
+ * is. A blob carrying content is rebuilt without it, its size and
+ * `not_captured` in its place, and takes its modality from its MIME type
+ * first (@ai-sdk/otel labels a PDF an image). Any other part keeps a modality
+ * it has; a part missing one is rebuilt with it filled from the MIME type.
+ * A rebuilt part has exactly the normalized members.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
   const kind = (own ? part.modality : "document") as Modality;
+  const content = part.type === "blob" && typeof part.content === "string";
+  if (own && !content) return undefined;
   if (!own && !isMime(part.mime_type)) return undefined;
   switch (part.type) {
     case "blob": {

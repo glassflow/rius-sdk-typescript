@@ -286,7 +286,7 @@ describe("provider media items as parts", () => {
     ).toEqual([{ type: "uri", modality: "video", mime_type: "video/mp4", uri: "gs://b/a.mp4" }]);
   });
 
-  it("strips a native blob and takes every native part's modality from its mime", () => {
+  it("strips a native blob, mime first, and fills a missing modality from the mime", () => {
     expect(
       providerMediaParts({
         type: "blob",
@@ -308,9 +308,24 @@ describe("provider media items as parts", () => {
     ).toEqual([
       { type: "uri", modality: "image", mime_type: "image/png", uri: "https://x.test/a.png" },
     ]);
-    expect(providerMediaParts({ type: "file", modality: "audio", file_id: "f" })).toEqual([
-      { type: "file", modality: "audio", file_id: "f" },
-    ]);
+    expect(
+      providerMediaParts({ type: "file", mime_type: "application/pdf", file_id: "f", extra: 1 }),
+    ).toEqual([{ type: "file", modality: "document", mime_type: "application/pdf", file_id: "f" }]);
+  });
+
+  it("keeps a native uri or file part that has a modality, and an already stripped blob", () => {
+    expect(
+      providerMediaParts({
+        type: "uri",
+        modality: "document",
+        mime_type: "image/png",
+        uri: "https://x.test/a.png",
+      }),
+    ).toBeUndefined();
+    expect(providerMediaParts({ type: "file", modality: "audio", file_id: "f" })).toBeUndefined();
+    expect(
+      providerMediaParts({ type: "blob", modality: "image", stripped_reason: "redacted_upstream" }),
+    ).toBeUndefined();
   });
 
   it("leaves a part it does not know alone", () => {
