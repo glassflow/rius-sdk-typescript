@@ -53,6 +53,8 @@ import {
   RIUS_MAIN_AGENT_VERSION,
   RIUS_SDK_GLOBAL_PROVIDER,
   SERVICE_INSTANCE_ID,
+  TELEMETRY_DISTRO_NAME,
+  TELEMETRY_DISTRO_VERSION,
   TRACER_NAME,
 } from "./semconv.js";
 import { SessionSpanProcessor } from "./session.js";
@@ -481,8 +483,8 @@ export function init(options: InitOptions = {}): RiusClient {
     ...(foreignGlobal === undefined
       ? {}
       : { [RIUS_SDK_GLOBAL_PROVIDER]: `foreign:${foreignGlobal}` }),
-    "telemetry.distro.name": "glassflow-rius",
-    "telemetry.distro.version": SDK_VERSION,
+    [TELEMETRY_DISTRO_NAME]: "glassflow-rius",
+    [TELEMETRY_DISTRO_VERSION]: SDK_VERSION,
     // Spread rather than assigned so an unresolved version leaves the key
     // OFF the resource entirely. `resourceFromAttributes` keeps an explicit
     // `undefined` as a raw attribute, and there is no placeholder to fall
