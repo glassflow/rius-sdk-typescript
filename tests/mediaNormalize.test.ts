@@ -335,6 +335,22 @@ describe("native media parts are rebuilt in place", () => {
     });
   });
 
+  it("rebuild a value 1000 levels deep and leave one 1001 levels deep as it came", () => {
+    const part = '{"type": "blob", "content": "QUJD", "mime_type": "image/png"}';
+    // The outer array and the message are two levels; the arrays under "x" the rest.
+    const levels = (depth: number) =>
+      `[{"role": "user", "x": ${"[".repeat(depth - 2)}${"]".repeat(depth - 2)}, "parts": [${part}]}]`;
+    const attributes: Record<string, AttributeValue> = {
+      "gen_ai.input.messages": levels(1000),
+      "gen_ai.output.messages": levels(1001),
+    };
+    normalizeNativeMediaParts(attributes);
+    expect(attributes).toEqual({
+      "gen_ai.input.messages": levels(1000).replace(part, BLOB),
+      "gen_ai.output.messages": levels(1001),
+    });
+  });
+
   it("read a message's parts last-member-wins", () => {
     const first = '{"type": "blob", "content": "QUJD", "mime_type": "image/png"}';
     const messages = `[{"role": "user", "parts": [${first}], "parts": [${first}]}]`;

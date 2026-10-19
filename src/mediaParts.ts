@@ -72,7 +72,8 @@ export const MAX_DEPTH = 64;
  * How deep a message key may nest for its media parts to be rebuilt, far
  * above any real message nesting: the strip's limit would leave a blob in a
  * message nested deeper than 64 (a tool call's arguments, say) as it came.
- * The sink allows 10000; the parser recurses, and Node's stack ends near 3000.
+ * The sink and the Python SDK use the same limit; the parser recurses, and
+ * Node's stack ends near 3000.
  */
 const MESSAGE_MAX_DEPTH = 1000;
 
