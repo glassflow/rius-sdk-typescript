@@ -10,6 +10,7 @@ import { startGeneration } from "../src/generation.js";
 import { rebuildNativeMediaParts } from "../src/mediaParts.js";
 import { NormalizingSpanProcessor, normalizeNativeMediaParts } from "../src/normalize.js";
 import { startSpan } from "../src/spans.js";
+import { afterFirstReturn, upFromStackBottom } from "./stack.js";
 
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mNgAAAAAgAB5Sfe/AAAAABJRU5ErkJggg==";
@@ -352,6 +353,15 @@ describe("native media parts are rebuilt in place", () => {
     });
   });
 
+  it("leave a value as it came, never throwing, when the stack left cannot hold its depth", () => {
+    const part = '{"type": "blob", "content": "QUJD", "mime_type": "image/png"}';
+    const value = `[{"role": "user", "x": ${"[".repeat(998)}${"]".repeat(998)}, "parts": [${part}]}]`;
+    const rebuilt = value.replace(part, BLOB);
+    const results = afterFirstReturn(upFromStackBottom(() => rebuildNativeMediaParts(value, true)));
+    expect(new Set(results)).toEqual(new Set([value, rebuilt]));
+    expect(results.at(-1)).toBe(rebuilt);
+  });
+
   it("count levels as the sink does: a blob beside a tool call nested to 1000 is rebuilt, to 1001 is not", () => {
     // The message array, the message, its parts and the tool call are four levels.
     const value = (levels: number) =>
@@ -359,6 +369,15 @@ describe("native media parts are rebuilt in place", () => {
       `{"type":"tool_call","arguments":${"[".repeat(levels - 4)}${"]".repeat(levels - 4)}}]}]`;
     expect(rebuildNativeMediaParts(value(1000), true)).not.toBe(value(1000));
     expect(rebuildNativeMediaParts(value(1001), true)).toBe(value(1001));
+  });
+
+  it("leave a part as it came when it rebuilds into no parts at all", () => {
+    const text = '{"type": "text", "content": "x"}';
+    const media = '{"type": "blob", "content": "QUJD"}';
+    const value = `[{"role": "user", "parts": [${text}, ${media}, ${text}]}]`;
+    // No part rebuilds into nothing today; an empty list joined would leave `[a,,b]`.
+    const none = (part: Record<string, unknown>) => (part.type === "blob" ? [] : undefined);
+    expect(rebuildNativeMediaParts(value, true, none)).toBe(value);
   });
 
   it("read a message's parts last-member-wins", () => {

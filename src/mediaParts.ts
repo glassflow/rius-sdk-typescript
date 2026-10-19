@@ -72,8 +72,10 @@ export const MAX_DEPTH = 64;
  * How deep a message key may nest for its media parts to be rebuilt, far
  * above any real message nesting: the strip's limit would leave a blob in a
  * message nested deeper than 64 (a tool call's arguments, say) as it came.
- * The sink and the Python SDK use the same limit; the parser recurses, and
- * Node's stack ends near 3000.
+ * The sink and the Python SDK use the same limit. The scanner recurses, and
+ * from a shallow stack Node's default one ends between about 3000 levels
+ * (interpreted) and 7000 (compiled); deeper in a caller's recursion it ends
+ * sooner, and the value is then left as it came.
  */
 const MESSAGE_MAX_DEPTH = 1000;
 
@@ -176,7 +178,7 @@ function isLowSurrogate(code: number): boolean {
 /**
  * A JSON value: its span on the text, and for an object its members (every
  * duplicate, in document order), for an array its items, for a string its
- * decoded value and the raw span of each decoded UTF-16 unit.
+ * decoded value and its escapes (see {@link rawSpan}).
  */
 interface JsonNode {
   start: number;
@@ -184,7 +186,7 @@ interface JsonNode {
   members?: [string, JsonNode][];
   items?: JsonNode[];
   text?: string;
-  chars?: [number, number][];
+  escapes?: number[];
 }
 
 class NotJson extends Error {}
@@ -207,56 +209,132 @@ const LITERALS = ["true", "false", "null"] as const;
  * Strict RFC 8259 (no NaN, Infinity, comments or trailing commas), at most
  * `maxDepth` arrays and objects deep counting the `depth` that already enclose
  * the text. The depth is counted here, never left to the language's recursion
- * limit, so no input makes the strip fail.
+ * limit. What a value becomes is the subclass's: a tree for the strip, the
+ * part spans alone for the rebuild.
  */
-class Parser {
-  private i = 0;
+class Lexer {
+  protected i = 0;
 
   constructor(
-    private readonly text: string,
-    private depth: number,
-    private readonly maxDepth = MAX_DEPTH,
+    protected readonly text: string,
+    protected depth: number,
+    protected readonly maxDepth: number,
   ) {}
 
-  document(): JsonNode {
-    this.space();
-    const node = this.value();
-    this.space();
-    if (this.i !== this.text.length) throw new NotJson();
-    return node;
-  }
-
-  private enter(): void {
+  protected enter(): void {
     this.depth += 1;
     if (this.depth > this.maxDepth) throw new NotJson();
   }
 
-  private space(): void {
+  protected space(): void {
     while (this.i < this.text.length && " \t\n\r".includes(this.text[this.i])) this.i++;
   }
 
-  private expect(ch: string): void {
+  protected expect(ch: string): void {
     if (this.text[this.i] !== ch) throw new NotJson();
     this.i++;
+  }
+
+  protected end(): void {
+    this.space();
+    if (this.i !== this.text.length) throw new NotJson();
+  }
+
+  /** A literal or a number. */
+  protected scalar(): void {
+    for (const word of LITERALS) {
+      if (this.text.startsWith(word, this.i)) {
+        this.i += word.length;
+        return;
+      }
+    }
+    NUMBER.lastIndex = this.i;
+    const match = NUMBER.exec(this.text);
+    if (match === null) throw new NotJson();
+    this.i += match[0].length;
+  }
+
+  /**
+   * A string, checked and passed. Decoded only when `decode` is set, a run of
+   * plain characters at a time; `escapes` then gets three numbers per decoded
+   * unit an escape wrote: the unit's index and the escape's raw span.
+   */
+  protected string(decode: boolean, escapes?: number[]): string {
+    this.expect('"');
+    const { text } = this;
+    let out = "";
+    let run = this.i;
+    for (;;) {
+      if (this.i >= text.length) throw new NotJson();
+      const ch = text[this.i];
+      if (ch === '"') break;
+      if (ch < " ") throw new NotJson();
+      if (ch !== "\\") {
+        this.i++;
+        continue;
+      }
+      const at = this.i;
+      const kind = text.slice(at + 1, at + 2);
+      let decoded: string;
+      if (Object.hasOwn(SHORT_ESCAPES, kind)) {
+        decoded = SHORT_ESCAPES[kind];
+        this.i += 2;
+      } else if (kind === "u") {
+        const code = this.hex4(at + 2);
+        this.i += 6;
+        decoded = String.fromCharCode(code);
+        if (code >= 0xd800 && code < 0xdc00 && text.startsWith("\\u", this.i)) {
+          const low = this.hex4(this.i + 2);
+          if (isLowSurrogate(low)) {
+            this.i += 6;
+            decoded = String.fromCharCode(code, low);
+          }
+        }
+      } else {
+        throw new NotJson();
+      }
+      if (decode) {
+        out += text.slice(run, at);
+        // A pair is one character in the reference, two units here: both
+        // map to the whole escape pair, which no edit ever splits.
+        for (let unit = 0; unit < decoded.length; unit++)
+          escapes?.push(out.length + unit, at, this.i);
+        out += decoded;
+      }
+      run = this.i;
+    }
+    if (decode) out += text.slice(run, this.i);
+    this.i++;
+    return out;
+  }
+
+  private hex4(at: number): number {
+    const digits = this.text.slice(at, at + 4);
+    if (!HEX4.test(digits)) throw new NotJson();
+    return Number.parseInt(digits, 16);
+  }
+}
+
+/** The strip's view of a candidate: every value as a {@link JsonNode}. */
+class Parser extends Lexer {
+  document(): JsonNode {
+    this.space();
+    const node = this.value();
+    this.end();
+    return node;
   }
 
   private value(): JsonNode {
     const ch = this.text[this.i];
     if (ch === "{") return this.object();
     if (ch === "[") return this.array();
-    if (ch === '"') return this.string();
-    for (const word of LITERALS) {
-      if (this.text.startsWith(word, this.i)) {
-        const start = this.i;
-        this.i += word.length;
-        return { start, end: this.i };
-      }
-    }
-    NUMBER.lastIndex = this.i;
-    const match = NUMBER.exec(this.text);
-    if (match === null) throw new NotJson();
     const start = this.i;
-    this.i += match[0].length;
+    if (ch === '"') {
+      const escapes: number[] = [];
+      const text = this.string(true, escapes);
+      return { start, end: this.i, text, escapes };
+    }
+    this.scalar();
     return { start, end: this.i };
   }
 
@@ -271,11 +349,11 @@ class Parser {
     } else {
       for (;;) {
         this.space();
-        const key = this.string();
+        const key = this.string(true);
         this.space();
         this.expect(":");
         this.space();
-        members.push([key.text as string, this.value()]);
+        members.push([key, this.value()]);
         this.space();
         if (this.text[this.i] === ",") {
           this.i++;
@@ -313,76 +391,164 @@ class Parser {
     this.depth -= 1;
     return { start, end: this.i, items };
   }
-
-  private string(): JsonNode {
-    const start = this.i;
-    this.expect('"');
-    const { text } = this;
-    let out = "";
-    const chars: [number, number][] = [];
-    for (;;) {
-      if (this.i >= text.length) throw new NotJson();
-      const ch = text[this.i];
-      const at = this.i;
-      if (ch === '"') {
-        this.i++;
-        break;
-      }
-      if (ch < " ") throw new NotJson();
-      if (ch !== "\\") {
-        out += ch;
-        this.i++;
-        chars.push([at, this.i]);
-        continue;
-      }
-      const kind = text.slice(this.i + 1, this.i + 2);
-      if (Object.hasOwn(SHORT_ESCAPES, kind)) {
-        out += SHORT_ESCAPES[kind];
-        this.i += 2;
-        chars.push([at, this.i]);
-      } else if (kind === "u") {
-        const code = this.hex4(this.i + 2);
-        this.i += 6;
-        if (code >= 0xd800 && code < 0xdc00 && text.startsWith("\\u", this.i)) {
-          const low = this.hex4(this.i + 2);
-          if (isLowSurrogate(low)) {
-            this.i += 6;
-            // One character in the reference, two units here: both map to
-            // the whole escape pair, which no edit ever splits.
-            out += String.fromCharCode(code, low);
-            chars.push([at, this.i], [at, this.i]);
-            continue;
-          }
-        }
-        out += String.fromCharCode(code);
-        chars.push([at, this.i]);
-      } else {
-        throw new NotJson();
-      }
-    }
-    return { start, end: this.i, text: out, chars };
-  }
-
-  private hex4(at: number): number {
-    const digits = this.text.slice(at, at + 4);
-    if (!HEX4.test(digits)) throw new NotJson();
-    return Number.parseInt(digits, 16);
-  }
 }
 
-function parse(text: string, depth: number, maxDepth = MAX_DEPTH): JsonNode | undefined {
+/**
+ * The raw span of a string node's decoded unit: an escape's whole span, or
+ * the one raw unit a plain character is, counted on from the last escape
+ * before it. Only escapes are recorded, so a string costs its escapes, not a
+ * span per character.
+ */
+function rawSpan(node: JsonNode, unit: number): [number, number] {
+  const escapes = node.escapes ?? [];
+  // How many escaped units come at or before this one.
+  let low = 0;
+  let high = escapes.length / 3;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (escapes[mid * 3] <= unit) low = mid + 1;
+    else high = mid;
+  }
+  if (low === 0) return [node.start + 1 + unit, node.start + 2 + unit];
+  const at = (low - 1) * 3;
+  if (escapes[at] === unit) return [escapes[at + 1], escapes[at + 2]];
+  const raw = escapes[at + 2] + (unit - escapes[at] - 1);
+  return [raw, raw + 1];
+}
+
+function parse(text: string, depth: number): JsonNode | undefined {
   try {
-    return new Parser(text, depth, maxDepth).document();
+    return new Parser(text, depth, MAX_DEPTH).document();
   } catch (error) {
     if (error instanceof NotJson) return undefined;
     throw error;
   }
 }
 
+/**
+ * The spans of a message key's parts, read without a tree: the objects at
+ * messages[i].parts[j] (a message's last `parts` member, as JSON.parse reads a
+ * duplicated key) or, for a part list, at [j]. The whole value is checked as
+ * strictly as the strip's parser checks a candidate, to MESSAGE_MAX_DEPTH, and
+ * only the spans are kept, so the heap it takes is that of the parts it finds.
+ */
+class PartScanner extends Lexer {
+  private readonly spans: [number, number][] = [];
+
+  constructor(text: string) {
+    super(text, 0, MESSAGE_MAX_DEPTH);
+  }
+
+  /** The part spans, in document order, or undefined when the value is not a list. */
+  document(messages: boolean): [number, number][] | undefined {
+    this.space();
+    if (this.text[this.i] !== "[") return undefined;
+    this.array(() => (messages ? this.message() : this.part(this.spans)));
+    this.end();
+    return this.spans;
+  }
+
+  private message(): void {
+    if (this.text[this.i] !== "{") {
+      this.skip();
+      return;
+    }
+    let parts: [number, number][] = [];
+    this.object(true, (key) => {
+      if (key !== "parts") {
+        this.skip();
+        return;
+      }
+      const found: [number, number][] = [];
+      if (this.text[this.i] === "[") this.array(() => this.part(found));
+      else this.skip();
+      parts = found;
+    });
+    for (const span of parts) this.spans.push(span);
+  }
+
+  private part(spans: [number, number][]): void {
+    const start = this.i;
+    const isObject = this.text[this.i] === "{";
+    this.skip();
+    if (isObject) spans.push([start, this.i]);
+  }
+
+  private skip(): void {
+    const ch = this.text[this.i];
+    if (ch === "{") this.object(false, () => this.skip());
+    else if (ch === "[") this.array(() => this.skip());
+    else if (ch === '"') this.string(false);
+    else this.scalar();
+  }
+
+  private object(keys: boolean, member: (key: string) => void): void {
+    this.expect("{");
+    this.enter();
+    this.space();
+    if (this.text[this.i] === "}") {
+      this.i++;
+    } else {
+      for (;;) {
+        this.space();
+        const key = this.string(keys);
+        this.space();
+        this.expect(":");
+        this.space();
+        member(key);
+        this.space();
+        if (this.text[this.i] === ",") {
+          this.i++;
+          continue;
+        }
+        this.expect("}");
+        break;
+      }
+    }
+    this.depth -= 1;
+  }
+
+  private array(item: () => void): void {
+    this.expect("[");
+    this.enter();
+    this.space();
+    if (this.text[this.i] === "]") {
+      this.i++;
+    } else {
+      for (;;) {
+        this.space();
+        item();
+        this.space();
+        if (this.text[this.i] === ",") {
+          this.i++;
+          continue;
+        }
+        this.expect("]");
+        break;
+      }
+    }
+    this.depth -= 1;
+  }
+}
+
+const CANDIDATE = /^[ \t\n\r]*[{[]/;
+
 /** Starts with `{` or `[` once leading ASCII whitespace is trimmed. */
 function isJsonCandidate(value: string): boolean {
-  const first = value.replace(/^[ \t\n\r]*/, "")[0];
-  return first === "{" || first === "[";
+  return CANDIDATE.test(value);
+}
+
+/**
+ * Whether an error is the stack running out: a RangeError, or the SyntaxError
+ * V8 throws when it compiles a regular expression (on its first use) with no
+ * stack left. A value read where the caller's stack is already deep can
+ * meet either, and is then treated as one that does not parse.
+ */
+function isStackOverflow(error: unknown): boolean {
+  return (
+    error instanceof RangeError ||
+    (error instanceof SyntaxError && error.message.endsWith("Stack overflow"))
+  );
 }
 
 // --- the detection rules on parsed members -------------------------------------
@@ -485,11 +651,19 @@ function literal(mime: string | undefined, byteSize: number | undefined): string
 function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   if (isReplacement(text)) return [];
   if (isJsonCandidate(text)) {
-    const document = parse(text, depth);
-    if (document !== undefined) {
-      const edits: Edit[] = [];
-      walk(document, undefined, undefined, depth, tokens, edits);
-      return edits;
+    const found = tokens.length;
+    try {
+      const document = parse(text, depth);
+      if (document !== undefined) {
+        const edits: Edit[] = [];
+        walk(document, undefined, undefined, depth, tokens, edits);
+        return edits;
+      }
+    } catch (error) {
+      // Out of stack, when the strip runs where the stack is already deep:
+      // the candidate does not parse here, so rule (b) alone applies.
+      if (!isStackOverflow(error)) throw error;
+      tokens.length = found;
     }
   }
   const edits: Edit[] = [];
@@ -543,13 +717,12 @@ function walk(
     });
   } else if (node.items !== undefined) {
     for (const child of node.items) walk(child, parentKey, holder, depth + 1, tokens, edits);
-  } else if (node.text !== undefined && node.chars !== undefined) {
+  } else if (node.text !== undefined) {
     // A JSON string: strip its decoded value, then map each edit back to the
     // raw characters and write it escaped for this level.
-    const { chars } = node;
     for (const [start, end, text] of stripText(node.text, tokens, depth)) {
-      const rawStart = chars[start][0];
-      const rawEnd = end > start ? chars[end - 1][1] : rawStart;
+      const rawStart = rawSpan(node, start)[0];
+      const rawEnd = end > start ? rawSpan(node, end - 1)[1] : rawStart;
       edits.push([rawStart, rawEnd, jsonEscape(text)]);
     }
   }
@@ -598,8 +771,9 @@ export function splitMedia(text: string): { proseBytes: number; tokens: MediaTok
 
 /**
  * A raw payload with every media token replaced in place and every other
- * character unchanged. Never throws: the parser's depth limit bounds every
- * recursion.
+ * character unchanged. Never throws on deep input: the parser's depth limit
+ * bounds every recursion, and a candidate the stack left cannot hold gets
+ * rule (b) alone.
  */
 export function stripRawPayload(text: string): string {
   return strip(text).text;
@@ -918,15 +1092,13 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
   }
 }
 
-/** Every native media part of one part list, rebuilt where its bytes change. */
-function partEdits(text: string, parts: JsonNode, edits: Edit[]): void {
-  for (const node of parts.items ?? []) {
-    if (node.members === undefined) continue;
-    // Read as JSON.parse reads it: the last of a duplicated key wins.
-    const media = nativeMediaPart(JSON.parse(text.slice(node.start, node.end)));
-    if (media === undefined) continue;
-    const encoded = media.map((part) => JSON.stringify(part)).join(",");
-    if (encoded !== text.slice(node.start, node.end)) edits.push([node.start, node.end, encoded]);
+/** The part spans of a message key, or undefined when it does not parse or is no list. */
+function partSpans(text: string, messages: boolean): [number, number][] | undefined {
+  try {
+    return new PartScanner(text).document(messages);
+  } catch (error) {
+    if (error instanceof NotJson) return undefined;
+    throw error;
   }
 }
 
@@ -937,23 +1109,35 @@ function partEdits(text: string, parts: JsonNode, edits: Edit[]): void {
  * it came. `messages` is a list of messages, each with its `parts` (the
  * last, as JSON.parse reads a duplicated key); otherwise the list is the
  * parts themselves, as system instructions are. A value that does not parse
- * is returned as it came. Canonical parts hold only token/token MIME types,
+ * (or that the stack left to it cannot hold) is returned as it came. Canonical parts hold only token/token MIME types,
  * numbers and the producer's strings, which JSON.stringify escapes as
- * minimally as the strip does.
+ * minimally as the strip does. `toParts` is nativeMediaPart, injectable for
+ * tests.
  */
-export function rebuildNativeMediaParts(text: string, messages: boolean): string {
-  if (!isJsonCandidate(text)) return text;
-  const document = parse(text, 0, MESSAGE_MAX_DEPTH);
-  if (document?.items === undefined) return text;
-  const edits: Edit[] = [];
-  if (!messages) {
-    partEdits(text, document, edits);
-  } else {
-    for (const message of document.items) {
-      let parts: JsonNode | undefined;
-      for (const [key, value] of message.members ?? []) if (key === "parts") parts = value;
-      if (parts !== undefined) partEdits(text, parts, edits);
+export function rebuildNativeMediaParts(
+  text: string,
+  messages: boolean,
+  toParts: (part: Record<string, unknown>) => Part[] | undefined = nativeMediaPart,
+): string {
+  try {
+    if (!isJsonCandidate(text)) return text;
+    const spans = partSpans(text, messages);
+    if (spans === undefined) return text;
+    const edits: Edit[] = [];
+    for (const [start, end] of spans) {
+      const source = text.slice(start, end);
+      // Read as JSON.parse reads it: the last of a duplicated key wins.
+      const media = toParts(JSON.parse(source));
+      // No parts at all would leave `[a,,b]`: the part stays as it came.
+      if (media === undefined || media.length === 0) continue;
+      const encoded = media.map((part) => JSON.stringify(part)).join(",");
+      if (encoded !== source) edits.push([start, end, encoded]);
     }
+    return edits.length > 0 ? apply(text, edits) : text;
+  } catch (error) {
+    // Out of stack, when the rebuild runs where the stack is already deep:
+    // the value does not parse here, and is left as it came.
+    if (isStackOverflow(error)) return text;
+    throw error;
   }
-  return edits.length > 0 ? apply(text, edits) : text;
 }
