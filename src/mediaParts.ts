@@ -539,14 +539,15 @@ function isJsonCandidate(value: string): boolean {
 }
 
 /**
- * Whether an error is the stack running out: a RangeError, or the SyntaxError
- * V8 throws when it compiles a regular expression (on its first use) with no
- * stack left. A value read where the caller's stack is already deep can
- * meet either, and is then treated as one that does not parse.
+ * Whether an error is the stack running out: V8's RangeError for it, or the
+ * SyntaxError V8 throws when it compiles a regular expression (on its first
+ * use) with no stack left. A value read where the caller's stack is already
+ * deep can meet either, and is then treated as one that does not parse. Any
+ * other error, a RangeError from a bug included, is not swallowed.
  */
 function isStackOverflow(error: unknown): boolean {
   return (
-    error instanceof RangeError ||
+    (error instanceof RangeError && error.message.includes("Maximum call stack size exceeded")) ||
     (error instanceof SyntaxError && error.message.endsWith("Stack overflow"))
   );
 }
@@ -1109,10 +1110,10 @@ function partSpans(text: string, messages: boolean): [number, number][] | undefi
  * it came. `messages` is a list of messages, each with its `parts` (the
  * last, as JSON.parse reads a duplicated key); otherwise the list is the
  * parts themselves, as system instructions are. A value that does not parse
- * (or that the stack left to it cannot hold) is returned as it came. Canonical parts hold only token/token MIME types,
- * numbers and the producer's strings, which JSON.stringify escapes as
- * minimally as the strip does. `toParts` is nativeMediaPart, injectable for
- * tests.
+ * (or that the stack left to it cannot hold) is returned as it came.
+ * Canonical parts hold only token/token MIME types, numbers and the
+ * producer's strings, which JSON.stringify escapes as minimally as the strip
+ * does. `toParts` is nativeMediaPart, injectable for tests.
  */
 export function rebuildNativeMediaParts(
   text: string,

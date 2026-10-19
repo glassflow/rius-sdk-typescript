@@ -380,6 +380,14 @@ describe("native media parts are rebuilt in place", () => {
     expect(rebuildNativeMediaParts(value, true, none)).toBe(value);
   });
 
+  it("let an error that is not the stack running out propagate", () => {
+    const value = '[{"role": "user", "parts": [{"type": "blob", "content": "QUJD"}]}]';
+    const broken = () => {
+      throw new RangeError("Invalid array length");
+    };
+    expect(() => rebuildNativeMediaParts(value, true, broken)).toThrow("Invalid array length");
+  });
+
   it("read a message's parts last-member-wins", () => {
     const first = '{"type": "blob", "content": "QUJD", "mime_type": "image/png"}';
     const messages = `[{"role": "user", "parts": [${first}], "parts": [${first}]}]`;
