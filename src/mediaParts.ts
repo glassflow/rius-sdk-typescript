@@ -574,6 +574,19 @@ export function strip(text: string): { text: string; tokens: MediaToken[] } {
 }
 
 /**
+ * A text's prose and its media, apart: the UTF-8 bytes of the text with every
+ * media token the strip finds taken out (the stripped text, less each
+ * replacement it wrote), and the tokens themselves. Each token is one
+ * replacement, so the two sums are exact.
+ */
+export function splitMedia(text: string): { proseBytes: number; tokens: MediaToken[] } {
+  const tokens: MediaToken[] = [];
+  const edits = stripText(text, tokens, 0);
+  const written = edits.reduce((sum, [, , replaced]) => sum + Buffer.byteLength(replaced), 0);
+  return { proseBytes: Buffer.byteLength(apply(text, edits)) - written, tokens };
+}
+
+/**
  * A raw payload with every media token replaced in place and every other
  * character unchanged. Never throws: the parser's depth limit bounds every
  * recursion.

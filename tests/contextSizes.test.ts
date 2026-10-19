@@ -421,3 +421,48 @@ describe("robustness", () => {
     expect(contextSizes(undefined, "hi" as unknown as unknown[], undefined)).toBe('{"version":1}');
   });
 });
+
+describe("media in rius.context.sizes", () => {
+  const sizes = (...parts: Part[]) =>
+    JSON.parse(contextSizes(undefined, [msg("user", ...parts)], undefined)).input_messages[0].parts;
+
+  it("describes a media part by its modality and size, never bytes", () => {
+    expect(
+      sizes(
+        { type: "blob", modality: "image", mime_type: "image/png", byte_size: 67 },
+        { type: "uri", modality: "document", uri: "https://x.test/a.pdf" },
+        { type: "file", modality: "audio", file_id: "f" },
+      ),
+    ).toEqual([
+      { type: "blob", modality: "image", byte_size: 67 },
+      { type: "uri", modality: "document" },
+      { type: "file", modality: "audio" },
+    ]);
+  });
+
+  it("counts a text part's prose only: a data URL in it is a blob entry after it", () => {
+    // "see " and " here" are the prose; the data URL is 3 bytes of image.
+    expect(sizes(text("see data:image/png;base64,QUFB here"))).toEqual([
+      { type: "text", bytes: 9 },
+      { type: "blob", modality: "image", byte_size: 3 },
+    ]);
+  });
+
+  it("finds keyed base64 in a text part holding JSON, and leaves an unknown mime unlabelled", () => {
+    const json =
+      '{"input_audio":{"data":"UklGRg==","format":"wav"},"x":{"data":"QUFB","mime_type":"?"}}';
+    // Prose is the JSON with both string literals, quotes included, taken out.
+    const prose = Buffer.byteLength(json) - '"UklGRg=="'.length - '"QUFB"'.length;
+    expect(sizes(text(json))).toEqual([
+      { type: "text", bytes: prose },
+      { type: "blob", modality: "audio", byte_size: 4 },
+      { type: "blob", byte_size: 3 },
+    ]);
+  });
+
+  it("leaves a text part with no media exactly its UTF-8 size", () => {
+    expect(sizes(text("héllo [stripped image/png 8 bytes]"))).toEqual([
+      { type: "text", bytes: Buffer.byteLength("héllo [stripped image/png 8 bytes]") },
+    ]);
+  });
+});

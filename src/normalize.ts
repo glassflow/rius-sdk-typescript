@@ -767,7 +767,6 @@ export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_t
  * - `llm.token_count.prompt_details.cache_input` ("input tokens in the prompt
  *   that were cached"). It overlaps cache_read and cache_write without saying
  *   how, so neither canonical cache key can hold it.
- * - `llm.token_count.*_details.audio`. No canonical key.
  * - `llm.cost.*`. Cost deliberately stays off the wire; the backend prices
  *   from the token counts.
  * - A SUM rule for the input tokens. Every bundled instrumentation already
@@ -777,6 +776,17 @@ export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_t
  *   copied Anthropic's cache-exclusive input_tokens and dropped both cache
  *   counts, which no rule here could recover.
  */
+/**
+ * The audio subsets of the usage counts. The rius-semconv registry defines
+ * them (upstream keys, `status: planned`), but its generated module leaves
+ * planned keys out until a release marks them emitted, so they are spelled
+ * here until the vendored module carries them. A subset of
+ * gen_ai.usage.input_tokens / output_tokens: never summed into them, never
+ * subtracted from them.
+ */
+const GEN_AI_USAGE_AUDIO_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.input_tokens`;
+const GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.output_tokens`;
+
 export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Provider. One rule, two spellings, first present wins: llm.provider is
   // OpenInference's and the more specific (azure/aws/google rather than the
@@ -856,6 +866,18 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
+  // The audio subsets: copied as they are, never added to or subtracted from
+  // the input and output counts, which already include them.
+  {
+    source: "llm.token_count.prompt_details.audio",
+    target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "llm.token_count.completion_details.audio",
+    target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+    convert: toInt,
+  },
   // Two GenAI-shaped spellings of the same counts, each its own rule AFTER
   // the OpenInference one for its target: the OpenInference count keeps the
   // target where a span somehow carries both, and a separate rule rather than
@@ -874,13 +896,23 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     target: GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
     convert: toInt,
   },
+  // @ai-sdk/otel's flattening of a provider's input_token_details (OpenAI's
+  // transcription models): the audio subset of the input. Its text_tokens
+  // twin has no per-modality key we emit, and stays.
+  {
+    source: "gen_ai.usage.input_token_details.audio_tokens",
+    target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+    convert: toInt,
+  },
   // pydantic-ai writes each provider's usage details under
   // gen_ai.usage.details.<name>, and three of those names are the same
   // reasoning split: OpenAI's reasoning_tokens, Anthropic's thinking_tokens and
   // Google's thoughts_tokens. One per provider, so a span should carry at most
   // one; if it carries several, this order decides and all of them go, as in
   // the sink. Separate rules so one that won't parse does not block the next.
-  // The rest of the namespace has no canonical key.
+  // The rest of the namespace has no canonical key. Its audio_tokens stays:
+  // pydantic-ai merges a provider's input and output details under one name,
+  // so the count does not say which direction it is.
   {
     source: "gen_ai.usage.details.reasoning_tokens",
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,

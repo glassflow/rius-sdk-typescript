@@ -21,7 +21,11 @@
  *   folded:           aggregate of the input messages older than the detail
  *                     window (see below); omitted when nothing folded
  * `role` is the message's literal role string. A part is one of
- *   {type: "text", bytes}                       raw UTF-8 bytes of the content
+ *   {type: "text", bytes}                       UTF-8 bytes of the content's prose:
+ *                                               a media token in it (a data URL,
+ *                                               keyed base64, a Buffer) is not
+ *                                               prose, and follows the text as
+ *                                               a blob entry of its own
  *   {type: "tool_call", tool, bytes}            canonical bytes of the part
  *   {type: "tool_call_response", tool, bytes}   canonical bytes of the part
  *   {type: "blob" | "uri" | "file", modality, byte_size?}
@@ -45,6 +49,8 @@
  * Never throws: this runs on the user's hot path, so any unexpected shape
  * yields a best-effort entry (null tool, {type: "unknown"}, 0 bytes).
  */
+
+import { type MediaToken, modalityOf, splitMedia } from "./mediaParts.js";
 
 /** Input messages that keep per-part detail; older ones fold into `folded`. */
 export const DETAIL_WINDOW = 50;
@@ -152,14 +158,15 @@ class Context {
     }
   }
 
-  partEntry(part: unknown): PartEntry {
+  partEntry(part: unknown): PartEntry | PartEntry[] {
     if (!isRecord(part)) return { type: "unknown" };
     switch (part.type) {
       case "text": {
         const content = part.content ?? null;
-        const bytes =
-          typeof content === "string" ? Buffer.byteLength(content) : canonicalBytes(content);
-        return { type: "text", bytes };
+        if (typeof content !== "string") return { type: "text", bytes: canonicalBytes(content) };
+        const { proseBytes, tokens } = splitMedia(content);
+        if (tokens.length === 0) return { type: "text", bytes: proseBytes };
+        return [{ type: "text", bytes: proseBytes }, ...tokens.map(mediaEntry)];
       }
       case "tool_call":
         return { type: "tool_call", tool: asToolName(part.name), bytes: canonicalBytes(part) };
@@ -187,9 +194,22 @@ class Context {
     const role = isRecord(message) ? message.role : undefined;
     return {
       role: typeof role === "string" ? role : String(role),
-      parts: partsOf(message).map((part) => this.partEntry(part)),
+      parts: partsOf(message).flatMap((part) => this.partEntry(part)),
     };
   }
+}
+
+/**
+ * A media token found inside a text part, as the blob it is: its modality
+ * from its mime type (absent when the token names none), and its size when
+ * known.
+ */
+function mediaEntry(token: MediaToken): PartEntry {
+  const entry: { type: string; modality?: string; byte_size?: number } = { type: "blob" };
+  const modality = modalityOf(token.mime);
+  if (modality !== undefined) entry.modality = modality;
+  if (token.byteSize !== undefined) entry.byte_size = token.byteSize;
+  return entry;
 }
 
 function hasCacheMarker(message: unknown): boolean {

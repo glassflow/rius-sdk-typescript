@@ -334,3 +334,41 @@ describe("the raw-payload strip at the end of normalization", () => {
     ]);
   });
 });
+
+describe("audio usage", () => {
+  it("maps OpenInference's audio details to the audio subsets, leaving the totals as they are", () => {
+    expect(
+      normalized({
+        "llm.token_count.prompt": 42,
+        "llm.token_count.completion": 9,
+        "llm.token_count.prompt_details.audio": 30,
+        "llm.token_count.completion_details.audio": 5,
+      }),
+    ).toEqual({
+      "gen_ai.usage.input_tokens": 42,
+      "gen_ai.usage.output_tokens": 9,
+      "gen_ai.usage.audio.input_tokens": 30,
+      "gen_ai.usage.audio.output_tokens": 5,
+    });
+  });
+
+  it("maps @ai-sdk/otel's input_token_details.audio_tokens, keeping text_tokens", () => {
+    expect(
+      normalized({
+        "gen_ai.usage.input_tokens": 14,
+        "gen_ai.usage.input_token_details.audio_tokens": 14,
+        "gen_ai.usage.input_token_details.text_tokens": 0,
+      }),
+    ).toEqual({
+      "gen_ai.usage.input_tokens": 14,
+      "gen_ai.usage.audio.input_tokens": 14,
+      "gen_ai.usage.input_token_details.text_tokens": 0,
+    });
+  });
+
+  it("leaves pydantic-ai's details.audio_tokens, which names no direction", () => {
+    expect(normalized({ "gen_ai.usage.details.audio_tokens": 3 })).toEqual({
+      "gen_ai.usage.details.audio_tokens": 3,
+    });
+  });
+});
