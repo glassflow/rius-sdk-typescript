@@ -7,7 +7,7 @@ import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trac
 import { afterEach, describe, expect, it } from "vitest";
 import { type InitOptions, init, type RiusClient } from "../src/client.js";
 import { startGeneration } from "../src/generation.js";
-import { NormalizingSpanProcessor } from "../src/normalize.js";
+import { NormalizingSpanProcessor, normalizeNativeMediaParts } from "../src/normalize.js";
 import { startSpan } from "../src/spans.js";
 
 const PNG =
@@ -270,6 +270,89 @@ describe("native media parts in the message keys", () => {
           stripped_reason: "not_captured",
         }),
       ]),
+    });
+  });
+});
+
+describe("native media parts are rebuilt in place", () => {
+  const BLOB =
+    '{"type":"blob","modality":"image","mime_type":"image/png","byte_size":3,"stripped_reason":"not_captured"}';
+
+  it("replace only the part's token, keeping every other byte of spaced input", () => {
+    const messages =
+      '[ {"role": "user", "parts": [ {"type": "blob", "content": "QUJD", "mime_type": "image/png"} ] } ]';
+    expect(normalized({ "gen_ai.input.messages": messages })).toEqual({
+      "gen_ai.input.messages": `[ {"role": "user", "parts": [ ${BLOB} ] } ]`,
+    });
+  });
+
+  it("in the output messages and the system instructions too", () => {
+    const output =
+      '[ {"role": "assistant", "parts": [ {"type": "text", "content": "x"}, {"type": "blob", "content": "QUJD", "mime_type": "image/png"} ], "finish_reason": "stop"} ]';
+    const system =
+      '[ {"type": "text", "content": "Be brief."},\n  {"type": "blob", "content": "QUJD", "mime_type": "image/png"} ]';
+    expect(
+      normalized({ "gen_ai.output.messages": output, "gen_ai.system_instructions": system }),
+    ).toEqual({
+      "gen_ai.output.messages": `[ {"role": "assistant", "parts": [ {"type": "text", "content": "x"}, ${BLOB} ], "finish_reason": "stop"} ]`,
+      "gen_ai.system_instructions": `[ {"type": "text", "content": "Be brief."},\n  ${BLOB} ]`,
+    });
+  });
+
+  it("leave a value with nothing to rebuild, or that does not parse, byte for byte", () => {
+    const attributes = {
+      "gen_ai.input.messages":
+        '[ {"role": "user", "parts": [ {"type": "text", "content": "caf\\u00e9"} ] } ]',
+      "gen_ai.output.messages":
+        '[ {"role": "user", "parts": [ {"type": "blob", "content": "QUJD"} ]',
+      "gen_ai.system_instructions": '[ {"type": "text", "content": "x"} ]',
+    };
+    expect(normalized({ ...attributes })).toEqual(attributes);
+  });
+
+  it("keep a number's spelling, and rebuild an empty uri or file_id as a target", () => {
+    const messages =
+      '[ {"role": "user", "parts": [ {"type": "blob", "content": "QUJD", "mime_type": "image/png"}, {"type": "uri", "uri": ""}, {"type": "file", "file_id": ""}, {"type": "file"} ], "score": 1.50 } ]';
+    const attributes: Record<string, AttributeValue> = { "gen_ai.input.messages": messages };
+    normalizeNativeMediaParts(attributes);
+    expect(attributes).toEqual({
+      "gen_ai.input.messages": `[ {"role": "user", "parts": [ ${BLOB}, {"type":"uri","modality":"document","uri":""}, {"type":"file","modality":"document","file_id":""}, {"type": "file"} ], "score": 1.50 } ]`,
+    });
+  });
+
+  it("reach parts in a message nested past the strip's depth, and never overflow the stack", () => {
+    const part = '{"type": "blob", "content": "QUJD", "mime_type": "image/png"}';
+    const nested = (depth: number) =>
+      `[{"role": "user", "x": ${"[".repeat(depth)}${"]".repeat(depth)}, "parts": [${part}]}]`;
+    const attributes: Record<string, AttributeValue> = {
+      "gen_ai.input.messages": nested(500),
+      "gen_ai.output.messages": nested(20000),
+    };
+    normalizeNativeMediaParts(attributes);
+    expect(attributes).toEqual({
+      "gen_ai.input.messages": nested(500).replace(part, BLOB),
+      "gen_ai.output.messages": nested(20000),
+    });
+  });
+
+  it("read a message's parts last-member-wins", () => {
+    const first = '{"type": "blob", "content": "QUJD", "mime_type": "image/png"}';
+    const messages = `[{"role": "user", "parts": [${first}], "parts": [${first}]}]`;
+    const attributes: Record<string, AttributeValue> = { "gen_ai.input.messages": messages };
+    normalizeNativeMediaParts(attributes);
+    expect(attributes).toEqual({
+      "gen_ai.input.messages": `[{"role": "user", "parts": [${first}], "parts": [${BLOB}]}]`,
+    });
+  });
+
+  it("read a part's type last-member-wins", () => {
+    const messages =
+      '[{"role": "user", "parts": [{"type": "text", "type": "blob", "content": "QUJD", "mime_type": "image/png"}, {"type": "blob", "type": "text", "content": "Look."}]}]';
+    // The rebuild alone: the raw-payload strip after it reads any `type` member.
+    const attributes: Record<string, AttributeValue> = { "gen_ai.input.messages": messages };
+    normalizeNativeMediaParts(attributes);
+    expect(attributes).toEqual({
+      "gen_ai.input.messages": `[{"role": "user", "parts": [${BLOB}, {"type": "blob", "type": "text", "content": "Look."}]}]`,
     });
   });
 });

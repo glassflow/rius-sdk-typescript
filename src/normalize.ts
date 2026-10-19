@@ -11,9 +11,9 @@ import {
   base64Blob,
   blobPart,
   NOT_CAPTURED,
-  nativeMediaPart,
   OPENINFERENCE_REDACTED,
   REDACTED_UPSTREAM,
+  rebuildNativeMediaParts,
   stripRawPayload,
   uriPart,
   urlPart,
@@ -2211,46 +2211,24 @@ export function reassembleOpenInferenceMessages(
   return writes.length > 0;
 }
 
-/** A part list with its native media parts normalized; undefined when none changed. */
-function normalizedPartList(parts: unknown): unknown[] | undefined {
-  if (!Array.isArray(parts)) return undefined;
-  let changed = false;
-  const out = parts.flatMap((part) => {
-    if (!isObject(part)) return [part];
-    const media = nativeMediaPart(part);
-    if (media === undefined || JSON.stringify(media) === JSON.stringify([part])) return [part];
-    changed = true;
-    return media;
-  });
-  return changed ? out : undefined;
-}
-
 /**
  * Native semconv media parts in the message keys, in their normalized shape,
  * in place: a blob loses its content (any instrumentor writing blob parts,
  * pydantic-ai and @ai-sdk/otel among them), and each media part takes its
  * modality from its MIME type (@ai-sdk/otel labels a PDF or a text/plain file
- * an image). A key that does not parse, or holds no part to change, is left
- * byte for byte as it came.
+ * an image). Only a rebuilt part's own bytes are rewritten, as the sink
+ * rewrites them; a key that does not parse, or holds no part to change, is
+ * left byte for byte as it came.
  */
 export function normalizeNativeMediaParts(
   attributes: Record<string, AttributeValue | undefined>,
 ): void {
-  for (const key of [GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES]) {
-    const messages = parseJson(attributes[key]);
-    if (!Array.isArray(messages)) continue;
-    let changed = false;
-    const out = messages.map((message) => {
-      if (!isObject(message)) return message;
-      const parts = normalizedPartList(message.parts);
-      if (parts === undefined) return message;
-      changed = true;
-      return { ...message, parts };
-    });
-    if (changed) attributes[key] = toAttributeValue(out);
+  for (const key of [GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES, GEN_AI_SYSTEM_INSTRUCTIONS]) {
+    const value = attributes[key];
+    if (typeof value !== "string") continue;
+    const rebuilt = rebuildNativeMediaParts(value, key !== GEN_AI_SYSTEM_INSTRUCTIONS);
+    if (rebuilt !== value) attributes[key] = rebuilt;
   }
-  const system = normalizedPartList(parseJson(attributes[GEN_AI_SYSTEM_INSTRUCTIONS]));
-  if (system !== undefined) attributes[GEN_AI_SYSTEM_INSTRUCTIONS] = toAttributeValue(system);
 }
 
 /** Every string, and every string of a string array, of a bag stripped in place. */

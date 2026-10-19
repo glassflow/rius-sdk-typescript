@@ -68,6 +68,14 @@ export const KEYED_RULE = {
 /** How deep a JSON candidate may nest, arrays and objects together. */
 export const MAX_DEPTH = 64;
 
+/**
+ * How deep a message key may nest for its media parts to be rebuilt, far
+ * above any real message nesting: the strip's limit would leave a blob in a
+ * message nested deeper than 64 (a tool call's arguments, say) as it came.
+ * The sink allows 10000; the parser recurses, and Node's stack ends near 3000.
+ */
+const MESSAGE_MAX_DEPTH = 1000;
+
 // --- sizes, mime types, replacements --------------------------------------------
 
 const MIME = new RegExp(`^${MIME_PATTERN}$`);
@@ -196,7 +204,7 @@ const LITERALS = ["true", "false", "null"] as const;
 
 /**
  * Strict RFC 8259 (no NaN, Infinity, comments or trailing commas), at most
- * MAX_DEPTH arrays and objects deep counting the `depth` that already enclose
+ * `maxDepth` arrays and objects deep counting the `depth` that already enclose
  * the text. The depth is counted here, never left to the language's recursion
  * limit, so no input makes the strip fail.
  */
@@ -206,6 +214,7 @@ class Parser {
   constructor(
     private readonly text: string,
     private depth: number,
+    private readonly maxDepth = MAX_DEPTH,
   ) {}
 
   document(): JsonNode {
@@ -218,7 +227,7 @@ class Parser {
 
   private enter(): void {
     this.depth += 1;
-    if (this.depth > MAX_DEPTH) throw new NotJson();
+    if (this.depth > this.maxDepth) throw new NotJson();
   }
 
   private space(): void {
@@ -360,9 +369,9 @@ class Parser {
   }
 }
 
-function parse(text: string, depth: number): JsonNode | undefined {
+function parse(text: string, depth: number, maxDepth = MAX_DEPTH): JsonNode | undefined {
   try {
-    return new Parser(text, depth).document();
+    return new Parser(text, depth, maxDepth).document();
   } catch (error) {
     if (error instanceof NotJson) return undefined;
     throw error;
@@ -906,4 +915,44 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
     default:
       return undefined;
   }
+}
+
+/** Every native media part of one part list, rebuilt where its bytes change. */
+function partEdits(text: string, parts: JsonNode, edits: Edit[]): void {
+  for (const node of parts.items ?? []) {
+    if (node.members === undefined) continue;
+    // Read as JSON.parse reads it: the last of a duplicated key wins.
+    const media = nativeMediaPart(JSON.parse(text.slice(node.start, node.end)));
+    if (media === undefined) continue;
+    const encoded = media.map((part) => JSON.stringify(part)).join(",");
+    if (encoded !== text.slice(node.start, node.end)) edits.push([node.start, node.end, encoded]);
+  }
+}
+
+/**
+ * A message key's native media parts rebuilt in place (see nativeMediaPart):
+ * each part whose canonical encoding differs from its bytes is replaced by
+ * it, compact, several parts comma-separated, and every other byte is kept as
+ * it came. `messages` is a list of messages, each with its `parts` (the
+ * last, as JSON.parse reads a duplicated key); otherwise the list is the
+ * parts themselves, as system instructions are. A value that does not parse
+ * is returned as it came. Canonical parts hold only token/token MIME types,
+ * numbers and the producer's strings, which JSON.stringify escapes as
+ * minimally as the strip does.
+ */
+export function rebuildNativeMediaParts(text: string, messages: boolean): string {
+  if (!isJsonCandidate(text)) return text;
+  const document = parse(text, 0, MESSAGE_MAX_DEPTH);
+  if (document?.items === undefined) return text;
+  const edits: Edit[] = [];
+  if (!messages) {
+    partEdits(text, document, edits);
+  } else {
+    for (const message of document.items) {
+      let parts: JsonNode | undefined;
+      for (const [key, value] of message.members ?? []) if (key === "parts") parts = value;
+      if (parts !== undefined) partEdits(text, parts, edits);
+    }
+  }
+  return edits.length > 0 ? apply(text, edits) : text;
 }
