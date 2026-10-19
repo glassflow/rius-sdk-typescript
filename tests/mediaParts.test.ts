@@ -365,6 +365,18 @@ describe("provider media items as parts", () => {
     ).toEqual([{ type: "blob", modality: "image", stripped_reason: "redacted_upstream" }]);
   });
 
+  it("takes a uri's modality from its extension when nothing else names it", () => {
+    expect(providerMediaParts({ type: "uri", uri: "https://example.com/clip.mov?x=1#t" })).toEqual([
+      { type: "uri", modality: "video", uri: "https://example.com/clip.mov?x=1#t" },
+    ]);
+    expect(providerMediaParts({ file_data: { file_uri: "gs://b/a.MP3" } })).toEqual([
+      { type: "uri", modality: "audio", uri: "gs://b/a.MP3" },
+    ]);
+    expect(providerMediaParts({ type: "file", file_id: "file-abc123" })).toEqual([
+      { type: "file", modality: "document", file_id: "file-abc123" },
+    ]);
+  });
+
   it("makes a blob of a uri holding a data URL, native or Gemini's file_data", () => {
     expect(providerMediaParts({ type: "uri", uri: "data:image/png;base64,QUFB" })).toEqual([
       {

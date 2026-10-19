@@ -708,6 +708,12 @@ function filenameModality(filename: unknown): Modality {
   return Object.hasOwn(EXTENSION_MODALITY, extension) ? EXTENSION_MODALITY[extension] : "document";
 }
 
+/** The modality a URI's filename extension names (its path, query and fragment cut). */
+function uriModality(uri: string): Modality {
+  const path = uri.split("#", 1)[0].split("?", 1)[0];
+  return filenameModality(path.slice(path.lastIndexOf("/") + 1));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -840,7 +846,9 @@ function geminiPart(item: Record<string, unknown>): Part[] | undefined {
   const file = item.file_data ?? item.fileData;
   if (isRecord(file)) {
     const uri = file.file_uri ?? file.fileUri;
-    if (typeof uri === "string") return [urlPart(uri, "document", file.mime_type ?? file.mimeType)];
+    if (typeof uri === "string") {
+      return [urlPart(uri, uriModality(uri), file.mime_type ?? file.mimeType)];
+    }
   }
   return undefined;
 }
@@ -852,7 +860,7 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * A native semconv media part rebuilt into the normalized shape: the pinned
  * members in their order, extra members dropped, `mime_type` only when it is
  * token/token. A modality the part has is kept, else it is filled from the
- * MIME type, else document. A blob carrying content is stripped of it (sized
+ * MIME type, else (a uri) from its filename extension, else document. A blob carrying content is stripped of it (sized
  * from it, `not_captured`) and takes its modality from its MIME type first
  * (@ai-sdk/otel labels a PDF an image). A uri holding a data URL is a blob,
  * since a data URL is never a uri. Undefined when it is not a media part
@@ -862,9 +870,8 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
   const kind = (own ? part.modality : "document") as Modality;
   const mime = part.mime_type;
-  const modality = own ? kind : (modalityOf(mime) ?? "document");
-  const shaped = (type: string): Part => {
-    const out: Part = { type, modality };
+  const shaped = (type: string, fallback: Modality = "document"): Part => {
+    const out: Part = { type, modality: own ? kind : (modalityOf(mime) ?? fallback) };
     if (isMime(mime)) out.mime_type = mime;
     return out;
   };
@@ -885,7 +892,7 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
     case "uri": {
       if (typeof part.uri !== "string") return undefined;
       if (isDataUrl(part.uri)) return [dataUrlBlob(part.uri, kind, mime)];
-      const out = shaped("uri");
+      const out = shaped("uri", uriModality(part.uri));
       out.uri = part.uri;
       return [out];
     }
