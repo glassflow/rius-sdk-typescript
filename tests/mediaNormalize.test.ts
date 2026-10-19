@@ -7,6 +7,7 @@ import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trac
 import { afterEach, describe, expect, it } from "vitest";
 import { type InitOptions, init, type RiusClient } from "../src/client.js";
 import { startGeneration } from "../src/generation.js";
+import { rebuildNativeMediaParts } from "../src/mediaParts.js";
 import { NormalizingSpanProcessor, normalizeNativeMediaParts } from "../src/normalize.js";
 import { startSpan } from "../src/spans.js";
 
@@ -349,6 +350,15 @@ describe("native media parts are rebuilt in place", () => {
       "gen_ai.input.messages": levels(1000).replace(part, BLOB),
       "gen_ai.output.messages": levels(1001),
     });
+  });
+
+  it("count levels as the sink does: a blob beside a tool call nested to 1000 is rebuilt, to 1001 is not", () => {
+    // The message array, the message, its parts and the tool call are four levels.
+    const value = (levels: number) =>
+      `[{"role":"user","parts":[{"type":"blob","modality":"image","content":"QUFB"},` +
+      `{"type":"tool_call","arguments":${"[".repeat(levels - 4)}${"]".repeat(levels - 4)}}]}]`;
+    expect(rebuildNativeMediaParts(value(1000), true)).not.toBe(value(1000));
+    expect(rebuildNativeMediaParts(value(1001), true)).toBe(value(1001));
   });
 
   it("read a message's parts last-member-wins", () => {
