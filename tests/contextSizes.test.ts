@@ -440,6 +440,18 @@ describe("media in rius.context.sizes", () => {
     ]);
   });
 
+  it("labels a media part with no modality from its mime, else document", () => {
+    expect(
+      sizes(
+        { type: "uri", mime_type: "audio/wav", uri: "https://x.test/a.wav" },
+        { type: "blob", byte_size: 2 },
+      ),
+    ).toEqual([
+      { type: "uri", modality: "audio" },
+      { type: "blob", modality: "document", byte_size: 2 },
+    ]);
+  });
+
   it("counts a text part's prose only: a data URL in it is a blob entry after it", () => {
     // "see " and " here" are the prose; the data URL is 3 bytes of image.
     expect(sizes(text("see data:image/png;base64,QUFB here"))).toEqual([
@@ -448,7 +460,7 @@ describe("media in rius.context.sizes", () => {
     ]);
   });
 
-  it("finds keyed base64 in a text part holding JSON, and leaves an unknown mime unlabelled", () => {
+  it("finds keyed base64 in a text part holding JSON, and labels an unknown mime document", () => {
     const json =
       '{"input_audio":{"data":"UklGRg==","format":"wav"},"x":{"data":"QUFB","mime_type":"?"}}';
     // Prose is the JSON with both string literals, quotes included, taken out.
@@ -456,7 +468,7 @@ describe("media in rius.context.sizes", () => {
     expect(sizes(text(json))).toEqual([
       { type: "text", bytes: prose },
       { type: "blob", modality: "audio", byte_size: 4 },
-      { type: "blob", byte_size: 3 },
+      { type: "blob", modality: "document", byte_size: 3 },
     ]);
   });
 

@@ -63,7 +63,7 @@ type ToolName = string | null;
 type PartEntry =
   | { type: "text"; bytes: number }
   | { type: "tool_call" | "tool_call_response"; tool: ToolName; bytes: number }
-  | { type: "blob" | "uri" | "file"; modality?: string; byte_size?: number }
+  | { type: "blob" | "uri" | "file"; modality: string; byte_size?: number }
   | { type: string };
 
 interface MessageEntry {
@@ -178,7 +178,10 @@ class Context {
       case "uri":
       case "file": {
         const entry: { type: string; modality?: string; byte_size?: number } = { type: part.type };
-        if (typeof part.modality === "string") entry.modality = part.modality;
+        entry.modality =
+          typeof part.modality === "string"
+            ? part.modality
+            : (modalityOf(part.mime_type) ?? "document");
         const size = part.byte_size;
         if (typeof size === "number" && Number.isSafeInteger(size) && size >= 0) {
           entry.byte_size = size;
@@ -201,13 +204,12 @@ class Context {
 
 /**
  * A media token found inside a text part, as the blob it is: its modality
- * from its mime type (absent when the token names none), and its size when
- * known.
+ * from its mime type (document when the token names none, the contract's
+ * fallback for media with no hint), and its size when known.
  */
 function mediaEntry(token: MediaToken): PartEntry {
   const entry: { type: string; modality?: string; byte_size?: number } = { type: "blob" };
-  const modality = modalityOf(token.mime);
-  if (modality !== undefined) entry.modality = modality;
+  entry.modality = modalityOf(token.mime) ?? "document";
   if (token.byteSize !== undefined) entry.byte_size = token.byteSize;
   return entry;
 }
