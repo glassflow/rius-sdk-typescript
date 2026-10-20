@@ -43,7 +43,11 @@ function normalizePart(item: unknown): Part[] {
 /** A spec part list with its media parts normalized; any other part as it is. */
 function normalizeParts(parts: unknown): unknown {
   if (!Array.isArray(parts)) return parts;
-  return parts.flatMap((part) => providerMediaParts(part) ?? [part]);
+  return parts.flatMap((part) => {
+    // An empty list keeps the part too, as Python's `or [part]` does.
+    const media = providerMediaParts(part);
+    return media?.length ? media : [part];
+  });
 }
 
 /**

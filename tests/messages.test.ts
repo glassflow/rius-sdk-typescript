@@ -3,6 +3,16 @@ import { normalizeMessages, serializeMessages } from "../src/messages.js";
 import { toAttributeValue } from "../src/serde.js";
 
 describe("normalizeMessages", () => {
+  it("keeps a native part that yields no media parts, as Python does", () => {
+    const document = {
+      type: "document",
+      source: { type: "content", content: [{ type: "image", source: { type: "url", url: "u" } }] },
+    };
+    expect(normalizeMessages([{ role: "user", parts: [document] }], "user")).toEqual([
+      { role: "user", parts: [document] },
+    ]);
+  });
+
   const input = [
     "hello",
     { role: "assistant", content: "hi", tool_calls: [{ id: "c1", function: { name: "f" } }] },
