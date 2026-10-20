@@ -235,31 +235,14 @@ function differences(family: string, got: ScenarioJson, want: Scenario): Differe
 }
 
 type Known = { family: string; key: string; reason: string };
-type Awaiting = { family: string; scenario: string; reason: string };
 
 describe("the shared recordings from rius-semconv", () => {
   const recordings = loadRecordings();
   const reviewed = JSON.parse(readFileSync(KNOWN, "utf8"));
   const known: Known[] = reviewed.differences;
-  // Recorded scenarios whose expected result another normalizer, the
-  // reference for that family, has not produced yet.
-  const awaiting: Awaiting[] = reviewed.awaiting_expected ?? [];
-  const isAwaited = (family: string, scenario: string) =>
-    awaiting.some((a) => a.family === family && a.scenario === scenario);
 
   it("every known difference says why", () => {
     for (const k of known) expect(k.reason.trim(), `${k.family} ${k.key}`).not.toBe("");
-    for (const a of awaiting) expect(a.reason.trim(), `${a.family}/${a.scenario}`).not.toBe("");
-  });
-
-  it("await only the expected results that are still missing", () => {
-    const present = recordings.flatMap((rec) =>
-      rec.expected.map((s) => `${rec.family}/${s.scenario}`),
-    );
-    const stale = awaiting
-      .map((a) => `${a.family}/${a.scenario}`)
-      .filter((id) => present.includes(id));
-    expect(stale, "awaited expected results that now exist").toEqual([]);
   });
 
   it("normalize to their expected results, or to a reviewed difference", async () => {
@@ -270,7 +253,6 @@ describe("the shared recordings from rius-semconv", () => {
       const expected = new Map(rec.expected.map((s) => [s.scenario, s]));
       for (const raw of rec.raw) {
         const want = expected.get(raw.scenario);
-        if (!want && isAwaited(rec.family, raw.scenario)) continue;
         if (!want) throw new Error(`${rec.family}/${raw.scenario}: no expected result`);
         spans += want.spans.length;
         for (const d of differences(rec.family, await replay(raw, rec.aggregating), want)) {

@@ -1,5 +1,5 @@
 {
-  "about": "Where this SDK, replaying a shared recording from rius-semconv, produces something other than the recording's stored expected result. For the families both SDKs cover the expected result is the Python SDK's, so these are the places the two SDKs disagree. Each entry is reviewed and says why. tests/conformance.test.ts fails on any difference not listed here and on a listed one that no longer occurs, so fixing a difference means deleting its entry in the same change. `key` is an attribute key, or one of `events`, `status`, `name`, `kind`; \"*\" covers every difference in the family. `awaiting_expected` lists recorded scenarios whose reference expected result does not exist yet; the test skips them, and fails once one exists, so its entry is deleted in the change that syncs it.",
+  "about": "Where this SDK, replaying a shared recording from rius-semconv, produces something other than the recording's stored expected result. For the families both SDKs cover the expected result is the Python SDK's, so these are the places the two SDKs disagree. Each entry is reviewed and says why. tests/conformance.test.ts fails on any difference not listed here and on a listed one that no longer occurs, so fixing a difference means deleting its entry in the same change. `key` is an attribute key, or one of `events`, `status`, `name`, `kind`; \"*\" covers every difference in the family.",
   "differences": [
     {
       "family": "openinference-litellm-openai",
@@ -54,13 +54,12 @@
     {
       "family": "openinference-litellm-openai",
       "key": "gen_ai.usage.audio.input_tokens",
-      "reason": "As llm.token_count.prompt_details.audio."
+      "reason": "As gen_ai.usage.input_tokens: the Python SDK, the reference here, also moves the audio usage splits with the completion span's usage."
     },
     {
       "family": "openinference-litellm-openai",
       "key": "gen_ai.usage.audio.output_tokens",
-      "reason": "As llm.token_count.prompt_details.audio."
+      "reason": "As gen_ai.usage.input_tokens: the Python SDK, the reference here, also moves the audio usage splits with the completion span's usage."
     }
-  ],
-  "awaiting_expected": []
+  ]
 }
