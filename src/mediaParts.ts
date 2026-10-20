@@ -869,7 +869,7 @@ export function base64Blob(data: string, kind: Modality, mime: unknown): Part {
   return blobPart(kind, mime, base64Size(data), NOT_CAPTURED);
 }
 
-const EXTENSION_MODALITY: Readonly<Record<string, Modality>> = {
+export const EXTENSION_MODALITY: Readonly<Record<string, Modality>> = {
   png: "image",
   jpg: "image",
   jpeg: "image",

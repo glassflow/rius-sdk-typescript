@@ -11,6 +11,7 @@ import {
   base64Size,
   blobPart,
   DATA_URL_PATTERN,
+  EXTENSION_MODALITY,
   fileIdPart,
   isReplacement,
   KEYED_RULE,
@@ -41,7 +42,7 @@ const REGISTRY = JSON.parse(
   readFileSync(join(HERE, "fixtures/semconv/media_parts.json"), "utf8"),
 ) as {
   stripped_reasons: Record<string, string>;
-  part_shapes: { members: Record<string, string[]> };
+  part_shapes: { members: Record<string, string[]>; extensions: Record<string, string[]> };
   raw_payloads: {
     golden: Golden[];
     detection: Rule[];
@@ -96,6 +97,13 @@ describe("the raw-payload strip", () => {
     expect(Object.keys(blobPart("image", "image/png", 8, "not_captured"))).toEqual(members.blob);
     expect(Object.keys(uriPart("image", "image/png", "https://x.test/a.png"))).toEqual(members.uri);
     expect(Object.keys(fileIdPart("image", "image/png", "f"))).toEqual(members.file);
+  });
+
+  it("names the registry's filename extensions, each with its modality", () => {
+    const fromRegistry = Object.entries(REGISTRY.part_shapes.extensions).flatMap(
+      ([modality, extensions]) => extensions.map((extension) => [extension, modality] as const),
+    );
+    expect(Object.entries(EXTENSION_MODALITY).sort()).toEqual(fromRegistry.sort());
   });
 
   it("has golden examples to run", () => {
