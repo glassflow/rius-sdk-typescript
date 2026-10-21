@@ -238,7 +238,8 @@ type Known = { family: string; key: string; reason: string };
 
 describe("the shared recordings from rius-semconv", () => {
   const recordings = loadRecordings();
-  const known: Known[] = JSON.parse(readFileSync(KNOWN, "utf8")).differences;
+  const reviewed = JSON.parse(readFileSync(KNOWN, "utf8"));
+  const known: Known[] = reviewed.differences;
 
   it("every known difference says why", () => {
     for (const k of known) expect(k.reason.trim(), `${k.family} ${k.key}`).not.toBe("");

@@ -17,5 +17,7 @@ export default defineConfig({
     // 30s is long enough that only a genuine hang trips it.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // The heap-growth tests collect garbage before each measurement.
+    poolOptions: { forks: { execArgv: ["--expose-gc"] } },
   },
 });

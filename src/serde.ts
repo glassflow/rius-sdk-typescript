@@ -1,4 +1,5 @@
 import type { AttributeValue } from "@opentelemetry/api";
+import { stripRawPayload } from "./mediaParts.js";
 
 /**
  * Serialized payload cap, in characters, shared with the Python SDK so a
@@ -11,9 +12,17 @@ export const MAX_ATTR_CHARS = 32 * 1024;
 /** Appended to a cut payload; the same marker the Python SDK writes. */
 export const TRUNCATION_MARKER = "…(truncated)";
 
-/** Cut `text` at the attribute cap, marking the cut. */
+/**
+ * `text` stripped of inline media, then cut at the attribute cap, marking the
+ * cut. Stripped first: base64 kept verbatim would fill the cap with bytes
+ * nobody can read, and a cut payload no longer parses, so its keyed media
+ * could not be found any more.
+ */
 export function truncate(text: string): string {
-  return text.length > MAX_ATTR_CHARS ? text.slice(0, MAX_ATTR_CHARS) + TRUNCATION_MARKER : text;
+  const stripped = stripRawPayload(text);
+  return stripped.length > MAX_ATTR_CHARS
+    ? stripped.slice(0, MAX_ATTR_CHARS) + TRUNCATION_MARKER
+    : stripped;
 }
 
 /**

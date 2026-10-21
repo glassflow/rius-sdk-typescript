@@ -162,7 +162,7 @@ describe("message normalisation to {role, parts}", () => {
         role: "user",
         parts: [
           { type: "text", content: "what is this" },
-          { type: "image_url", image_url: { url: "http://x/y.png" } },
+          { type: "uri", modality: "image", uri: "http://x/y.png" },
         ],
       },
     ]);

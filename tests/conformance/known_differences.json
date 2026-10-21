@@ -40,6 +40,26 @@
       "family": "openinference-litellm-openai",
       "key": "rius.aggregated_usage.reasoning.output_tokens",
       "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "rius.aggregated_usage.audio.input_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "rius.aggregated_usage.audio.output_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the other half of the same move."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.audio.input_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the Python SDK, the reference here, also moves the audio usage splits with the completion span's usage."
+    },
+    {
+      "family": "openinference-litellm-openai",
+      "key": "gen_ai.usage.audio.output_tokens",
+      "reason": "As gen_ai.usage.input_tokens: the Python SDK, the reference here, also moves the audio usage splits with the completion span's usage."
     }
   ]
 }
