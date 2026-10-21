@@ -260,6 +260,11 @@ describe("an array attribute value holding a byte object", () => {
       ["x", `[1,"${m(1)}"]`],
     ],
     ["nested alone, is no string, so the whole is JSON", [1, [u8(1)]], `[1,["${m(1)}"]]`],
+    [
+      "nested beside null, keeps the array OTel holds (null aside)",
+      [null, [1, u8(1)]],
+      [null, `[1,"${m(1)}"]`],
+    ],
     ["in a mapping, is the mapping's JSON", { k: [1, u8(1)] }, `{"k":[1,"${m(1)}"]}`],
   ])("%s", (_name, value, output) => {
     expect(attributeValue(value)).toEqual(output);

@@ -122,6 +122,8 @@ export function toAttributeValue(value: unknown): string | number | boolean {
   }
 }
 
+const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];
+
 /**
  * A value OTel will store as it is, else its bounded JSON encoding; `undefined`
  * for `null` / `undefined`, which mean "not set" rather than an empty string.
@@ -151,10 +153,11 @@ export function attributeValue(value: unknown): AttributeValue | undefined {
       return toAttributeValue(value);
     }
     if (typeof items === "string") return items;
+    // Homogeneous as OTel JS reads it: null aside, all strings, numbers or booleans.
     const list = items as unknown[];
-    if (list.every((v) => typeof v === "string")) return list as string[];
-    if (list.every((v) => typeof v === "number")) return list as number[];
-    if (list.every((v) => typeof v === "boolean")) return list as boolean[];
+    const types = new Set(list.filter((v) => v !== null && v !== undefined).map((v) => typeof v));
+    const [type = "string"] = types;
+    if (types.size <= 1 && SCALAR_TYPES.includes(type)) return list as AttributeValue;
   }
   return toAttributeValue(value);
 }
