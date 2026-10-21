@@ -785,6 +785,10 @@ export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_t
  */
 const GEN_AI_USAGE_AUDIO_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.input_tokens`;
 const GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.output_tokens`;
+const GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.cache_read.input_tokens`;
+const GEN_AI_USAGE_IMAGE_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}image.input_tokens`;
+const GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}image.output_tokens`;
+const GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}image.cache_read.input_tokens`;
 
 export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Provider. One rule, two spellings, first present wins: llm.provider is
@@ -909,9 +913,6 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Google's thoughts_tokens. One per provider, so a span should carry at most
   // one; if it carries several, this order decides and all of them go, as in
   // the sink. Separate rules so one that won't parse does not block the next.
-  // The rest of the namespace has no canonical key. Its audio_tokens stays:
-  // pydantic-ai merges a provider's input and output details under one name,
-  // so the count does not say which direction it is.
   {
     source: "gen_ai.usage.details.reasoning_tokens",
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
@@ -925,6 +926,43 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   {
     source: "gen_ai.usage.details.thoughts_tokens",
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    convert: toInt,
+  },
+  // pydantic-ai also writes Google's per-modality counts there, as
+  // <modality>_<prompt|cache|candidates>_tokens. The image and audio ones are
+  // subsets of the input, cache-read and output totals, never added to them.
+  // The audio ones sit after OpenInference's, which keep their targets where a
+  // span carries both. The rest of the namespace has no canonical key. Its
+  // audio_tokens stays: pydantic-ai merges a provider's input and output
+  // details under one name, so the count does not say which direction it is.
+  {
+    source: "gen_ai.usage.details.image_prompt_tokens",
+    target: GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.image_cache_tokens",
+    target: GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.image_candidates_tokens",
+    target: GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.audio_prompt_tokens",
+    target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.audio_cache_tokens",
+    target: GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.audio_candidates_tokens",
+    target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
     convert: toInt,
   },
   // Time to first chunk under the conventions' metric name, which @ai-sdk/otel
