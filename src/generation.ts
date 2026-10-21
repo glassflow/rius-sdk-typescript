@@ -1,6 +1,7 @@
 import type { AttributeValue } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
-import { contextSizes } from "./contextSizes.js";
+import { contextSizes, textContents } from "./contextSizes.js";
+import { recordSplits, type TextSplit } from "./mediaParts.js";
 import { type Message, normalizeMessages } from "./messages.js";
 import { REQUEST_PARAMETER_GUARDS } from "./normalize.js";
 import {
@@ -125,6 +126,15 @@ function elapsedSinceStart(span: unknown, fallbackStartedAt: number): number {
   return performance.now() - fallbackStartedAt;
 }
 
+/**
+ * A map keyed by the messages' text contents, for the content attribute's
+ * strip to fill in: the sizes then reuse what it found rather than strip
+ * the same text again.
+ */
+function splitsFor(messages: Message[]): Map<string, TextSplit | undefined> {
+  return new Map(textContents(messages).map((text) => [text, undefined]));
+}
+
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
 export class Generation extends Observation {
   private firstTokenRecorded = false;
@@ -141,6 +151,9 @@ export class Generation extends Observation {
   private inputMessages?: Message[];
   private outputMessages?: Message[];
   private tools?: unknown[];
+  /** The text parts' splits the content attributes' strip made, per list. */
+  private inputSplits = new Map<string, TextSplit | undefined>();
+  private outputSplits = new Map<string, TextSplit | undefined>();
 
   /**
    * The provider passed at creation; drives the Anthropic input-token summing
@@ -167,7 +180,12 @@ export class Generation extends Observation {
     if (!this.inputMessages && !this.outputMessages && !this.tools) return; // the seed stands
     this.span.setAttribute(
       RIUS_CONTEXT_SIZES,
-      contextSizes(this.tools, this.inputMessages, this.outputMessages),
+      contextSizes(
+        this.tools,
+        this.inputMessages,
+        this.outputMessages,
+        (text) => this.inputSplits.get(text) ?? this.outputSplits.get(text),
+      ),
     );
   }
 
@@ -187,14 +205,22 @@ export class Generation extends Observation {
     // Normalize once: the content attribute is the (truncated) serialization
     // of this list, and the sizes are measured on the same list, untruncated.
     this.inputMessages = normalizeMessages(value, "user");
-    this.span.setAttribute(GEN_AI_INPUT_MESSAGES, toAttributeValue(this.inputMessages));
+    this.inputSplits = splitsFor(this.inputMessages);
+    this.span.setAttribute(
+      GEN_AI_INPUT_MESSAGES,
+      recordSplits(this.inputSplits, () => toAttributeValue(this.inputMessages)),
+    );
     return this;
   }
 
   /** Record the response messages (`gen_ai.output.messages`); bare strings default to `assistant`. */
   setOutput(value: unknown): this {
     this.outputMessages = normalizeMessages(value, "assistant");
-    this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, toAttributeValue(this.outputMessages));
+    this.outputSplits = splitsFor(this.outputMessages);
+    this.span.setAttribute(
+      GEN_AI_OUTPUT_MESSAGES,
+      recordSplits(this.outputSplits, () => toAttributeValue(this.outputMessages)),
+    );
     return this;
   }
 

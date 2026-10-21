@@ -782,7 +782,8 @@ function literal(mime: string | undefined, byteSize: number | undefined): string
  */
 function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   if (isReplacement(text)) return [];
-  if (isJsonCandidate(text)) {
+  const candidate = isJsonCandidate(text);
+  if (candidate) {
     const found = tokens.length;
     try {
       const document = parse(text, depth);
@@ -798,6 +799,7 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
       tokens.length = found;
     }
   }
+  const found = tokens.length;
   const edits: Edit[] = [];
   for (const match of text.matchAll(DATA_URL)) {
     const mime = isMime(match[1]) ? match[1] : undefined;
@@ -805,6 +807,11 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
     tokens.push({ rule: "b", mime, byteSize });
     const start = match.index ?? 0;
     edits.push([start, start + match[0].length, replacement(mime, byteSize)]);
+  }
+  // Rule (b) alone reads no depth, so this is what splitMedia finds. A
+  // candidate is not recorded: whether it parses can depend on its depth.
+  if (!candidate && recording?.has(text)) {
+    recording.set(text, splitOf(text, edits, tokens.slice(found)));
   }
   return edits;
 }
@@ -895,11 +902,40 @@ export function strip(text: string): { text: string; tokens: MediaToken[] } {
  * replacement it wrote), and the tokens themselves. Each token is one
  * replacement, so the two sums are exact.
  */
-export function splitMedia(text: string): { proseBytes: number; tokens: MediaToken[] } {
+export function splitMedia(text: string): TextSplit {
   const tokens: MediaToken[] = [];
-  const edits = stripText(text, tokens, 0);
+  return splitOf(text, stripText(text, tokens, 0), tokens);
+}
+
+/** A text's prose bytes and its media tokens, as {@link splitMedia} returns them. */
+export interface TextSplit {
+  proseBytes: number;
+  tokens: MediaToken[];
+}
+
+function splitOf(text: string, edits: Edit[], tokens: MediaToken[]): TextSplit {
   const written = edits.reduce((sum, [, , replaced]) => sum + Buffer.byteLength(replaced), 0);
   return { proseBytes: Buffer.byteLength(apply(text, edits)) - written, tokens };
+}
+
+/** The texts whose splits a strip records, while {@link recordSplits} runs. */
+let recording: Map<string, TextSplit | undefined> | undefined;
+
+/**
+ * `run`, while every strip in it sets, for each text already a key of
+ * `splits` that it strips with rule (b) alone, the split {@link splitMedia}
+ * would return for that text. A text the strip reads with a JSON walk, or
+ * does not reach, keeps its value. The keys are never replaced, so the map
+ * holds none of the strip's own strings.
+ */
+export function recordSplits<T>(splits: Map<string, TextSplit | undefined>, run: () => T): T {
+  const previous = recording;
+  recording = splits;
+  try {
+    return run();
+  } finally {
+    recording = previous;
+  }
 }
 
 /**
