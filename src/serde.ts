@@ -45,16 +45,23 @@ function renderable(raw: unknown, value: unknown): unknown {
   return value;
 }
 
+/** The built-in tags of the byte objects that are not views. */
+const BUFFER_TAGS: readonly string[] = ["[object ArrayBuffer]", "[object SharedArrayBuffer]"];
+
 /**
  * An ArrayBuffer, a SharedArrayBuffer or any view on one (each typed array,
  * a Node Buffer, a DataView). Its byteLength is its size in bytes, a view's
- * own length rather than its buffer's.
+ * own length rather than its buffer's. Never `instanceof`: a buffer made in
+ * another realm (a vm context, a worker's transfer) has another realm's
+ * constructor, so isView and the built-in tag are what recognize it.
  */
 function isByteObject(raw: unknown): raw is { byteLength: number } {
   return (
     ArrayBuffer.isView(raw) ||
-    raw instanceof ArrayBuffer ||
-    (typeof SharedArrayBuffer !== "undefined" && raw instanceof SharedArrayBuffer)
+    (typeof raw === "object" &&
+      raw !== null &&
+      BUFFER_TAGS.includes(Object.prototype.toString.call(raw)) &&
+      typeof (raw as { byteLength?: unknown }).byteLength === "number")
   );
 }
 

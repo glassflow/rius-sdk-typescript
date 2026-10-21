@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { errorType } from "../src/errorType.js";
 import { toAttributeValue } from "../src/serde.js";
@@ -134,6 +135,16 @@ describe("a byte object in a serialized value", () => {
     const text = toAttributeValue({ a: { b: [Buffer.from([1, 2, 3])] } }) as string;
     expect(text).toBe('{"a":{"b":["[stripped unknown 3 bytes]"]}}');
     expect(text).not.toContain('"Buffer"');
+  });
+
+  it.each([
+    ["a Uint8Array", "new Uint8Array(3)", 3],
+    ["a DataView", "new DataView(new ArrayBuffer(8), 1, 2)", 2],
+    ["an ArrayBuffer", "new ArrayBuffer(5)", 5],
+    ["a SharedArrayBuffer", "new SharedArrayBuffer(6)", 6],
+  ])("writes %s from another realm as the marker", (_name, code, size) => {
+    const value = runInNewContext(`({ v: ${code} })`);
+    expect(toAttributeValue(value)).toBe(`{"v":"[stripped unknown ${size} bytes]"}`);
   });
 });
 
