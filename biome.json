@@ -6,7 +6,12 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/tests/fixtures/semconv", "!**/tests/conformance/_recording.mjs"]
+    "includes": [
+      "**",
+      "!**/tests/fixtures/semconv",
+      "!**/src/semconv.generated.ts",
+      "!**/tests/conformance/_recording.mjs"
+    ]
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {

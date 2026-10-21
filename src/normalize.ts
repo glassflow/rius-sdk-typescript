@@ -48,8 +48,14 @@ import {
   GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_TOOL_NAME,
   GEN_AI_TOOL_TYPE,
+  GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+  GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+  GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
+  GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_PREFIX,
@@ -775,21 +781,6 @@ export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_t
  *   copied Anthropic's cache-exclusive input_tokens and dropped both cache
  *   counts, which no rule here could recover.
  */
-/**
- * The audio subsets of the usage counts. The rius-semconv registry defines
- * them (upstream keys, `status: planned`), but its generated module leaves
- * planned keys out until a release marks them emitted, so they are spelled
- * here until the vendored module carries them. A subset of
- * gen_ai.usage.input_tokens / output_tokens: never summed into them, never
- * subtracted from them.
- */
-const GEN_AI_USAGE_AUDIO_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.input_tokens`;
-const GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.output_tokens`;
-const GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}audio.cache_read.input_tokens`;
-const GEN_AI_USAGE_IMAGE_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}image.input_tokens`;
-const GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}image.output_tokens`;
-const GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS = `${GEN_AI_USAGE_PREFIX}image.cache_read.input_tokens`;
-
 export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Provider. One rule, two spellings, first present wins: llm.provider is
   // OpenInference's and the more specific (azure/aws/google rather than the
