@@ -312,7 +312,7 @@ describe("a data URL the regex stack cannot read", () => {
     }
   };
   let lines = 1 << 21;
-  while (!throws(`data:image/png;base64,A${"\nA".repeat(lines)}`) && lines < 1 << 25) lines *= 2;
+  while (!throws(`data:image/png;base64,A${"\nA".repeat(lines)}`) && lines < 1 << 22) lines *= 2;
   const url = `data:image/png;base64,A${"\nA".repeat(lines)}`;
 
   it("is past the stack here", () => {

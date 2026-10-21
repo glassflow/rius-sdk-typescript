@@ -182,7 +182,7 @@ function matchDataUrl(piece: string): { match?: RegExpExecArray; failed?: true }
   try {
     return { match: DATA_URL.exec(piece) ?? undefined };
   } catch (error) {
-    if (error instanceof RangeError || isStackOverflow(error)) return { failed: true };
+    if (isStackOverflow(error)) return { failed: true };
     throw error;
   }
 }
