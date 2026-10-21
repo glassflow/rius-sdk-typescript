@@ -51,13 +51,21 @@ export const BUFFER_RULE = {
 
 /** Rule (e): a base64 string under a keyed member. */
 export const KEYED_RULE = {
-  keys: ["data", "b64_json", "result"],
+  keys: ["data", "b64_json", "result", "base64"],
   siblingKeys: ["media_type", "mediaType", "mime_type", "mimeType", "output_format"],
   parentKeys: ["input_audio", "audio", "inline_data", "inlineData"],
   sourceKey: "source",
   sourceType: "base64",
   blobType: "blob",
   blobKey: "content",
+  /** A key holding base64 whenever its object has one of the types. */
+  typedKeys: [
+    { key: "base64", types: ["image", "audio", "video", "file", "text-plain"] },
+    { key: "input_audio", types: ["input_audio"] },
+    { key: "inputAudio", types: ["input_audio"] },
+  ],
+  /** Keys holding base64 in an object under the source key, whatever its type. */
+  sourceBytesKeys: ["bytes"],
   mimeKeys: ["media_type", "mediaType", "mime_type", "mimeType"],
   mimeFormats: [
     { key: "output_format", mime: "image/<value>" },
@@ -617,6 +625,12 @@ function keyedBase64(members: Members, parentKey: string | undefined): Set<numbe
       first(members, "type", isStringEqual(rule.sourceType)) !== undefined);
   const keys = new Set<string>(context ? rule.keys : []);
   if (first(members, "type", isStringEqual(rule.blobType)) !== undefined) keys.add(rule.blobKey);
+  for (const typed of rule.typedKeys) {
+    if (first(members, "type", (n) => includes(typed.types, n.text)) !== undefined) {
+      keys.add(typed.key);
+    }
+  }
+  if (parentKey === rule.sourceKey) for (const key of rule.sourceBytesKeys) keys.add(key);
   const out = new Set<number>();
   members.forEach(([k, v], i) => {
     if (keys.has(k) && (keyedString(v) || (v.items?.some(keyedString) ?? false))) out.add(i);
@@ -931,6 +945,18 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/**
+ * A LangChain v1 standard content block's type, when it carries base64, and
+ * the modality it names.
+ */
+const LANGCHAIN_KINDS: Readonly<Record<string, Modality>> = {
+  image: "image",
+  audio: "audio",
+  video: "video",
+  file: "document",
+  "text-plain": "document",
+};
+
 /** The part kind's modality, for a part with no MIME type. */
 function kindModality(type: unknown): Modality {
   return type === "image" ? "image" : "document";
@@ -940,10 +966,18 @@ function kindModality(type: unknown): Modality {
  * A provider's media content item as semconv parts, or undefined when it is
  * not a media item this module knows (it then passes through unchanged as a
  * generic part). Covers the pass-through rows of the mapping table: OpenAI
- * chat and Responses, Anthropic, Gemini, and native semconv media parts.
+ * chat and Responses, Anthropic, Gemini, Mistral, LangChain v1, Bedrock
+ * Converse, and native semconv media parts.
  */
 export function providerMediaParts(item: unknown): Part[] | undefined {
   if (!isRecord(item)) return undefined;
+  if (
+    typeof item.type === "string" &&
+    Object.hasOwn(LANGCHAIN_KINDS, item.type) &&
+    typeof item.base64 === "string"
+  ) {
+    return [base64Blob(item.base64, LANGCHAIN_KINDS[item.type] as Modality, item.mime_type)];
+  }
   switch (item.type) {
     case "blob":
     case "uri":
@@ -956,7 +990,13 @@ export function providerMediaParts(item: unknown): Part[] | undefined {
       return typeof url === "string" ? [urlPart(url, "image")] : undefined;
     }
     case "input_audio": {
-      const audio = item.input_audio;
+      // Mistral's TypeScript SDK spells it inputAudio.
+      const audio =
+        typeof item.input_audio !== "string" && typeof item.inputAudio === "string"
+          ? item.inputAudio
+          : item.input_audio;
+      // Mistral's audio chunk: the bare base64, with no format.
+      if (typeof audio === "string") return [base64Blob(audio, "audio", undefined)];
       if (!isRecord(audio) || typeof audio.data !== "string") return undefined;
       const format = asString(audio.format);
       return [base64Blob(audio.data, "audio", format && `audio/${format}`)];
@@ -982,8 +1022,27 @@ export function providerMediaParts(item: unknown): Part[] | undefined {
     case "document":
       return anthropicSource(item.type, item.source);
     default:
-      return geminiPart(item);
+      return (item.type === undefined ? bedrockPart(item) : undefined) ?? geminiPart(item);
   }
+}
+
+/**
+ * A Bedrock Converse image, video, audio or document block, which has no
+ * type, by its source's bytes: base64 (or, from the AWS SDK, a Uint8Array) is
+ * a blob. An image's format names its mime type; a video, audio or document
+ * format is not always a MIME subtype, so it names none.
+ */
+function bedrockPart(item: Record<string, unknown>): Part[] | undefined {
+  for (const kind of ["image", "video", "audio", "document"] as const) {
+    const block = item[kind];
+    if (!isRecord(block)) continue;
+    const data = isRecord(block.source) ? block.source.bytes : undefined;
+    const format = kind === "image" ? asString(block.format) : undefined;
+    const mime = format && `image/${format}`;
+    if (typeof data === "string") return [base64Blob(data, kind, mime)];
+    if (data instanceof Uint8Array) return [blobPart(kind, mime, data.length, NOT_CAPTURED)];
+  }
+  return undefined;
 }
 
 /**
