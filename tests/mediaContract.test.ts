@@ -107,6 +107,11 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
   input_image_with_a_redacted_url_and_a_file_id: {
     item: { type: "input_image", image_url: "__REDACTED__", file_id: "file-abc123" },
   },
+  openai_file_with_no_reference: { item: { type: "file", file: { filename: "a.png" } } },
+  openai_file_with_a_file_id_that_is_not_a_string: {
+    item: { type: "file", file: { file_id: 5, filename: "a.wav" } },
+  },
+  input_file_with_no_reference_and_no_filename: { item: { type: "input_file" } },
 };
 
 describe("the contract's part examples", () => {
@@ -124,6 +129,43 @@ describe("the contract's part examples", () => {
     }
     const [part] = parts([made.item][0]) ?? [];
     expect(JSON.stringify(part)).toBe(example.part);
+  });
+});
+
+const blob = (members: Record<string, unknown> = {}) => ({
+  type: "blob",
+  modality: "image",
+  ...members,
+  stripped_reason: "not_captured",
+});
+
+describe("a canonical part", () => {
+  it.each([
+    [blob({ byte_size: -1 }), "byte_size -1"],
+    [blob({ byte_size: "8" }), 'byte_size "8"'],
+    [blob({ byte_size: 2.5 }), "byte_size 2.5"],
+    [blob({ byte_size: 2 ** 53 }), "byte_size 9007199254740992"],
+    [{ type: "uri", modality: "image", uri: { href: "h" } }, 'uri {"href":"h"}'],
+    [{ type: "file", modality: "image", file_id: 5 }, "file_id 5"],
+    [{ type: "file", modality: "picture", file_id: "f" }, 'modality "picture"'],
+    [{ type: "blob", modality: "image", stripped_reason: "gone" }, 'stripped_reason "gone"'],
+    [{ type: "uri", modality: "image", mime_type: "image", uri: "u" }, 'mime_type "image"'],
+    [{ type: "uri", modality: "image", mime_type: 5, uri: "u" }, "mime_type 5"],
+  ])("rejects a wrong value: %j", (part, error) => {
+    const errors = canonicalErrors(part);
+    expect(
+      errors.some((e) => e.startsWith(error)),
+      JSON.stringify(errors),
+    ).toBe(true);
+  });
+
+  it.each([
+    blob({ mime_type: "image/png", byte_size: 0 }),
+    blob({ byte_size: 2 ** 53 - 1 }),
+    { type: "uri", modality: "video", uri: "" },
+    { type: "file", modality: "document", file_id: "" },
+  ])("accepts the values the contract allows: %j", (part) => {
+    expect(canonicalErrors(part)).toEqual([]);
   });
 });
 
@@ -211,8 +253,17 @@ describe("a URL or file id dropped upstream", () => {
     expect(parts({ type: "input_file", ...file })).toEqual([part]);
   });
 
-  it("leaves an OpenAI file with no reference at all as it came", () => {
-    expect(parts({ type: "input_file", filename: "a.png" })).toBeUndefined();
+  it.each([
+    { filename: "a.wav" },
+    { file_id: 5, filename: "a.wav" },
+    { file_id: null, filename: "a.wav" },
+    { file_data: ["x"], file_url: { u: 1 }, filename: "a.wav" },
+    { file_id: 5, file_url: "__REDACTED__", filename: "a.wav" },
+    {},
+  ])("in an OpenAI file %j, with no string reference, is a redacted blob", (file) => {
+    const part = redacted("filename" in file ? "audio" : "document");
+    expect(parts({ type: "file", file })).toEqual([part]);
+    expect(parts({ type: "input_file", ...file })).toEqual([part]);
   });
 
   it("is kept in a native uri or file part, which is no provider item", () => {

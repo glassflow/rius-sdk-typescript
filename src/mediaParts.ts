@@ -990,11 +990,11 @@ export function providerMediaParts(item: unknown): Part[] | undefined {
  * OpenAI's file item: chat's `file {file_id | file_data, filename}` or the
  * Responses `input_file {file_id | file_data | file_url, filename}`. File data
  * is a data URL (its mime type names the modality) or bare base64, whose
- * modality comes from the filename. With nothing usable but a reference that
- * is empty or redacted, it was dropped upstream: never a part of type file
- * without a file_id.
+ * modality comes from the filename. With no usable reference (each one
+ * missing, not a string, empty or redacted), it was dropped upstream: never a
+ * part of type file without a file_id.
  */
-function openaiFile(file: Record<string, unknown>): Part[] | undefined {
+function openaiFile(file: Record<string, unknown>): Part[] {
   const kind = filenameModality(file.filename);
   const fileId = usable(file.file_id);
   if (fileId !== undefined) return [fileIdPart(kind, undefined, fileId)];
@@ -1002,8 +1002,7 @@ function openaiFile(file: Record<string, unknown>): Part[] | undefined {
   if (data !== undefined) return [base64Blob(data, kind, undefined)];
   const url = usable(file.file_url);
   if (url !== undefined) return [urlPart(url, kind)];
-  const references = [file.file_id, file.file_data, file.file_url];
-  return references.some((r) => typeof r === "string") ? [droppedBlob(kind)] : undefined;
+  return [droppedBlob(kind)];
 }
 
 /**
