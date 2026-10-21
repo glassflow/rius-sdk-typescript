@@ -39,7 +39,10 @@ export const CONTRACT = JSON.parse(
   stripped_reasons: Record<string, string>;
   raw_payloads: {
     replacement: { mime_pattern: string };
-    byte_objects: { examples: ByteObjectExample[] };
+    byte_objects: {
+      examples: ByteObjectExample[];
+      attribute_values: { examples: { name: string; language: string; output: unknown }[] };
+    };
   };
   part_shapes: {
     members: Record<string, string[]>;

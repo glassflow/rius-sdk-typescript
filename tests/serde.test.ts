@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { errorType } from "../src/errorType.js";
-import { attributeValue, toAttributeValue } from "../src/serde.js";
+import { attributeValue, byteAttributeValue, toAttributeValue } from "../src/serde.js";
 import { CONTRACT } from "./mediaContract.js";
 
 describe("toAttributeValue", () => {
@@ -201,6 +201,73 @@ describe("a byte object set as an attribute value", () => {
 
   it("keeps an array with other kinds of element JSON-encoded, its bytes as the marker", () => {
     expect(attributeValue([1, new Uint8Array(2)])).toBe('[1,"[stripped unknown 2 bytes]"]');
+  });
+});
+
+describe("the contract's attribute values", () => {
+  const examples = CONTRACT.raw_payloads.byte_objects.attribute_values.examples.filter(
+    (e) => e.language === "typescript",
+  );
+
+  /** Each TypeScript attribute_values example's value, built as the example writes it. */
+  const VALUES: Record<string, () => unknown> = {
+    typescript_buffer_attribute: () => Buffer.from([137, 80, 78, 71]),
+    typescript_byte_objects_in_an_array_attribute: () => [new Uint8Array(2), new ArrayBuffer(3)],
+    typescript_byte_objects_in_a_mapping_and_a_nested_array: () => ({
+      k: new Uint16Array(2),
+      n: [[new DataView(new ArrayBuffer(3))], ["x"]],
+    }),
+    typescript_byte_object_beside_a_number: () => [1, new Uint8Array(2)],
+  };
+
+  it("covers every TypeScript example of the contract", () => {
+    expect(Object.keys(VALUES).sort()).toEqual(examples.map((e) => e.name).sort());
+  });
+
+  it.each(examples.map((e) => [e.name, e] as const))("%s, walked", (name, example) => {
+    expect(byteAttributeValue(VALUES[name]())).toEqual(example.output);
+  });
+
+  // OTel holds a string or a homogeneous array of them and nothing deeper: a
+  // walked value it cannot hold (a mapping) is set as the value's JSON.
+  it.each(examples.map((e) => [e.name, e] as const))(
+    "%s, as the span holds it",
+    (name, example) => {
+      const value = attributeValue(VALUES[name]());
+      if (typeof example.output === "object" && !Array.isArray(example.output)) {
+        expect(JSON.parse(value as string)).toEqual(example.output);
+      } else {
+        expect(value).toEqual(example.output);
+      }
+    },
+  );
+});
+
+describe("an array attribute value holding a byte object", () => {
+  const u8 = (n: number) => new Uint8Array(n);
+  const m = (n: number) => `[stripped unknown ${n} bytes]`;
+
+  it.each([
+    ["beside a bool, is its JSON", [true, u8(2)], `[true,"${m(2)}"]`],
+    ["beside null, is its JSON", [null, u8(2)], `[null,"${m(2)}"]`],
+    ["beside an array, is its JSON", [u8(2), [u8(1)]], `["${m(2)}",["${m(1)}"]]`],
+    ["beside a mapping, is its JSON", [u8(2), { k: "v" }], `["${m(2)}",{"k":"v"}]`],
+    ["nested beside a number, is a string of its JSON", [[1, u8(1)]], [`[1,"${m(1)}"]`]],
+    [
+      "nested beside strings, keeps the array of strings",
+      ["x", [1, u8(1)]],
+      ["x", `[1,"${m(1)}"]`],
+    ],
+    ["nested alone, is no string, so the whole is JSON", [1, [u8(1)]], `[1,["${m(1)}"]]`],
+    ["in a mapping, is the mapping's JSON", { k: [1, u8(1)] }, `{"k":[1,"${m(1)}"]}`],
+  ])("%s", (_name, value, output) => {
+    expect(attributeValue(value)).toEqual(output);
+  });
+
+  it("never fails on a cycle through an array", () => {
+    const value: unknown[] = [u8(1)];
+    value.push(value);
+    expect(() => attributeValue(value)).not.toThrow();
   });
 });
 

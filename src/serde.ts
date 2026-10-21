@@ -129,18 +129,62 @@ export function toAttributeValue(value: unknown): string | number | boolean {
  * attribute with a warning and it would never reach the span. Booleans and
  * numbers are separate element types, so `[true, 1]` is encoded too.
  *
- * A byte object, alone or as an element of the array, is the bare marker
- * string: no serializer is around it, so it carries no JSON quotes. The sink
- * writes an OTLP bytes value the same way.
+ * Byte objects are walked first (see {@link byteAttributeValue}): one alone
+ * is the bare marker string, and an array of byte objects and strings is an
+ * array of strings. A walked value OTel cannot hold (a mapping, a nested
+ * array) is set as the value's JSON, its byte objects quoted markers.
  */
 export function attributeValue(value: unknown): AttributeValue | undefined {
   if (value === undefined || value === null) return undefined;
   if (isByteObject(value)) return byteObjectMarker(value);
   if (Array.isArray(value)) {
-    const items = value.map((v) => (isByteObject(v) ? byteObjectMarker(v) : v));
-    if (items.every((v) => typeof v === "string")) return items as string[];
-    if (items.every((v) => typeof v === "number")) return items as number[];
-    if (items.every((v) => typeof v === "boolean")) return items as boolean[];
+    let items: unknown;
+    try {
+      items = byteAttributeValue(value);
+    } catch {
+      // Out of stack on a deep array: its JSON is still bounded and safe.
+      return toAttributeValue(value);
+    }
+    if (typeof items === "string") return items;
+    const list = items as unknown[];
+    if (list.every((v) => typeof v === "string")) return list as string[];
+    if (list.every((v) => typeof v === "number")) return list as number[];
+    if (list.every((v) => typeof v === "boolean")) return list as boolean[];
   }
   return toAttributeValue(value);
+}
+
+/**
+ * A value with every byte object in it, at any depth of its arrays and plain
+ * objects, the bare marker string. OTel arrays are homogeneous, so each array
+ * is looked at on its own once its elements are walked: one that held a byte
+ * object beside an element that is then no string is its JSON instead, one
+ * string. Any other value is kept, and a cycle is left as it came for the
+ * JSON encoding to mark.
+ */
+export function byteAttributeValue(value: unknown, ancestors: unknown[] = []): unknown {
+  if (isByteObject(value)) return byteObjectMarker(value);
+  const array = Array.isArray(value);
+  if ((!array && !isPlainObject(value)) || ancestors.includes(value)) return value;
+  ancestors.push(value);
+  try {
+    if (!array) {
+      return Object.fromEntries(
+        Object.entries(value as object).map(([k, v]) => [k, byteAttributeValue(v, ancestors)]),
+      );
+    }
+    const items = (value as unknown[]).map((v) => byteAttributeValue(v, ancestors));
+    const mixed =
+      (value as unknown[]).some(isByteObject) && !items.every((v) => typeof v === "string");
+    return mixed ? toAttributeValue(value) : items;
+  } finally {
+    ancestors.pop();
+  }
+}
+
+/** An object literal's shape: its prototype is Object's, or none. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
