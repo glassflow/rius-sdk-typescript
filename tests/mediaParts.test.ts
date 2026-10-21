@@ -317,6 +317,12 @@ describe("provider media items as parts", () => {
     ).toEqual([blob("audio", "audio/wav", 4)]);
   });
 
+  it("maps Mistral's TypeScript inputAudio string to an audio blob with no mime", () => {
+    expect(providerMediaParts({ type: "input_audio", inputAudio: "UklGRiQAAABXQVZF" })).toEqual([
+      blob("audio", undefined, 12),
+    ]);
+  });
+
   it.each([
     [{ type: "image", base64: png, mime_type: "image/png" }, blob("image", "image/png", 8)],
     [{ type: "audio", base64: "UklGRg==" }, blob("audio", undefined, 4)],
@@ -346,13 +352,24 @@ describe("provider media items as parts", () => {
       { document: { format: "pdf", name: "report", source: { bytes: "JVBERi0=" } } },
       blob("document", undefined, 5),
     ],
+    [{ audio: { format: "mp3", source: { bytes: "UklGRg==" } } }, blob("audio", undefined, 4)],
     [{ image: { source: { bytes: png } } }, blob("image", undefined, 8)],
     [
       { image: { format: "jpeg", source: { bytes: new Uint8Array([255, 216, 255, 224]) } } },
       blob("image", "image/jpeg", 4),
     ],
+    [
+      { audio: { format: "wav", source: { bytes: new Uint8Array([82, 73, 70, 70]) } } },
+      blob("audio", undefined, 4),
+    ],
   ])("maps the Bedrock Converse block %j to a blob", (block, part) => {
     expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it("leaves a typed block with a Bedrock key as it came", () => {
+    expect(
+      providerMediaParts({ type: "custom", image: { format: "png", source: { bytes: png } } }),
+    ).toBeUndefined();
   });
 
   it("leaves a Bedrock Converse source by S3 location as it came", () => {

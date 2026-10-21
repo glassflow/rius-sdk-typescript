@@ -62,6 +62,7 @@ export const KEYED_RULE = {
   typedKeys: [
     { key: "base64", types: ["image", "audio", "video", "file", "text-plain"] },
     { key: "input_audio", types: ["input_audio"] },
+    { key: "inputAudio", types: ["input_audio"] },
   ],
   /** Keys holding base64 in an object under the source key, whatever its type. */
   sourceBytesKeys: ["bytes"],
@@ -965,7 +966,11 @@ export function providerMediaParts(item: unknown): Part[] | undefined {
       return typeof url === "string" ? [urlPart(url, "image")] : undefined;
     }
     case "input_audio": {
-      const audio = item.input_audio;
+      // Mistral's TypeScript SDK spells it inputAudio.
+      const audio =
+        typeof item.input_audio !== "string" && typeof item.inputAudio === "string"
+          ? item.inputAudio
+          : item.input_audio;
       // Mistral's audio chunk: the bare base64, with no format.
       if (typeof audio === "string") return [base64Blob(audio, "audio", undefined)];
       if (!isRecord(audio) || typeof audio.data !== "string") return undefined;
@@ -989,18 +994,18 @@ export function providerMediaParts(item: unknown): Part[] | undefined {
     case "document":
       return anthropicSource(item.type, item.source);
     default:
-      return bedrockPart(item) ?? geminiPart(item);
+      return (item.type === undefined ? bedrockPart(item) : undefined) ?? geminiPart(item);
   }
 }
 
 /**
- * A Bedrock Converse image, video or document block, which has no type, by
- * its source's bytes: base64 (or, from the AWS SDK, a Uint8Array) is a blob.
- * An image's format names its mime type; a video or document format is not
- * always a MIME subtype, so it names none.
+ * A Bedrock Converse image, video, audio or document block, which has no
+ * type, by its source's bytes: base64 (or, from the AWS SDK, a Uint8Array) is
+ * a blob. An image's format names its mime type; a video, audio or document
+ * format is not always a MIME subtype, so it names none.
  */
 function bedrockPart(item: Record<string, unknown>): Part[] | undefined {
-  for (const kind of ["image", "video", "document"] as const) {
+  for (const kind of ["image", "video", "audio", "document"] as const) {
     const block = item[kind];
     if (!isRecord(block)) continue;
     const data = isRecord(block.source) ? block.source.bytes : undefined;
