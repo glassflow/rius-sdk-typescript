@@ -25,6 +25,7 @@ import {
   stripRawPayload,
   uriPart,
 } from "../src/mediaParts.js";
+import { toAttributeValue } from "../src/serde.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 type GoldenToken = { rule: string; mime: string; byte_size: number | string };
@@ -294,6 +295,60 @@ describe("the raw-payload strip", () => {
     const result = strip(input);
     expect(result.text).toBe(output);
     expect(result.tokens.map(asGolden)).toEqual(tokens);
+  });
+});
+
+describe("a data URL the regex stack cannot read", () => {
+  // One-character lines are the cheapest way past V8's regex stack (about
+  // 1.6M lines on Node 24): the run goes on over each one. Doubled until the
+  // pattern throws, so the strip's own catch is what each case reads.
+  const anchored = new RegExp(`^${DATA_URL_PATTERN}`);
+  const throws = (value: string) => {
+    try {
+      anchored.exec(value);
+      return false;
+    } catch (error) {
+      return error instanceof RangeError;
+    }
+  };
+  let lines = 1 << 21;
+  while (!throws(`data:image/png;base64,A${"\nA".repeat(lines)}`) && lines < 1 << 22) lines *= 2;
+  const url = `data:image/png;base64,A${"\nA".repeat(lines)}`;
+
+  it("is past the stack here", () => {
+    expect(throws(url)).toBe(true);
+  });
+
+  it("strips the rest of its piece, size unknown, and the next data URL as usual", () => {
+    const result = strip(`see ${url} and so on\ndata:image/gif;base64,R0lGODlh, bye`);
+    expect(result.text).toBe(
+      "see [stripped image/png unknown bytes][stripped image/gif 6 bytes], bye",
+    );
+    expect(result.tokens).toEqual([
+      { rule: "b", mime: "image/png", byteSize: undefined },
+      { rule: "b", mime: "image/gif", byteSize: 6 },
+    ]);
+  });
+
+  it("keeps no mime type that is no token/token", () => {
+    expect(strip(url.replace("image/png", "image")).text).toBe("[stripped unknown unknown bytes]");
+  });
+
+  it("is no whole data URL, so a key that keeps URLs replaces it whole", () => {
+    expect(stripRawPayload(JSON.stringify({ type: "image", image: url }))).toBe(
+      '{"type":"image","image":"[stripped unknown unknown bytes]"}',
+    );
+  });
+
+  it("never throws out of the serializer, and keeps none of it", () => {
+    const text = toAttributeValue({ role: "user", content: `see ${url} and so on` });
+    expect(text).toBe('{"role":"user","content":"see [stripped image/png unknown bytes]"}');
+  });
+
+  it("is a blob with no size as a provider URI", () => {
+    expect(providerMediaParts({ type: "image_url", image_url: { url } })).toEqual([
+      blobPart("image", "image/png", undefined, "not_captured"),
+    ]);
   });
 });
 
