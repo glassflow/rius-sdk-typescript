@@ -33,7 +33,12 @@ export function truncate(text: string): string {
  */
 function renderable(raw: unknown, value: unknown): unknown {
   if (typeof raw === "bigint") return String(raw);
-  if (raw instanceof Map) return Object.fromEntries(raw);
+  if (raw instanceof Map) {
+    // A byte key would otherwise be written as its decimal bytes.
+    return Object.fromEntries(
+      [...raw].map(([k, v]) => [isByteObject(k) ? byteObjectMarker(k) : k, v]),
+    );
+  }
   if (raw instanceof Set) return [...raw];
   if (isByteObject(raw)) {
     // Bytes are not content a trace can show; a size is, and a byte array

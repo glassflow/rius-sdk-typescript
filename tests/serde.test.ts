@@ -127,6 +127,11 @@ describe("a byte object in a serialized value", () => {
       { m: new Map([["k", new Uint8Array(2)]]), s: new Set([new Int32Array(1)]) },
       '{"m":{"k":"[stripped unknown 2 bytes]"},"s":["[stripped unknown 4 bytes]"]}',
     ],
+    [
+      "bytes as a Map key",
+      { m: new Map([[new Uint8Array([137, 80, 78, 71]), "x"]]) },
+      '{"m":{"[stripped unknown 4 bytes]":"x"}}',
+    ],
   ])("writes %s as the marker", (_name, value, output) => {
     expect(toAttributeValue(value)).toBe(output);
   });
