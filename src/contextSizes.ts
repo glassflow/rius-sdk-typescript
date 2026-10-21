@@ -50,7 +50,7 @@
  * yields a best-effort entry (null tool, {type: "unknown"}, 0 bytes).
  */
 
-import { type MediaToken, modalityOf, splitMedia } from "./mediaParts.js";
+import { type MediaToken, modalityOf, splitMedia, type TextSplit } from "./mediaParts.js";
 
 /** Input messages that keep per-part detail; older ones fold into `folded`. */
 export const DETAIL_WINDOW = 50;
@@ -129,6 +129,25 @@ function partsOf(message: unknown): unknown[] {
   return Array.isArray(message.parts) ? message.parts : [];
 }
 
+/**
+ * The string contents of the text parts of normalized messages: the texts
+ * {@link contextSizes} splits into prose and media.
+ */
+export function textContents(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const message of messages) {
+    for (const part of partsOf(message)) {
+      if (isRecord(part) && part.type === "text" && typeof part.content === "string") {
+        texts.push(part.content);
+      }
+    }
+  }
+  return texts;
+}
+
+/** A text's split when the caller already has it, else undefined. */
+export type KnownSplit = (text: string) => TextSplit | undefined;
+
 /** A distinct bucket key per tool name; null is its own bucket. */
 function toolKey(name: ToolName): string {
   return name === null ? "\0null" : `name:${name}`;
@@ -137,7 +156,10 @@ function toolKey(name: ToolName): string {
 class Context {
   private readonly callNames = new Map<string, unknown>();
 
-  constructor(messageLists: unknown[][]) {
+  constructor(
+    messageLists: unknown[][],
+    private readonly knownSplit: KnownSplit,
+  ) {
     // tool_call ids → names over every message, inputs first, so a result can
     // be attributed to its tool even when the call sits in another list.
     for (const messages of messageLists) {
@@ -164,7 +186,7 @@ class Context {
       case "text": {
         const content = part.content ?? null;
         if (typeof content !== "string") return { type: "text", bytes: canonicalBytes(content) };
-        const { proseBytes, tokens } = splitMedia(content);
+        const { proseBytes, tokens } = this.knownSplit(content) ?? splitMedia(content);
         if (tokens.length === 0) return { type: "text", bytes: proseBytes };
         return [{ type: "text", bytes: proseBytes }, ...tokens.map(mediaEntry)];
       }
@@ -287,17 +309,20 @@ function asList(value: unknown): unknown[] | undefined {
  * `outputMessages` are NORMALIZED message lists (`{role, parts}` as
  * `normalizeMessages` returns them); `tools` is the raw tool-definition list.
  * Any argument may be undefined: its key is then absent from the result.
+ * `knownSplit` hands back a text's split the caller's own strip already
+ * made, so it is not stripped twice; one it does not know is split here.
  */
 export function contextSizes(
   tools: unknown[] | undefined,
   inputMessages: unknown[] | undefined,
   outputMessages: unknown[] | undefined,
+  knownSplit: KnownSplit = () => undefined,
 ): string {
   try {
     const toolList = asList(tools);
     const inputs = asList(inputMessages);
     const outputs = asList(outputMessages);
-    const context = new Context([inputs ?? [], outputs ?? []]);
+    const context = new Context([inputs ?? [], outputs ?? []], knownSplit);
 
     const toolEntries = toolList?.map(
       (tool): ToolEntry => ({ name: toolName(tool), bytes: canonicalBytes(tool) }),

@@ -139,6 +139,19 @@ export function base64Size(value: string): number | undefined {
   return (text.length * 3) / 4 - padding;
 }
 
+/**
+ * {@link base64Size} of a base64 run `DATA_URL` matched, from its length and
+ * padding: the match already holds no whitespace, nothing outside the two
+ * alphabets and at most two `=`, all at its end. Only a mix of the two
+ * alphabets is left to check.
+ */
+function matchedBase64Size(run: string): number | undefined {
+  if (run.length % 4 !== 0) return undefined;
+  if (STANDARD_EXTRA.test(run) && URL_SAFE_EXTRA.test(run)) return undefined;
+  const padding = run.endsWith("==") ? 2 : run.endsWith("=") ? 1 : 0;
+  return (run.length * 3) / 4 - padding;
+}
+
 /** The text a media token in a raw payload is replaced by. */
 export function replacement(mime: string | undefined, byteSize: number | undefined): string {
   // Function replacers: a mime may hold `$&`, which a string replacement reads.
@@ -769,7 +782,8 @@ function literal(mime: string | undefined, byteSize: number | undefined): string
  */
 function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   if (isReplacement(text)) return [];
-  if (isJsonCandidate(text)) {
+  const candidate = isJsonCandidate(text);
+  if (candidate) {
     const found = tokens.length;
     try {
       const document = parse(text, depth);
@@ -785,13 +799,19 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
       tokens.length = found;
     }
   }
+  const found = tokens.length;
   const edits: Edit[] = [];
   for (const match of text.matchAll(DATA_URL)) {
     const mime = isMime(match[1]) ? match[1] : undefined;
-    const byteSize = base64Size(match[3]);
+    const byteSize = matchedBase64Size(match[3]);
     tokens.push({ rule: "b", mime, byteSize });
     const start = match.index ?? 0;
     edits.push([start, start + match[0].length, replacement(mime, byteSize)]);
+  }
+  // Rule (b) alone reads no depth, so this is what splitMedia finds. A
+  // candidate is not recorded: whether it parses can depend on its depth.
+  if (!candidate && recording?.has(text)) {
+    recording.set(text, splitOf(text, edits, tokens.slice(found)));
   }
   return edits;
 }
@@ -882,11 +902,42 @@ export function strip(text: string): { text: string; tokens: MediaToken[] } {
  * replacement it wrote), and the tokens themselves. Each token is one
  * replacement, so the two sums are exact.
  */
-export function splitMedia(text: string): { proseBytes: number; tokens: MediaToken[] } {
+export function splitMedia(text: string): TextSplit {
   const tokens: MediaToken[] = [];
-  const edits = stripText(text, tokens, 0);
+  return splitOf(text, stripText(text, tokens, 0), tokens);
+}
+
+/** A text's prose bytes and its media tokens, as {@link splitMedia} returns them. */
+export interface TextSplit {
+  proseBytes: number;
+  tokens: MediaToken[];
+}
+
+function splitOf(text: string, edits: Edit[], tokens: MediaToken[]): TextSplit {
   const written = edits.reduce((sum, [, , replaced]) => sum + Buffer.byteLength(replaced), 0);
   return { proseBytes: Buffer.byteLength(apply(text, edits)) - written, tokens };
+}
+
+/** The texts whose splits a strip records, while {@link recordSplits} runs. */
+let recording: Map<string, TextSplit | undefined> | undefined;
+
+/**
+ * `run`, while every strip in it sets, for each text already a key of
+ * `splits` that it strips with rule (b) alone, the split {@link splitMedia}
+ * would return for that text. A text the strip reads with a JSON walk, or
+ * does not reach, keeps its value. The keys are never replaced, so the map
+ * holds none of the strip's own strings. The slot is shared by every strip
+ * that runs inside `run`, which is safe: a recorded value depends on its text
+ * alone, so whichever strip records it, the entry is the same.
+ */
+export function recordSplits<T>(splits: Map<string, TextSplit | undefined>, run: () => T): T {
+  const previous = recording;
+  recording = splits;
+  try {
+    return run();
+  } finally {
+    recording = previous;
+  }
 }
 
 /**
@@ -974,7 +1025,7 @@ export function dataUrlBlob(url: string, kind: Modality, mimeHint?: unknown): Pa
   const match = WHOLE_DATA_URL.exec(url);
   if (match !== null) {
     const mime = isMime(match[1]) ? match[1] : mimeHint;
-    return blobPart(kind, mime, base64Size(match[3]), NOT_CAPTURED);
+    return blobPart(kind, mime, matchedBase64Size(match[3]), NOT_CAPTURED);
   }
   const header = url.slice(5).split(/[;,]/, 1)[0];
   const comma = url.indexOf(",");
