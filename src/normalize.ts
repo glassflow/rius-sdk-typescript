@@ -10,12 +10,11 @@ import { qualifyRecordedExceptions } from "./errorType.js";
 import {
   base64Blob,
   blobPart,
+  isDataUrl,
   NOT_CAPTURED,
-  OPENINFERENCE_REDACTED,
-  REDACTED_UPSTREAM,
   rebuildNativeMediaParts,
   stripRawPayload,
-  uriPart,
+  uriModality,
   urlPart,
 } from "./mediaParts.js";
 import {
@@ -1220,31 +1219,42 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** A URL's scheme and its colon, as RFC 3986 spells one; base64 has no colon. */
+const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
 /**
- * A file or image as a semconv media part: a `uri` when its data is a web
- * address, else a `blob`, which never keeps the bytes (their size and
- * `not_captured` in their place). The modality comes from the media type, so
- * a PDF or a text/plain file is a document, never an image; with no media
- * type, from the part kind. The AI SDK serializes binary data as base64
- * before it reaches the span, so data is a string here; any other shape is
- * not one we can vouch for, and the part keeps only its type.
+ * A file or image as a semconv media part: a `uri` when its data is a URL of
+ * any scheme but data: (http, gs, s3, file, ...), else a `blob`, which never
+ * keeps the bytes (their size and `not_captured` in their place). The modality
+ * comes from the media type, so a PDF or a text/plain file is a document,
+ * never an image; with no media type, a file by URL takes it from the URL
+ * path's extension, and any other from the part kind. The AI SDK serializes
+ * binary data as base64 before it reaches the span, so data is a string here;
+ * any other shape is not one we can vouch for, and makes no part (null).
  */
-function filePart(type: string, data: unknown, mediaType: unknown) {
+function filePart(type: string, data: unknown, mediaType: unknown): Record<string, unknown> | null {
   const kind = type === "image" ? "image" : "document";
+  const byUrl = (url: string) => urlPart(url, type === "file" ? uriModality(url) : kind, mediaType);
   let value = data;
   // v7's tagged file data, which v6 spans may carry from a v7 caller.
   if (isObject(value) && typeof value.type === "string") {
-    const tag = value.type;
-    if (tag === "text") {
-      const text = typeof value.text === "string" ? value.text : "";
-      return blobPart(kind, mediaType, Buffer.byteLength(text), NOT_CAPTURED);
+    switch (value.type) {
+      case "text":
+        return typeof value.text === "string"
+          ? blobPart(kind, mediaType, Buffer.byteLength(value.text), NOT_CAPTURED)
+          : null;
+      case "url":
+        return typeof value.url === "string" ? byUrl(value.url) : null;
+      case "data":
+        value = value.data;
+        break;
+      default:
+        // A tag we do not know: media we never measured.
+        return blobPart(kind, mediaType, undefined, NOT_CAPTURED);
     }
-    value = tag === "data" ? value.data : tag === "url" ? value.url : "";
   }
-  if (typeof value !== "string") return { type };
-  if (value.startsWith("http://") || value.startsWith("https://")) {
-    return uriPart(kind, mediaType, value);
-  }
+  if (typeof value !== "string") return null;
+  if (URL_SCHEME.test(value) && !isDataUrl(value)) return byUrl(value);
   return base64Blob(value, kind, mediaType);
 }
 
@@ -2027,9 +2037,6 @@ function openInferenceImage(item: Record<string, string>): Record<string, unknow
   const mime = Object.hasOwn(item, OPENINFERENCE_IMAGE_MEDIA_TYPE)
     ? item[OPENINFERENCE_IMAGE_MEDIA_TYPE]
     : undefined;
-  if (url === "" || url === OPENINFERENCE_REDACTED) {
-    return blobPart("image", mime, undefined, REDACTED_UPSTREAM);
-  }
   return urlPart(url, "image", mime);
 }
 

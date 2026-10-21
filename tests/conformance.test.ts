@@ -37,6 +37,7 @@ import { aggregatingTracer } from "../src/aggregatedUsage.js";
 import { REGISTRY } from "../src/instrumentation.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { type ScenarioJson, scenarioJson } from "./conformance/_recording.mjs";
+import { MESSAGE_KEYS, mediaPartsIn, nonCanonical } from "./mediaContract.js";
 
 // fileURLToPath, not import.meta.dirname: that needs Node 20.11, and CI runs 18.
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -272,6 +273,24 @@ describe("the shared recordings from rius-semconv", () => {
       .filter((k) => !used.has(`${k.family} ${k.key}`))
       .map((k) => `${k.family} ${k.key}`);
     expect(stale, "known differences that no longer occur").toEqual([]);
+  });
+
+  it("hold no media part that is not canonical, a file without its file_id say", async () => {
+    const failures: string[] = [];
+    let parts = 0;
+    for (const rec of recordings) {
+      for (const raw of rec.raw) {
+        for (const { span } of (await replay(raw, rec.aggregating)).spans) {
+          const attributes = attrs((span as SpanJson).attributes);
+          parts += MESSAGE_KEYS.flatMap((key) => mediaPartsIn(attributes[key])).length;
+          for (const why of nonCanonical(attributes)) {
+            failures.push(`${rec.family}/${raw.scenario}: ${why}`);
+          }
+        }
+      }
+    }
+    expect(parts, "no media part normalized: is tests/fixtures/semconv synced?").toBeGreaterThan(0);
+    expect(failures).toEqual([]);
   });
 
   it("come out of a second normalization unchanged", async () => {

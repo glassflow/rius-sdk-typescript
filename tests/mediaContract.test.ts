@@ -1,0 +1,253 @@
+// The media contract's part and message examples, made by this SDK byte for
+// byte, and the rules they pin: a URL of any scheme but data: keeps its link, a
+// URL or file id dropped upstream is a blob redacted upstream, and no part this
+// SDK writes is malformed.
+
+import type { Attributes, AttributeValue } from "@opentelemetry/api";
+import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { describe, expect, it } from "vitest";
+import { providerMediaParts } from "../src/mediaParts.js";
+import { NormalizingSpanProcessor } from "../src/normalize.js";
+import { CONTRACT, canonicalErrors } from "./mediaContract.js";
+
+/** The parts one provider item becomes, each of them canonical. */
+function parts(item: unknown): unknown[] | undefined {
+  const made = providerMediaParts(item);
+  for (const part of made ?? []) {
+    expect(canonicalErrors(part as Record<string, unknown>), JSON.stringify(part)).toEqual([]);
+  }
+  return made;
+}
+
+/** gen_ai.input.messages for one user message of AI SDK parts, as a model call writes it. */
+function vercelMessages(content: unknown[]): string {
+  const attributes: Attributes = {
+    "ai.operationId": "ai.generateText.doGenerate",
+    "ai.prompt.messages": JSON.stringify([{ role: "user", content }]),
+  };
+  new NormalizingSpanProcessor().onEnd({
+    attributes,
+    events: [],
+    links: [],
+    status: { code: 0 },
+    startTime: [1700000000, 0],
+    endTime: [1700000001, 0],
+  } as unknown as ReadableSpan);
+  return attributes["gen_ai.input.messages"] as string;
+}
+
+/** The one part one AI SDK file or image part becomes. */
+function vercelPart(part: Record<string, AttributeValue | object>): string {
+  const [message] = JSON.parse(vercelMessages([part]));
+  expect(message.parts).toHaveLength(1);
+  return JSON.stringify(message.parts[0]);
+}
+
+type Made = { item: unknown } | { vercel: Record<string, AttributeValue | object> };
+
+/** Each part example of the contract, made from an input its `from` describes. */
+const EXAMPLE_INPUTS: Record<string, Made> = {
+  blob_with_a_known_size: {
+    item: { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+  },
+  blob_whose_bytes_never_arrived: { item: { type: "image_url", image_url: "__REDACTED__" } },
+  data_url_that_is_not_base64: { item: { type: "uri", uri: "data:text/plain,hello" } },
+  data_url_that_is_not_base64_and_empty: { item: { type: "uri", uri: "data:image/png," } },
+  blob_with_content_and_no_hint: { item: { type: "blob", content: "iVBORw0KGgo=" } },
+  blob_with_content_labelled_image_for_a_pdf: {
+    item: { type: "blob", content: "JVBERi0=", mime_type: "application/pdf", modality: "image" },
+  },
+  blob_with_content_that_is_an_empty_base64_data_url: {
+    item: { type: "blob", mime_type: "image/png", content: "data:;base64," },
+  },
+  blob_with_no_content_and_no_stripped_reason: { item: { type: "blob", modality: "audio" } },
+  blob_with_content_that_is_not_a_string: { item: { type: "blob", content: 5, byte_size: 8.0 } },
+  uri_with_no_mime_type_and_no_modality: {
+    item: { type: "uri", uri: "https://example.com/download" },
+  },
+  uri_with_members_out_of_order_keeps_its_modality: {
+    item: { uri: "https://example.com/talk", modality: "image", type: "uri", note: "x" },
+  },
+  uri_with_an_invalid_mime_type: {
+    item: { type: "uri", mime_type: "text/plain;charset=x", uri: "https://example.com/notes" },
+  },
+  uri_that_is_a_data_url: { item: { type: "uri", uri: "data:image/png;base64,iVBORw0KGgo=" } },
+  uri_with_a_mime_type: {
+    item: { type: "uri", mime_type: "audio/mpeg", uri: "https://example.com/a.mp3" },
+  },
+  uri_with_only_an_extension: { item: { type: "uri", uri: "https://example.com/clip.mov" } },
+  file_with_no_hint: { item: { type: "file", file_id: "file-abc123" } },
+  uri_with_a_cloud_storage_scheme: {
+    vercel: { type: "file", mediaType: "image/png", data: "gs://bucket/a.png" },
+  },
+  uri_tagged_url_with_an_s3_scheme: {
+    vercel: { type: "file", data: { type: "url", url: "s3://bucket/report.pdf" } },
+  },
+  uri_with_the_file_scheme_and_only_an_extension: {
+    vercel: { type: "file", data: "file:///tmp/clip.mov" },
+  },
+  vercel_file_by_url_with_no_media_type: {
+    vercel: { type: "file", data: "https://example.com/a.png" },
+  },
+  blob_from_an_unknown_v7_data_tag: {
+    vercel: { type: "file", mediaType: "image/png", data: { type: "reference", id: "x" } },
+  },
+  image_url_that_is_empty: { item: { type: "image_url", image_url: { url: "" } } },
+  image_url_that_is_redacted: { item: { type: "image_url", image_url: { url: "__REDACTED__" } } },
+  anthropic_url_source_that_is_empty: {
+    item: { type: "document", source: { type: "url", url: "" } },
+  },
+  anthropic_file_source_that_is_empty: {
+    item: { type: "image", source: { type: "file", file_id: "", media_type: "image/png" } },
+  },
+  input_image_with_an_empty_file_id: { item: { type: "input_image", file_id: "" } },
+  openai_file_with_an_empty_file_id: {
+    item: { type: "file", file: { file_id: "", filename: "a.png" } },
+  },
+  input_image_with_a_redacted_url_and_a_file_id: {
+    item: { type: "input_image", image_url: "__REDACTED__", file_id: "file-abc123" },
+  },
+};
+
+describe("the contract's part examples", () => {
+  const examples = CONTRACT.part_shapes.examples;
+
+  it("are every one made here", () => {
+    expect(Object.keys(EXAMPLE_INPUTS).sort()).toEqual(examples.map((e) => e.name).sort());
+  });
+
+  it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (name, example) => {
+    const made = EXAMPLE_INPUTS[name];
+    if ("vercel" in made) {
+      expect(vercelPart(made.vercel)).toBe(example.part);
+      return;
+    }
+    const [part] = parts([made.item][0]) ?? [];
+    expect(JSON.stringify(part)).toBe(example.part);
+  });
+});
+
+describe("the contract's message examples", () => {
+  const examples = CONTRACT.part_shapes.message_examples ?? [];
+
+  it("are there", () => {
+    expect(examples.length).toBeGreaterThan(0);
+  });
+
+  it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (_name, example) => {
+    expect(example.source).toBe("ai.prompt.messages");
+    const [message] = JSON.parse(example.input);
+    expect(vercelMessages(message.content)).toBe(example.output);
+  });
+});
+
+const redacted = (modality: string, mime?: string) => ({
+  type: "blob",
+  modality,
+  ...(mime ? { mime_type: mime } : {}),
+  stripped_reason: "redacted_upstream",
+});
+
+describe("a URL or file id dropped upstream", () => {
+  it.each([
+    [{ type: "image_url", image_url: { url: "" } }, redacted("image")],
+    [{ type: "image_url", image_url: "" }, redacted("image")],
+    [{ type: "image_url", image_url: { url: "__REDACTED__" } }, redacted("image")],
+    [{ type: "input_image", image_url: "" }, redacted("image")],
+    [{ type: "input_image", file_id: "" }, redacted("image")],
+    [{ type: "input_image", image_url: "", file_id: "__REDACTED__" }, redacted("image")],
+    [{ type: "image", source: { type: "url", url: "" } }, redacted("image")],
+    [
+      {
+        type: "document",
+        source: { type: "url", url: "__REDACTED__", media_type: "application/pdf" },
+      },
+      redacted("document", "application/pdf"),
+    ],
+    [{ type: "image", source: { type: "file", file_id: "" } }, redacted("image")],
+    [{ type: "document", source: { type: "file", file_id: "__REDACTED__" } }, redacted("document")],
+    [{ file_data: { mime_type: "image/png", file_uri: "" } }, redacted("image", "image/png")],
+    [{ fileData: { fileUri: "__REDACTED__" } }, redacted("document")],
+    [{ type: "file", file: { file_url: "__REDACTED__", filename: "a.png" } }, redacted("image")],
+    [{ type: "input_file", file_id: "__REDACTED__" }, redacted("document")],
+  ])("%j is a blob redacted upstream", (item, part) => {
+    expect(parts(item)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      { type: "input_image", image_url: "__REDACTED__", file_id: "file-1" },
+      { type: "file", modality: "image", file_id: "file-1" },
+    ],
+    [
+      { type: "input_image", image_url: "", file_id: "file-1" },
+      { type: "file", modality: "image", file_id: "file-1" },
+    ],
+    [
+      {
+        type: "file",
+        file: { file_id: "__REDACTED__", file_data: "iVBORw0KGgo=", filename: "a.png" },
+      },
+      { type: "blob", modality: "image", byte_size: 8, stripped_reason: "not_captured" },
+    ],
+    [
+      { type: "input_file", file_id: "__REDACTED__", file_url: "https://x/a.pdf" },
+      { type: "uri", modality: "document", uri: "https://x/a.pdf" },
+    ],
+  ])("loses to a usable reference: %j", (item, part) => {
+    expect(parts(item)).toEqual([part]);
+  });
+
+  it.each([
+    { file_id: "" },
+    { file_url: "" },
+    { file_data: "" },
+    { file_id: "", file_url: "", filename: "a.wav" },
+    { file_data: "", file_id: "__REDACTED__", filename: "a.wav" },
+    { file_data: "__REDACTED__", filename: "a.wav" },
+  ])("in an OpenAI file %j, with nothing usable, is a redacted blob, never a bare file", (file) => {
+    const part = redacted("filename" in file ? "audio" : "document");
+    expect(parts({ type: "file", file })).toEqual([part]);
+    expect(parts({ type: "input_file", ...file })).toEqual([part]);
+  });
+
+  it("leaves an OpenAI file with no reference at all as it came", () => {
+    expect(parts({ type: "input_file", filename: "a.png" })).toBeUndefined();
+  });
+
+  it("is kept in a native uri or file part, which is no provider item", () => {
+    expect(parts({ type: "uri", uri: "" })).toEqual([
+      { type: "uri", modality: "document", uri: "" },
+    ]);
+    expect(parts({ type: "file", file_id: "" })).toEqual([
+      { type: "file", modality: "document", file_id: "" },
+    ]);
+  });
+});
+
+describe("a URL of any scheme but data:", () => {
+  it.each([
+    [
+      { type: "image_url", image_url: { url: "gs://bucket/a.png" } },
+      { type: "uri", modality: "image", uri: "gs://bucket/a.png" },
+    ],
+    [
+      { type: "input_image", image_url: "s3://bucket/a.jpg" },
+      { type: "uri", modality: "image", uri: "s3://bucket/a.jpg" },
+    ],
+    [
+      { type: "document", source: { type: "url", url: "file:///tmp/a.pdf" } },
+      { type: "uri", modality: "document", uri: "file:///tmp/a.pdf" },
+    ],
+    [
+      { file_data: { file_uri: "s3://bucket/clip.webm" } },
+      { type: "uri", modality: "video", uri: "s3://bucket/clip.webm" },
+    ],
+    [
+      { type: "uri", uri: "gs://bucket/a.wav" },
+      { type: "uri", modality: "audio", uri: "gs://bucket/a.wav" },
+    ],
+  ])("keeps its link: %j", (item, part) => {
+    expect(parts(item)).toEqual([part]);
+  });
+});

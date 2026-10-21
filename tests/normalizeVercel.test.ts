@@ -3,6 +3,7 @@ import type { ReadableSpan, Span, TimedEvent } from "@opentelemetry/sdk-trace-ba
 import { describe, expect, it } from "vitest";
 import { NormalizingSpanProcessor, VERCEL_FIRST_CHUNK_EVENT } from "../src/normalize.js";
 import fixture from "./fixtures/vercel_cases.json" with { type: "json" };
+import { nonCanonical } from "./mediaContract.js";
 
 /**
  * The Vercel AI SDK's own telemetry (v5/v6, the ai.* dialect) mapped straight
@@ -58,6 +59,10 @@ describe("the shared cases", () => {
 
   it.each(cases.map((c) => [c.name, c] as const))("%s: a second pass changes nothing", (_n, c) => {
     expect(normalized(c.expected)).toEqual(c.expected);
+  });
+
+  it.each(cases.map((c) => [c.name, c] as const))("%s: every media part is canonical", (_n, c) => {
+    expect(nonCanonical(normalized(c.input))).toEqual([]);
   });
 });
 
