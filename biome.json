@@ -34,6 +34,10 @@
       "formatter": { "enabled": false }
     },
     {
+      "includes": ["**/src/semconv.generated.ts"],
+      "formatter": { "enabled": false }
+    },
+    {
       "includes": [
         "**/tests/fixtures/context_sizes_*.json",
         "**/tests/fixtures/openinference_messages.json",
