@@ -15,12 +15,27 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-export type PartExample = { name: string; from: string; part: string };
+export type PartExample = {
+  name: string;
+  from: string;
+  block?: string;
+  native?: string;
+  part: string;
+};
+export type InPlaceExample = { name: string; from: string; input: string; output: string };
 export type MessageExample = {
   name: string;
   from: string;
   source: string;
+  attributes?: Record<string, string>;
   input: string;
+  output: string;
+};
+
+export type ByteObjectExample = {
+  name: string;
+  language: string;
+  value: string;
   output: string;
 };
 
@@ -29,11 +44,18 @@ export const CONTRACT = JSON.parse(
 ) as {
   modalities: string[];
   stripped_reasons: Record<string, string>;
-  raw_payloads: { replacement: { mime_pattern: string } };
+  raw_payloads: {
+    replacement: { mime_pattern: string };
+    byte_objects: {
+      examples: ByteObjectExample[];
+      attribute_values: { examples: { name: string; language: string; output: unknown }[] };
+    };
+  };
   part_shapes: {
     members: Record<string, string[]>;
     examples: PartExample[];
     message_examples?: MessageExample[];
+    in_place_examples: InPlaceExample[];
   };
 };
 

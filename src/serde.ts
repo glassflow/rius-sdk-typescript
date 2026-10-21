@@ -1,5 +1,5 @@
 import type { AttributeValue } from "@opentelemetry/api";
-import { stripRawPayload } from "./mediaParts.js";
+import { replacement, stripRawPayload } from "./mediaParts.js";
 
 /**
  * Serialized payload cap, in characters, shared with the Python SDK so a
@@ -33,15 +33,46 @@ export function truncate(text: string): string {
  */
 function renderable(raw: unknown, value: unknown): unknown {
   if (typeof raw === "bigint") return String(raw);
-  if (raw instanceof Map) return Object.fromEntries(raw);
-  if (raw instanceof Set) return [...raw];
-  if (ArrayBuffer.isView(raw)) {
-    // Bytes are not content a trace can show; a size is, and a byte array
-    // exploded into JSON was many times the payload's own size.
-    return `<${raw.constructor.name} ${raw.byteLength} bytes>`;
+  if (raw instanceof Map) {
+    // A byte key would otherwise be written as its decimal bytes.
+    return Object.fromEntries(
+      [...raw].map(([k, v]) => [isByteObject(k) ? byteObjectMarker(k) : k, v]),
+    );
   }
-  if (raw instanceof ArrayBuffer) return `<ArrayBuffer ${raw.byteLength} bytes>`;
+  if (raw instanceof Set) return [...raw];
+  if (isByteObject(raw)) {
+    // Bytes are not content a trace can show; a size is, and a byte array
+    // exploded into JSON was many times the payload's own size. The marker
+    // is the strip's replacement with the unknown mime, the same text the
+    // Python SDK writes for bytes, so it is never stripped again.
+    return byteObjectMarker(raw);
+  }
   return value;
+}
+
+/** A byte object's marker: the strip's replacement, unknown mime, its size in bytes. */
+function byteObjectMarker(bytes: { byteLength: number }): string {
+  return replacement(undefined, bytes.byteLength);
+}
+
+/** The built-in tags of the byte objects that are not views. */
+const BUFFER_TAGS: readonly string[] = ["[object ArrayBuffer]", "[object SharedArrayBuffer]"];
+
+/**
+ * An ArrayBuffer, a SharedArrayBuffer or any view on one (each typed array,
+ * a Node Buffer, a DataView). Its byteLength is its size in bytes, a view's
+ * own length rather than its buffer's. Never `instanceof`: a buffer made in
+ * another realm (a vm context, a worker's transfer) has another realm's
+ * constructor, so isView and the built-in tag are what recognize it.
+ */
+function isByteObject(raw: unknown): raw is { byteLength: number } {
+  return (
+    ArrayBuffer.isView(raw) ||
+    (typeof raw === "object" &&
+      raw !== null &&
+      BUFFER_TAGS.includes(Object.prototype.toString.call(raw)) &&
+      typeof (raw as { byteLength?: unknown }).byteLength === "number")
+  );
 }
 
 /**
@@ -91,6 +122,8 @@ export function toAttributeValue(value: unknown): string | number | boolean {
   }
 }
 
+const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];
+
 /**
  * A value OTel will store as it is, else its bounded JSON encoding; `undefined`
  * for `null` / `undefined`, which mean "not set" rather than an empty string.
@@ -102,13 +135,52 @@ export function toAttributeValue(value: unknown): string | number | boolean {
  * but a much better one than silence. Unencoded, OTel would discard the
  * attribute with a warning and it would never reach the span. Booleans and
  * numbers are separate element types, so `[true, 1]` is encoded too.
+ *
+ * Byte objects are walked first (see {@link byteAttributeValue}): one alone
+ * is the bare marker string, and an array of byte objects and strings is an
+ * array of strings. A walked value OTel cannot hold (a mapping, or an array
+ * that is not homogeneous once nulls are set aside) is set as the value's
+ * JSON, its byte objects quoted markers.
  */
 export function attributeValue(value: unknown): AttributeValue | undefined {
   if (value === undefined || value === null) return undefined;
+  if (isByteObject(value)) return byteObjectMarker(value);
   if (Array.isArray(value)) {
-    if (value.every((v) => typeof v === "string")) return value as string[];
-    if (value.every((v) => typeof v === "number")) return value as number[];
-    if (value.every((v) => typeof v === "boolean")) return value as boolean[];
+    let items: unknown;
+    try {
+      items = byteAttributeValue(value);
+    } catch {
+      // Out of stack on a deep array: its JSON is still bounded and safe.
+      return toAttributeValue(value);
+    }
+    if (typeof items === "string") return items;
+    // Homogeneous as OTel JS reads it: null aside, all strings, numbers or booleans.
+    const list = items as unknown[];
+    const types = new Set(list.filter((v) => v !== null && v !== undefined).map((v) => typeof v));
+    const [type = "string"] = types;
+    if (types.size <= 1 && SCALAR_TYPES.includes(type)) return list as AttributeValue;
   }
   return toAttributeValue(value);
+}
+
+/**
+ * A value with every byte object in it, at any depth of its arrays, the bare
+ * marker string. OTel arrays are homogeneous, so each array is looked at on
+ * its own once its elements are walked: one that held a byte object beside
+ * an element that is then no string is its JSON instead, one string. Any
+ * other value is kept (a mapping can only sit in an array OTel cannot hold,
+ * which the caller encodes whole), and a cycle is left as it came for the
+ * JSON encoding to mark.
+ */
+function byteAttributeValue(value: unknown, ancestors: unknown[] = []): unknown {
+  if (isByteObject(value)) return byteObjectMarker(value);
+  if (!Array.isArray(value) || ancestors.includes(value)) return value;
+  ancestors.push(value);
+  try {
+    const items = value.map((v) => byteAttributeValue(v, ancestors));
+    const mixed = value.some(isByteObject) && !items.every((v) => typeof v === "string");
+    return mixed ? toAttributeValue(value) : items;
+  } finally {
+    ancestors.pop();
+  }
 }

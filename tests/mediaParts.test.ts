@@ -38,6 +38,14 @@ type Golden = {
   second_tokens?: GoldenToken[];
 };
 type Rule = Record<string, unknown> & { id: string };
+type TypedKey = {
+  key: string;
+  types: string[];
+  parent_keys?: string[];
+  keeps_urls?: boolean;
+  holder_mime?: boolean;
+  holder_types?: string[];
+};
 const REGISTRY = JSON.parse(
   readFileSync(join(HERE, "fixtures/semconv/media_parts.json"), "utf8"),
 ) as {
@@ -77,11 +85,17 @@ describe("the raw-payload strip", () => {
       sourceType: e.source_type,
       blobType: e.blob_type,
       blobKey: e.blob_key,
-      typedKeys: (e.typed_keys as { key: string; types: string[] }[]).map((t) => ({
+      typedKeys: (e.typed_keys as TypedKey[]).map((t) => ({
         key: t.key,
         types: t.types,
+        ...(t.parent_keys ? { parentKeys: t.parent_keys } : {}),
+        ...(t.keeps_urls ? { keepsUrls: t.keeps_urls } : {}),
+        ...(t.holder_mime ? { holderMime: t.holder_mime } : {}),
+        ...(t.holder_types ? { holderTypes: t.holder_types } : {}),
       })),
+      urlScheme: e.url_scheme,
       sourceBytesKeys: e.source_bytes_keys,
+      base64Markers: e.base64_markers,
       mimeKeys: e.mime_keys,
       mimeFormats: (e.mime_formats as { key: string; mime: string; parent_keys?: string[] }[]).map(
         (f) => ({
@@ -173,6 +187,113 @@ describe("the raw-payload strip", () => {
     expect(isReplacement("[stripped unknown unknown bytes]")).toBe(true);
     expect(isReplacement("[stripped image/png lots bytes]")).toBe(false);
     expect(isReplacement("[stripped a b 3 bytes]")).toBe(false);
+  });
+
+  // Each output is the registry's reference strip on the same input.
+  it.each([
+    [
+      "keeps a link in an array under a Vercel image, and gives a data URL its own mime",
+      '{"type":"image","image":["https://x.test/a.png","AAAA","data:image/gif;base64,AAAA"]}',
+      '{"type":"image","image":["https://x.test/a.png","[stripped unknown 3 bytes]","[stripped image/gif 3 bytes]"]}',
+      [
+        { rule: "e", mime: "unknown", byte_size: 3 },
+        { rule: "b", mime: "image/gif", byte_size: 3 },
+      ],
+    ],
+    [
+      "reads the holder's mime for tagged data through an array",
+      '{"type":"file","mediaType":"image/png","data":[{"type":"data","data":"AAAA"}]}',
+      '{"type":"file","mediaType":"image/png","data":[{"type":"data","data":"[stripped image/png 3 bytes]"}]}',
+      [{ rule: "e", mime: "image/png", byte_size: 3 }],
+    ],
+    [
+      "keeps a link in tagged data whose own sibling would make it keyed",
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"https://x.test/a","mediaType":"image/png"}}',
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"https://x.test/a","mediaType":"image/png"}}',
+      [],
+    ],
+    [
+      "reads tagged data's own mime before its holder's",
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"AAAA","mime_type":"audio/wav"}}',
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"[stripped audio/wav 3 bytes]","mime_type":"audio/wav"}}',
+      [{ rule: "e", mime: "audio/wav", byte_size: 3 }],
+    ],
+    [
+      "leaves tagged data under a parent key it does not name",
+      '{"content":{"type":"data","data":"AAAA"}}',
+      '{"content":{"type":"data","data":"AAAA"}}',
+      [],
+    ],
+    [
+      "counts a base64 marker only with exactly its value",
+      '{"type":"image","source_type":"Base64","data":"AAAA"}',
+      '{"type":"image","source_type":"Base64","data":"AAAA"}',
+      [],
+    ],
+    [
+      "makes a base64 marker context for its own keys alone",
+      '{"type":"image","source_type":"base64","result":"AAAA","data":"AAAA"}',
+      '{"type":"image","source_type":"base64","result":"AAAA","data":"[stripped unknown 3 bytes]"}',
+      [{ rule: "e", mime: "unknown", byte_size: 3 }],
+    ],
+    [
+      "reads a scheme only when it starts with a letter",
+      '{"type":"image","image":"1x:AAAA"}',
+      '{"type":"image","image":"[stripped unknown unknown bytes]"}',
+      [{ rule: "e", mime: "unknown", byte_size: "unknown" }],
+    ],
+    [
+      "reads a scheme of letters, digits, plus, dot and dash",
+      '{"type":"image","image":"a+b.c-d:rest"}',
+      '{"type":"image","image":"a+b.c-d:rest"}',
+      [],
+    ],
+    [
+      "counts a tagged data's holder by any of its type members",
+      '{"type":"text","type":"image","image":{"type":"data","data":"AAAA"}}',
+      '{"type":"text","type":"image","image":{"type":"data","data":"[stripped unknown 3 bytes]"}}',
+      [{ rule: "e", mime: "unknown", byte_size: 3 }],
+    ],
+    [
+      "hands a whole data URL to rule (b) whatever the scheme's case",
+      '{"type":"image","image":"DaTa:image/png;base64,AAAA"}',
+      '{"type":"image","image":"[stripped image/png 3 bytes]"}',
+      [{ rule: "b", mime: "image/png", byte_size: 3 }],
+    ],
+    [
+      "keeps a data URL with a trailing newline a rule (e) token",
+      '{"type":"image","image":"data:image/png;base64,AAAA\\n"}',
+      '{"type":"image","image":"[stripped unknown unknown bytes]"}',
+      [{ rule: "e", mime: "unknown", byte_size: "unknown" }],
+    ],
+    [
+      "reads each data URL of an array under a URL key on its own",
+      '{"type":"image","mediaType":"image/gif","image":["data:image/png;base64,AAAA","data:,x","https://x.test/a"]}',
+      '{"type":"image","mediaType":"image/gif","image":["[stripped image/png 3 bytes]","[stripped image/gif unknown bytes]","https://x.test/a"]}',
+      [
+        { rule: "b", mime: "image/png", byte_size: 3 },
+        { rule: "e", mime: "image/gif", byte_size: "unknown" },
+      ],
+    ],
+    [
+      "keeps no URL under a base64 marker's data",
+      '{"source_type":"base64","data":["AAAA","x:y"]}',
+      '{"source_type":"base64","data":["[stripped unknown 3 bytes]","[stripped unknown unknown bytes]"]}',
+      [
+        { rule: "e", mime: "unknown", byte_size: 3 },
+        { rule: "e", mime: "unknown", byte_size: "unknown" },
+      ],
+    ],
+    [
+      "finds a tagged data's holder through an array",
+      '[{"type":"image","image":[{"type":"data","data":"AAAA"}]}]',
+      '[{"type":"image","image":[{"type":"data","data":"[stripped unknown 3 bytes]"}]}]',
+      [{ rule: "e", mime: "unknown", byte_size: 3 }],
+    ],
+  ])("%s", (_name, input, output, tokens) => {
+    const result = strip(input);
+    expect(result.text).toBe(output);
+    expect(result.tokens.map(asGolden)).toEqual(tokens);
   });
 });
 
@@ -339,6 +460,191 @@ describe("provider media items as parts", () => {
     ],
   ])("maps the LangChain v1 base64 block %j to a blob", (block, part) => {
     expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  const dropped = (modality: string, mime?: string) => ({
+    type: "blob",
+    modality,
+    ...(mime === undefined ? {} : { mime_type: mime }),
+    stripped_reason: "redacted_upstream",
+  });
+
+  it.each([
+    [
+      { type: "image", url: "https://x.test/a.bin", mime_type: "image/png" },
+      { type: "uri", modality: "image", mime_type: "image/png", uri: "https://x.test/a.bin" },
+    ],
+    [
+      { type: "video", url: "gs://bucket/clip.png" },
+      { type: "uri", modality: "video", uri: "gs://bucket/clip.png" },
+    ],
+    [
+      { type: "file", url: "https://x.test/a.mp4?x=1" },
+      { type: "uri", modality: "video", uri: "https://x.test/a.mp4?x=1" },
+    ],
+    [
+      { type: "file", url: "https://x.test/a.png", mime_type: "application/pdf" },
+      {
+        type: "uri",
+        modality: "document",
+        mime_type: "application/pdf",
+        uri: "https://x.test/a.png",
+      },
+    ],
+    [{ type: "file", url: "data:;base64,UklGRg==" }, blob("document", undefined, 4)],
+    [
+      { type: "image", url: "data:image/jpeg;base64,AAAA", mime_type: "image/png" },
+      blob("image", "image/jpeg", 3),
+    ],
+    [
+      { type: "audio", file_id: "file-1" },
+      { type: "file", modality: "audio", file_id: "file-1" },
+    ],
+    [{ type: "image", url: "", file_id: "__REDACTED__" }, dropped("image")],
+    [{ type: "file", url: "__REDACTED__", mime_type: "audio/wav" }, dropped("audio", "audio/wav")],
+    [{ type: "video", url: 5, file_id: "" }, dropped("video")],
+  ])("maps the LangChain v1 reference block %j", (block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      "base64 over a url and a file_id",
+      { type: "image", url: "https://x.test/a.png", file_id: "f", base64: png },
+      blob("image", undefined, 8),
+    ],
+    [
+      "a usable file_id over a url",
+      { type: "image", url: "https://x.test/a.png", file_id: "f" },
+      { type: "file", modality: "image", file_id: "f" },
+    ],
+    [
+      "a usable url over a dropped file_id",
+      { type: "audio", url: "https://x.test/a", file_id: "" },
+      { type: "uri", modality: "audio", uri: "https://x.test/a" },
+    ],
+    [
+      "a file block's usable file_id over its base64 and url",
+      { type: "file", file_id: "f", base64: png, url: "https://x.test/a.png" },
+      { type: "file", modality: "document", file_id: "f" },
+    ],
+    [
+      "a usable url over a file block's redacted file_id",
+      { type: "file", file_id: "__REDACTED__", url: "https://x.test/a.png" },
+      { type: "uri", modality: "image", uri: "https://x.test/a.png" },
+    ],
+    [
+      "base64 over a file block's empty file_id",
+      { type: "file", file_id: "", base64: "JVBERi0=" },
+      blob("document", undefined, 5),
+    ],
+    [
+      "a file block's string file_id over a dropped url, kept as written",
+      { type: "file", file_id: "", url: "__REDACTED__" },
+      { type: "file", modality: "document", file_id: "" },
+    ],
+    [
+      "a url over a file block's file_id that is not a string",
+      { type: "file", file_id: 5, url: "https://x.test/a.wav" },
+      { type: "uri", modality: "audio", uri: "https://x.test/a.wav" },
+    ],
+    [
+      "a usable file_id over an OpenAI-style file member",
+      { type: "file", file: { file_data: png, filename: "a.png" }, file_id: "f" },
+      { type: "file", modality: "document", file_id: "f" },
+    ],
+  ])("reads a LangChain v1 block in its order: %s", (_name, block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      "kept by a file block by a usable file_id",
+      { type: "file", file_id: "f", modality: "audio", mime_type: "image/png" },
+      { type: "file", modality: "audio", mime_type: "image/png", file_id: "f" },
+    ],
+    [
+      "kept by a file block with a dropped file_id and nothing usable",
+      { type: "file", file_id: "", url: "", modality: "video" },
+      { type: "file", modality: "video", file_id: "" },
+    ],
+    [
+      "ignored by a block by url",
+      { type: "image", url: "https://x.test/a", modality: "audio" },
+      { type: "uri", modality: "image", uri: "https://x.test/a" },
+    ],
+    [
+      "ignored by a block by file_id",
+      { type: "audio", file_id: "f", modality: "image" },
+      { type: "file", modality: "audio", file_id: "f" },
+    ],
+  ])("has a LangChain v1 block's modality member %s", (_name, block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  const notCaptured = (modality: string, mime?: string) => ({
+    type: "blob",
+    modality,
+    ...(mime === undefined ? {} : { mime_type: mime }),
+    stripped_reason: "not_captured",
+  });
+
+  it.each([
+    [
+      "a link with data: in its path",
+      { type: "image", url: "https://x.test/metadata:a.png" },
+      notCaptured("image"),
+    ],
+    [
+      "a file's url holding DATA:, by its mime type, never its extension",
+      { type: "file", url: "a.wav DATA:x", mime_type: "application/pdf" },
+      notCaptured("document", "application/pdf"),
+    ],
+    [
+      "a file's url holding data:, with no mime type",
+      { type: "file", url: "x.png\ndata:image/png;base64,AAAA" },
+      notCaptured("document"),
+    ],
+    [
+      "a relative url",
+      { type: "video", url: "clips/a" },
+      { type: "uri", modality: "video", uri: "clips/a" },
+    ],
+  ])("reads a LangChain v1 block by %s", (_name, block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      "its mime type's modality first",
+      { type: "uri", modality: "image", mime_type: "audio/wav", uri: "x data:y" },
+      notCaptured("audio", "audio/wav"),
+    ],
+    [
+      "its own modality, with no mime type",
+      { type: "uri", modality: "video", uri: "https://x.test/a\tDATA:,x" },
+      notCaptured("video"),
+    ],
+    ["document, with neither", { type: "uri", uri: "a.png data:" }, notCaptured("document")],
+  ])("makes a blob of a native uri holding data: past its start, %s", (_name, item, part) => {
+    expect(providerMediaParts(item)).toEqual([part]);
+  });
+
+  it("reads a LangChain v0 url block as a v1 one, and leaves its base64 and id blocks", () => {
+    expect(
+      providerMediaParts({ type: "image", source_type: "url", url: "https://x.test/a.png" }),
+    ).toEqual([{ type: "uri", modality: "image", uri: "https://x.test/a.png" }]);
+    expect(providerMediaParts({ type: "image", source_type: "base64", data: png })).toBeUndefined();
+    expect(providerMediaParts({ type: "file", source_type: "id", id: "file-1" })).toBeUndefined();
+  });
+
+  it.each([
+    { type: "text-plain", url: "https://x.test/a.txt" },
+    { type: "text-plain", file_id: "file-1" },
+    { type: "image", url: 5 },
+    { type: "audio", file_id: null },
+  ])("leaves the LangChain v1 block %j as it came", (block) => {
+    expect(providerMediaParts(block)).toBeUndefined();
   });
 
   it("leaves a base64 member on a block type that names no media", () => {

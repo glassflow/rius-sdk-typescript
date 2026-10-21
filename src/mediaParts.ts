@@ -58,14 +58,33 @@ export const KEYED_RULE = {
   sourceType: "base64",
   blobType: "blob",
   blobKey: "content",
-  /** A key holding base64 whenever its object has one of the types. */
+  /**
+   * A key holding base64 whenever its object has one of the types, and, with
+   * parentKeys, its object's parent key is one of them, and, with
+   * holderTypes, the nearest object holding it has one of those types. With
+   * keepsUrls, a URL is left to rule (b) (see keptUrl); with holderMime, the
+   * mime type falls back to the enclosing object's mime keys.
+   */
   typedKeys: [
     { key: "base64", types: ["image", "audio", "video", "file", "text-plain"] },
     { key: "input_audio", types: ["input_audio"] },
     { key: "inputAudio", types: ["input_audio"] },
+    { key: "image", types: ["image"], keepsUrls: true },
+    {
+      key: "data",
+      types: ["data"],
+      parentKeys: ["data", "image"],
+      holderTypes: ["file", "image"],
+      keepsUrls: true,
+      holderMime: true,
+    },
   ],
+  /** A URL scheme at the start of a value, as part_shapes tells a URL from base64. */
+  urlScheme: "[A-Za-z][A-Za-z0-9+.-]*:",
   /** Keys holding base64 in an object under the source key, whatever its type. */
   sourceBytesKeys: ["bytes"],
+  /** A member naming its object's payload base64: context for its own keys alone. */
+  base64Markers: [{ key: "source_type", value: "base64", keys: ["data"] }],
   mimeKeys: ["media_type", "mediaType", "mime_type", "mimeType"],
   mimeFormats: [
     { key: "output_format", mime: "image/<value>" },
@@ -121,7 +140,7 @@ export function base64Size(value: string): number | undefined {
 }
 
 /** The text a media token in a raw payload is replaced by. */
-function replacement(mime: string | undefined, byteSize: number | undefined): string {
+export function replacement(mime: string | undefined, byteSize: number | undefined): string {
   // Function replacers: a mime may hold `$&`, which a string replacement reads.
   return REPLACEMENT_FORMAT.replace("<mime>", () => mime ?? REPLACEMENT_UNKNOWN).replace(
     "<byte_size>",
@@ -612,11 +631,75 @@ function includes(list: readonly string[], value: string | undefined): boolean {
   return value !== undefined && list.includes(value);
 }
 
+type TypedKey = (typeof KEYED_RULE.typedKeys)[number];
+
+/**
+ * The typed keys that hold in an object: one of its types is a type member's
+ * value, the parent key is one of its parent keys, if it names any, and the
+ * holder (the nearest enclosing object, as for rule (d)) has one of its
+ * holder types, if it names any.
+ */
+function typedKeys(
+  members: Members,
+  parentKey: string | undefined,
+  holder: Members | undefined,
+): TypedKey[] {
+  return KEYED_RULE.typedKeys.filter(
+    (typed) =>
+      (!("parentKeys" in typed) || includes(typed.parentKeys, parentKey)) &&
+      (!("holderTypes" in typed) ||
+        (holder !== undefined &&
+          first(holder, "type", (n) => includes(typed.holderTypes, n.text)) !== undefined)) &&
+      first(members, "type", (n) => includes(typed.types, n.text)) !== undefined,
+  );
+}
+
+const URL_SCHEME = new RegExp(`^${KEYED_RULE.urlScheme}`);
+
+/**
+ * The keys of an object whose URL strings rule (e) leaves to rule (b): those
+ * of a typed key that keeps URLs and holds in the object.
+ */
+function urlKeys(
+  members: Members,
+  parentKey: string | undefined,
+  holder: Members | undefined,
+): Set<string> {
+  return new Set(
+    typedKeys(members, parentKey, holder)
+      .filter((typed) => "keepsUrls" in typed)
+      .map((typed) => typed.key),
+  );
+}
+
+/**
+ * Whether a key that keeps URLs leaves a string to rule (b): it starts with a
+ * URL scheme (base64 holds no colon, so it never does), and either the scheme
+ * is not data, in any ASCII case, or rule (b)'s pattern matches all of it, so
+ * rule (b) replaces every byte. Any other data: string (wrapped, percent
+ * encoded, a broken run) stays a rule (e) token and is replaced whole.
+ */
+function keptUrl(value: string): boolean {
+  if (!URL_SCHEME.test(value)) return false;
+  return value.slice(0, value.indexOf(":")).toLowerCase() !== "data" || WHOLE_DATA_URL.test(value);
+}
+
+/** A string rule (e) replaces under `key`: a keyed string the key does not keep as a URL. */
+function keyedToken(node: JsonNode, key: string, urls: Set<string>): boolean {
+  return keyedString(node) && !(urls.has(key) && keptUrl(node.text ?? ""));
+}
+
 /**
  * Rule (e): the positions of the members holding base64 media, duplicates
- * included: a keyed string, or an array holding one directly.
+ * included: a keyed token, or an array holding one directly. A base64 marker
+ * is context for its own keys alone; `holder` is the nearest enclosing
+ * object, as for rule (d).
  */
-function keyedBase64(members: Members, parentKey: string | undefined): Set<number> {
+function keyedBase64(
+  members: Members,
+  parentKey: string | undefined,
+  holder: Members | undefined,
+): Set<number> {
   const rule = KEYED_RULE;
   const context =
     members.some(([k, v]) => includes(rule.siblingKeys, k) && siblingString(v)) ||
@@ -624,22 +707,37 @@ function keyedBase64(members: Members, parentKey: string | undefined): Set<numbe
     (parentKey === rule.sourceKey &&
       first(members, "type", isStringEqual(rule.sourceType)) !== undefined);
   const keys = new Set<string>(context ? rule.keys : []);
-  if (first(members, "type", isStringEqual(rule.blobType)) !== undefined) keys.add(rule.blobKey);
-  for (const typed of rule.typedKeys) {
-    if (first(members, "type", (n) => includes(typed.types, n.text)) !== undefined) {
-      keys.add(typed.key);
+  for (const marker of rule.base64Markers) {
+    if (first(members, marker.key, isStringEqual(marker.value)) !== undefined) {
+      for (const key of marker.keys) keys.add(key);
     }
   }
+  if (first(members, "type", isStringEqual(rule.blobType)) !== undefined) keys.add(rule.blobKey);
+  for (const typed of typedKeys(members, parentKey, holder)) keys.add(typed.key);
   if (parentKey === rule.sourceKey) for (const key of rule.sourceBytesKeys) keys.add(key);
+  const urls = urlKeys(members, parentKey, holder);
   const out = new Set<number>();
   members.forEach(([k, v], i) => {
-    if (keys.has(k) && (keyedString(v) || (v.items?.some(keyedString) ?? false))) out.add(i);
+    if (
+      keys.has(k) &&
+      (keyedToken(v, k, urls) || (v.items?.some((item) => keyedToken(item, k, urls)) ?? false))
+    ) {
+      out.add(i);
+    }
   });
   return out;
 }
 
-/** Rule (e)'s mime type: a mime key, else a mime format, else unknown. */
-function keyedMime(members: Members, parentKey: string | undefined): string | undefined {
+/**
+ * Rule (e)'s mime type: a mime key, else a mime format, else, when a typed
+ * key that reads the holder's mime holds in the object, a mime key of
+ * `holder` (the nearest enclosing object, as for rule (d)), else unknown.
+ */
+function keyedMime(
+  members: Members,
+  parentKey: string | undefined,
+  holder: Members | undefined,
+): string | undefined {
   const mime = mimeKey(KEYED_RULE.mimeKeys, members);
   if (mime !== undefined) return mime;
   for (const entry of KEYED_RULE.mimeFormats) {
@@ -648,6 +746,12 @@ function keyedMime(members: Members, parentKey: string | undefined): string | un
     if (sibling === undefined) continue;
     const candidate = entry.mime.replace("<value>", () => sibling);
     if (isMime(candidate)) return candidate;
+  }
+  if (
+    holder !== undefined &&
+    typedKeys(members, parentKey, holder).some((t) => "holderMime" in t)
+  ) {
+    return mimeKey(KEYED_RULE.mimeKeys, holder);
   }
   return undefined;
 }
@@ -715,17 +819,18 @@ function walk(
       edits.push([node.start, node.end, literal(mime, data.length)]);
       return;
     }
-    const keyed = keyedBase64(members, parentKey);
-    const mime = keyed.size > 0 ? keyedMime(members, parentKey) : undefined;
+    const keyed = keyedBase64(members, parentKey, holder);
+    const mime = keyed.size > 0 ? keyedMime(members, parentKey, holder) : undefined;
+    const urls = keyed.size > 0 ? urlKeys(members, parentKey, holder) : new Set<string>();
     members.forEach(([key, child], i) => {
       if (!keyed.has(i)) {
         walk(child, key, members, depth + 1, tokens, edits);
       } else if (child.items === undefined) {
-        keyedToken(child, mime, tokens, edits);
+        replaceKeyed(child, mime, tokens, edits);
       } else {
         // A string array under the key: each string element is a token.
         for (const item of child.items) {
-          if (keyedString(item)) keyedToken(item, mime, tokens, edits);
+          if (keyedToken(item, key, urls)) replaceKeyed(item, mime, tokens, edits);
           else walk(item, key, members, depth + 2, tokens, edits);
         }
       }
@@ -744,7 +849,7 @@ function walk(
 }
 
 /** Rule (e) on one string literal: replaced whole, quotes included. */
-function keyedToken(
+function replaceKeyed(
   node: JsonNode,
   mime: string | undefined,
   tokens: MediaToken[],
@@ -847,6 +952,15 @@ export function isDataUrl(value: string): boolean {
   return /^[dD][aA][tT][aA]:/.test(value);
 }
 
+/**
+ * Whether a string holds `data:` anywhere, in any case, with no trimming and
+ * no word boundary, as rule (b) finds one. A URL that holds it past its start
+ * (led by whitespace, or a link followed by a data URL) is no link to keep.
+ */
+function holdsDataScheme(value: string): boolean {
+  return /[dD][aA][tT][aA]:/.test(value);
+}
+
 /** What OpenInference writes in place of an image over its size limit. */
 export const OPENINFERENCE_REDACTED = "__REDACTED__";
 
@@ -947,7 +1061,9 @@ function asString(value: unknown): string | undefined {
 
 /**
  * A LangChain v1 standard content block's type, when it carries base64, and
- * the modality it names.
+ * the modality it names. A file or text-plain block names none, so it is a
+ * document unless its MIME type (or, for a file by URL, the URL's extension)
+ * says otherwise.
  */
 const LANGCHAIN_KINDS: Readonly<Record<string, Modality>> = {
   image: "image",
@@ -956,6 +1072,53 @@ const LANGCHAIN_KINDS: Readonly<Record<string, Modality>> = {
   file: "document",
   "text-plain": "document",
 };
+
+/** The LangChain v1 block types whose url or file_id is a reference to media. */
+const LANGCHAIN_REFERENCE_TYPES: readonly string[] = ["image", "audio", "video", "file"];
+
+/**
+ * A LangChain v1 standard content block as one part, by the first of:
+ * (1) a file block with a usable file_id is a native file part; (2) base64 is
+ * a blob; (3) a usable file_id a file; (4) a usable url a uri (a blob when it
+ * is a data URL); (5) a file block whose file_id is a string, with nothing
+ * else usable, a native file part, its file_id kept as written; (6) a url or
+ * file_id that is a string but dropped, a blob redacted upstream. A usable
+ * reference (base64 included) always wins over a dropped one. Only type,
+ * base64, url, file_id and mime_type are read, but for the native file parts,
+ * which keep a valid modality member first; so a v0 url block is read the
+ * same way and a v0 base64 or id block holds none of them. Undefined for any
+ * other block, which stays as it came (an Anthropic image or document, an
+ * OpenAI file).
+ */
+function langchainPart(item: Record<string, unknown>): Part[] | undefined {
+  const type = item.type;
+  if (typeof type !== "string" || !Object.hasOwn(LANGCHAIN_KINDS, type)) return undefined;
+  const fileId = usable(item.file_id);
+  if (type === "file" && fileId !== undefined) return nativeFilePart(item);
+  const kind = LANGCHAIN_KINDS[type] as Modality;
+  const mime = item.mime_type;
+  // Beside a file block's string file_id, an empty or redacted base64 points
+  // nowhere, so the block reads on; anywhere else it is a bare payload.
+  const droppedBase64 =
+    type === "file" && typeof item.file_id === "string" && isDropped(item.base64);
+  if (typeof item.base64 === "string" && !droppedBase64) {
+    return [base64Blob(item.base64, kind, mime)];
+  }
+  if (!LANGCHAIN_REFERENCE_TYPES.includes(type)) return undefined;
+  if (fileId !== undefined) return [fileIdPart(kind, mime, fileId)];
+  const url = usable(item.url);
+  if (url !== undefined) {
+    if (isDataUrl(url)) return [dataUrlBlob(url, kind, mime)];
+    if (holdsDataScheme(url)) return [blobPart(kind, mime, undefined, NOT_CAPTURED)];
+    // A file names no modality: a link's extension does, before document.
+    return [uriPart(type === "file" ? uriModality(url) : kind, mime, url)];
+  }
+  if (type === "file" && typeof item.file_id === "string") return nativeFilePart(item);
+  if (typeof item.url === "string" || typeof item.file_id === "string") {
+    return [droppedBlob(kind, mime)];
+  }
+  return undefined;
+}
 
 /** The part kind's modality, for a part with no MIME type. */
 function kindModality(type: unknown): Modality {
@@ -971,13 +1134,8 @@ function kindModality(type: unknown): Modality {
  */
 export function providerMediaParts(item: unknown): Part[] | undefined {
   if (!isRecord(item)) return undefined;
-  if (
-    typeof item.type === "string" &&
-    Object.hasOwn(LANGCHAIN_KINDS, item.type) &&
-    typeof item.base64 === "string"
-  ) {
-    return [base64Blob(item.base64, LANGCHAIN_KINDS[item.type] as Modality, item.mime_type)];
-  }
+  const langchain = langchainPart(item);
+  if (langchain !== undefined) return langchain;
   switch (item.type) {
     case "blob":
     case "uri":
@@ -1139,8 +1297,10 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * carrying content is stripped of it (sized from it, `not_captured`) and
  * takes its modality from its MIME type first (@ai-sdk/otel labels a PDF an
  * image). A uri holding a data URL is a blob, since a data URL is never a
- * uri. Undefined when it is not a media part this can read, which stays as
- * it came.
+ * uri, and so is one holding data: past its start, with no size. A file
+ * part holding a string base64 or url is a LangChain v1 file block and is
+ * read as one (see langchainPart). Undefined when it is not a media part
+ * this can read, which stays as it came.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
@@ -1168,19 +1328,33 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
     case "uri": {
       if (typeof part.uri !== "string") return undefined;
       if (isDataUrl(part.uri)) return [dataUrlBlob(part.uri, kind, mime)];
+      if (holdsDataScheme(part.uri)) return [blobPart(kind, mime, undefined, NOT_CAPTURED)];
       const out = shaped("uri", uriModality(part.uri));
       out.uri = part.uri;
       return [out];
     }
-    case "file": {
-      if (typeof part.file_id !== "string") return undefined;
-      const out = shaped("file");
-      out.file_id = part.file_id;
-      return [out];
-    }
+    case "file":
+      // A string base64 or url makes it a LangChain v1 file block, on every path.
+      if (typeof part.base64 === "string" || typeof part.url === "string") {
+        return langchainPart(part);
+      }
+      return nativeFilePart(part);
     default:
       return undefined;
   }
+}
+
+/** A native file part by its string file_id; undefined when it has none. */
+function nativeFilePart(part: Record<string, unknown>): Part[] | undefined {
+  if (typeof part.file_id !== "string") return undefined;
+  const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
+  const out: Part = {
+    type: "file",
+    modality: own ? (part.modality as Modality) : (modalityOf(part.mime_type) ?? "document"),
+  };
+  if (isMime(part.mime_type)) out.mime_type = part.mime_type;
+  out.file_id = part.file_id;
+  return [out];
 }
 
 /** The part spans of a message key, or undefined when it does not parse or is no list. */

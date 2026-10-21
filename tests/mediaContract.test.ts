@@ -6,7 +6,8 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
-import { providerMediaParts } from "../src/mediaParts.js";
+import { nativeMediaPart, providerMediaParts, rebuildNativeMediaParts } from "../src/mediaParts.js";
+import { serializeMessages } from "../src/messages.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { CONTRACT, canonicalErrors } from "./mediaContract.js";
 
@@ -112,17 +113,22 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
     item: { type: "file", file: { file_id: 5, filename: "a.wav" } },
   },
   input_file_with_no_reference_and_no_filename: { item: { type: "input_file" } },
+  uri_led_by_whitespace_holding_a_data_url: {
+    item: { type: "uri", modality: "image", uri: " data:image/png;base64,iVBO\nRw0KGgo=" },
+  },
 };
 
 describe("the contract's part examples", () => {
   const examples = CONTRACT.part_shapes.examples;
 
-  it("are every one made here", () => {
-    expect(Object.keys(EXAMPLE_INPUTS).sort()).toEqual(examples.map((e) => e.name).sort());
+  it("are every one made here, from the contract's block or an input built here", () => {
+    const built = examples.filter((e) => e.block === undefined).map((e) => e.name);
+    expect(Object.keys(EXAMPLE_INPUTS).sort()).toEqual(built.sort());
   });
 
   it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (name, example) => {
-    const made = EXAMPLE_INPUTS[name];
+    const made: Made =
+      example.block === undefined ? EXAMPLE_INPUTS[name] : { item: JSON.parse(example.block) };
     if ("vercel" in made) {
       expect(vercelPart(made.vercel)).toBe(example.part);
       return;
@@ -130,6 +136,32 @@ describe("the contract's part examples", () => {
     const [part] = parts([made.item][0]) ?? [];
     expect(JSON.stringify(part)).toBe(example.part);
   });
+});
+
+describe("the contract's native part examples", () => {
+  const examples = CONTRACT.part_shapes.examples.filter((e) => e.native !== undefined);
+
+  it("are there to check", () => {
+    expect(examples.length).toBeGreaterThan(0);
+  });
+
+  it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (_name, example) => {
+    const native = example.native as string;
+    const [part] = nativeMediaPart(JSON.parse(native)) ?? [];
+    expect(JSON.stringify(part)).toBe(example.part);
+    // The same part rebuilt in a message key, every other byte kept.
+    const messages = (part: string) => `[{"role":"user","parts":[${part}]}]`;
+    expect(rebuildNativeMediaParts(messages(native), true)).toBe(messages(example.part));
+  });
+});
+
+describe("the contract's in-place examples", () => {
+  it.each(CONTRACT.part_shapes.in_place_examples.map((e) => [e.name, e] as const))(
+    "%s, byte for byte",
+    (_name, example) => {
+      expect(rebuildNativeMediaParts(example.input, true)).toBe(example.output);
+    },
+  );
 });
 
 const blob = (members: Record<string, unknown> = {}) => ({
@@ -169,12 +201,37 @@ describe("a canonical part", () => {
   });
 });
 
+/**
+ * Message-example sources this SDK makes no messages from: the gen_ai.prompt.N
+ * content OpenLLMetry and Laminar flatten is the sink's to read. Their blocks
+ * still pass through this SDK as a message's content, and must make the same
+ * parts there.
+ */
+const OTHER_SOURCES = ["gen_ai.prompt.0.content"];
+
 describe("the contract's message examples", () => {
-  const examples = CONTRACT.part_shapes.message_examples ?? [];
+  const all = CONTRACT.part_shapes.message_examples ?? [];
+  const examples = all.filter((e) => !OTHER_SOURCES.includes(e.source));
 
   it("are there", () => {
     expect(examples.length).toBeGreaterThan(0);
   });
+
+  it("come from ai.prompt.messages, or from a source skipped by name", () => {
+    const sources = all.map((e) => e.source);
+    expect(sources.filter((s) => s !== "ai.prompt.messages")).toEqual(
+      sources.filter((s) => OTHER_SOURCES.includes(s)),
+    );
+  });
+
+  it.each(all.filter((e) => OTHER_SOURCES.includes(e.source)).map((e) => [e.name, e] as const))(
+    "%s's blocks, passed through as a message's content, byte for byte",
+    (_name, example) => {
+      const role = example.attributes?.["gen_ai.prompt.0.role"];
+      const message = { role, content: JSON.parse(example.input) };
+      expect(serializeMessages([message], "user")).toBe(example.output);
+    },
+  );
 
   it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (_name, example) => {
     expect(example.source).toBe("ai.prompt.messages");
