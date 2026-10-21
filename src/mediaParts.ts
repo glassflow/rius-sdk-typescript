@@ -58,14 +58,31 @@ export const KEYED_RULE = {
   sourceType: "base64",
   blobType: "blob",
   blobKey: "content",
-  /** A key holding base64 whenever its object has one of the types. */
+  /**
+   * A key holding base64 whenever its object has one of the types, and, with
+   * parentKeys, its object's parent key is one of them. With keepsUrls, a
+   * string that starts with a URL scheme is left to rule (b); with
+   * holderMime, the mime type falls back to the enclosing object's mime keys.
+   */
   typedKeys: [
     { key: "base64", types: ["image", "audio", "video", "file", "text-plain"] },
     { key: "input_audio", types: ["input_audio"] },
     { key: "inputAudio", types: ["input_audio"] },
+    { key: "image", types: ["image"], keepsUrls: true },
+    {
+      key: "data",
+      types: ["data"],
+      parentKeys: ["data", "image"],
+      keepsUrls: true,
+      holderMime: true,
+    },
   ],
+  /** A URL scheme at the start of a value, as part_shapes tells a URL from base64. */
+  urlScheme: "[A-Za-z][A-Za-z0-9+.-]*:",
   /** Keys holding base64 in an object under the source key, whatever its type. */
   sourceBytesKeys: ["bytes"],
+  /** A member naming its object's payload base64: context, as a sibling is. */
+  base64Markers: [{ key: "source_type", value: "base64" }],
   mimeKeys: ["media_type", "mediaType", "mime_type", "mimeType"],
   mimeFormats: [
     { key: "output_format", mime: "image/<value>" },
@@ -612,34 +629,82 @@ function includes(list: readonly string[], value: string | undefined): boolean {
   return value !== undefined && list.includes(value);
 }
 
+type TypedKey = (typeof KEYED_RULE.typedKeys)[number];
+
+/**
+ * The typed keys that hold in an object: one of its types is a type member's
+ * value, and the parent key is one of its parent keys, if it names any.
+ */
+function typedKeys(members: Members, parentKey: string | undefined): TypedKey[] {
+  return KEYED_RULE.typedKeys.filter(
+    (typed) =>
+      (!("parentKeys" in typed) || includes(typed.parentKeys, parentKey)) &&
+      first(members, "type", (n) => includes(typed.types, n.text)) !== undefined,
+  );
+}
+
+const URL_SCHEME = new RegExp(`^${KEYED_RULE.urlScheme}`);
+
+/**
+ * The keys of an object whose URL strings rule (e) leaves to rule (b): those
+ * of a typed key that keeps URLs and holds in the object.
+ */
+function urlKeys(members: Members, parentKey: string | undefined): Set<string> {
+  return new Set(
+    typedKeys(members, parentKey)
+      .filter((typed) => "keepsUrls" in typed)
+      .map((typed) => typed.key),
+  );
+}
+
+/**
+ * A string rule (e) replaces under `key`: a keyed string, unless the key
+ * keeps URLs and the string starts with a URL scheme. Base64 holds no colon,
+ * so it never does.
+ */
+function keyedToken(node: JsonNode, key: string, urls: Set<string>): boolean {
+  return keyedString(node) && !(urls.has(key) && URL_SCHEME.test(node.text ?? ""));
+}
+
 /**
  * Rule (e): the positions of the members holding base64 media, duplicates
- * included: a keyed string, or an array holding one directly.
+ * included: a keyed token, or an array holding one directly.
  */
 function keyedBase64(members: Members, parentKey: string | undefined): Set<number> {
   const rule = KEYED_RULE;
   const context =
     members.some(([k, v]) => includes(rule.siblingKeys, k) && siblingString(v)) ||
+    members.some(([k, v]) => rule.base64Markers.some((m) => k === m.key && v.text === m.value)) ||
     includes(rule.parentKeys, parentKey) ||
     (parentKey === rule.sourceKey &&
       first(members, "type", isStringEqual(rule.sourceType)) !== undefined);
   const keys = new Set<string>(context ? rule.keys : []);
   if (first(members, "type", isStringEqual(rule.blobType)) !== undefined) keys.add(rule.blobKey);
-  for (const typed of rule.typedKeys) {
-    if (first(members, "type", (n) => includes(typed.types, n.text)) !== undefined) {
-      keys.add(typed.key);
-    }
-  }
+  for (const typed of typedKeys(members, parentKey)) keys.add(typed.key);
   if (parentKey === rule.sourceKey) for (const key of rule.sourceBytesKeys) keys.add(key);
+  const urls = urlKeys(members, parentKey);
   const out = new Set<number>();
   members.forEach(([k, v], i) => {
-    if (keys.has(k) && (keyedString(v) || (v.items?.some(keyedString) ?? false))) out.add(i);
+    if (
+      keys.has(k) &&
+      (keyedToken(v, k, urls) || (v.items?.some((item) => keyedToken(item, k, urls)) ?? false))
+    ) {
+      out.add(i);
+    }
   });
   return out;
 }
 
-/** Rule (e)'s mime type: a mime key, else a mime format, else unknown. */
-function keyedMime(members: Members, parentKey: string | undefined): string | undefined {
+/**
+ * Rule (e)'s mime type: a mime key, else a mime format, else, when a typed
+ * key that reads the holder's mime holds in the object, a mime key of
+ * `holder` (the nearest enclosing object, as for rule (d)), else unknown.
+ */
+function keyedMime(
+  members: Members,
+  parentKey: string | undefined,
+  holder: Members | undefined,
+): string | undefined {
   const mime = mimeKey(KEYED_RULE.mimeKeys, members);
   if (mime !== undefined) return mime;
   for (const entry of KEYED_RULE.mimeFormats) {
@@ -648,6 +713,9 @@ function keyedMime(members: Members, parentKey: string | undefined): string | un
     if (sibling === undefined) continue;
     const candidate = entry.mime.replace("<value>", () => sibling);
     if (isMime(candidate)) return candidate;
+  }
+  if (holder !== undefined && typedKeys(members, parentKey).some((t) => "holderMime" in t)) {
+    return mimeKey(KEYED_RULE.mimeKeys, holder);
   }
   return undefined;
 }
@@ -716,16 +784,17 @@ function walk(
       return;
     }
     const keyed = keyedBase64(members, parentKey);
-    const mime = keyed.size > 0 ? keyedMime(members, parentKey) : undefined;
+    const mime = keyed.size > 0 ? keyedMime(members, parentKey, holder) : undefined;
+    const urls = keyed.size > 0 ? urlKeys(members, parentKey) : new Set<string>();
     members.forEach(([key, child], i) => {
       if (!keyed.has(i)) {
         walk(child, key, members, depth + 1, tokens, edits);
       } else if (child.items === undefined) {
-        keyedToken(child, mime, tokens, edits);
+        replaceKeyed(child, mime, tokens, edits);
       } else {
         // A string array under the key: each string element is a token.
         for (const item of child.items) {
-          if (keyedString(item)) keyedToken(item, mime, tokens, edits);
+          if (keyedToken(item, key, urls)) replaceKeyed(item, mime, tokens, edits);
           else walk(item, key, members, depth + 2, tokens, edits);
         }
       }
@@ -744,7 +813,7 @@ function walk(
 }
 
 /** Rule (e) on one string literal: replaced whole, quotes included. */
-function keyedToken(
+function replaceKeyed(
   node: JsonNode,
   mime: string | undefined,
   tokens: MediaToken[],

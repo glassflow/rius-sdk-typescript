@@ -7,6 +7,7 @@ import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
 import { providerMediaParts } from "../src/mediaParts.js";
+import { serializeMessages } from "../src/messages.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { CONTRACT, canonicalErrors } from "./mediaContract.js";
 
@@ -112,6 +113,36 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
     item: { type: "file", file: { file_id: 5, filename: "a.wav" } },
   },
   input_file_with_no_reference_and_no_filename: { item: { type: "input_file" } },
+  langchain_v1_image_by_url: {
+    item: { type: "image", url: "https://example.com/a.png", mime_type: "image/png" },
+  },
+  langchain_v1_image_by_url_kind_before_extension: {
+    item: { type: "image", url: "https://example.com/download.bin" },
+  },
+  langchain_v1_file_by_url_with_only_an_extension: {
+    item: { type: "file", url: "https://example.com/a.wav" },
+  },
+  langchain_v1_file_by_url_with_no_extension: { item: { type: "file", url: "s3://bucket/report" } },
+  langchain_v1_audio_by_data_url: {
+    item: { type: "audio", url: "data:;base64,UklGRg==", mime_type: "audio/wav" },
+  },
+  langchain_v1_image_by_redacted_url: {
+    item: { type: "image", url: "__REDACTED__", mime_type: "image/png" },
+  },
+  langchain_v1_file_by_empty_url: { item: { type: "file", url: "" } },
+  langchain_v1_image_by_file_id: { item: { type: "image", file_id: "file-abc123" } },
+  langchain_v1_video_by_empty_file_id: {
+    item: { type: "video", file_id: "", mime_type: "video/mp4" },
+  },
+  langchain_v1_image_by_redacted_url_and_a_file_id: {
+    item: { type: "image", url: "__REDACTED__", file_id: "file-abc123" },
+  },
+  langchain_v1_file_by_file_id: {
+    item: { type: "file", file_id: "file-abc123", mime_type: "application/pdf" },
+  },
+  langchain_v1_file_by_empty_file_id_is_a_native_file_part: {
+    item: { type: "file", file_id: "" },
+  },
 };
 
 describe("the contract's part examples", () => {
@@ -169,12 +200,37 @@ describe("a canonical part", () => {
   });
 });
 
+/**
+ * Message-example sources this SDK makes no messages from: the gen_ai.prompt.N
+ * content OpenLLMetry and Laminar flatten is the sink's to read. Their blocks
+ * still pass through this SDK as a message's content, and must make the same
+ * parts there.
+ */
+const OTHER_SOURCES = ["gen_ai.prompt.0.content"];
+
 describe("the contract's message examples", () => {
-  const examples = CONTRACT.part_shapes.message_examples ?? [];
+  const all = CONTRACT.part_shapes.message_examples ?? [];
+  const examples = all.filter((e) => !OTHER_SOURCES.includes(e.source));
 
   it("are there", () => {
     expect(examples.length).toBeGreaterThan(0);
   });
+
+  it("come from ai.prompt.messages, or from a source skipped by name", () => {
+    const sources = all.map((e) => e.source);
+    expect(sources.filter((s) => s !== "ai.prompt.messages")).toEqual(
+      sources.filter((s) => OTHER_SOURCES.includes(s)),
+    );
+  });
+
+  it.each(all.filter((e) => OTHER_SOURCES.includes(e.source)).map((e) => [e.name, e] as const))(
+    "%s's blocks, passed through as a message's content, byte for byte",
+    (_name, example) => {
+      const role = example.attributes?.["gen_ai.prompt.0.role"];
+      const message = { role, content: JSON.parse(example.input) };
+      expect(serializeMessages([message], "user")).toBe(example.output);
+    },
+  );
 
   it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (_name, example) => {
     expect(example.source).toBe("ai.prompt.messages");

@@ -446,6 +446,30 @@ describe("the raw-payload strip at the end of normalization", () => {
     );
   });
 
+  it("strips a Vercel image's base64 and tagged data left in ai.prompt, keeping links", () => {
+    const prompt = JSON.stringify({
+      messages: [
+        {
+          content: [
+            { type: "image", image: "iVBORw0KGgo=", mediaType: "image/png" },
+            { type: "image", image: "https://x.test/a.png" },
+            {
+              type: "file",
+              data: { type: "data", data: "JVBERi0=" },
+              mediaType: "application/pdf",
+            },
+            { type: "file", data: { type: "data", data: "gs://bucket/a.pdf" } },
+          ],
+        },
+      ],
+    });
+    expect(normalized({ "ai.prompt": prompt })["ai.prompt"]).toBe(
+      prompt
+        .replace('"iVBORw0KGgo="', '"[stripped image/png 8 bytes]"')
+        .replace('"JVBERi0="', '"[stripped application/pdf 5 bytes]"'),
+    );
+  });
+
   it("makes no part of a file in the caller's ai.prompt, keeping its text", () => {
     const out = normalized({
       "ai.operationId": "ai.generateText",

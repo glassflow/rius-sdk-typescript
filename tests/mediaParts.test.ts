@@ -38,6 +38,13 @@ type Golden = {
   second_tokens?: GoldenToken[];
 };
 type Rule = Record<string, unknown> & { id: string };
+type TypedKey = {
+  key: string;
+  types: string[];
+  parent_keys?: string[];
+  keeps_urls?: boolean;
+  holder_mime?: boolean;
+};
 const REGISTRY = JSON.parse(
   readFileSync(join(HERE, "fixtures/semconv/media_parts.json"), "utf8"),
 ) as {
@@ -77,11 +84,16 @@ describe("the raw-payload strip", () => {
       sourceType: e.source_type,
       blobType: e.blob_type,
       blobKey: e.blob_key,
-      typedKeys: (e.typed_keys as { key: string; types: string[] }[]).map((t) => ({
+      typedKeys: (e.typed_keys as TypedKey[]).map((t) => ({
         key: t.key,
         types: t.types,
+        ...(t.parent_keys ? { parentKeys: t.parent_keys } : {}),
+        ...(t.keeps_urls ? { keepsUrls: t.keeps_urls } : {}),
+        ...(t.holder_mime ? { holderMime: t.holder_mime } : {}),
       })),
+      urlScheme: e.url_scheme,
       sourceBytesKeys: e.source_bytes_keys,
+      base64Markers: e.base64_markers,
       mimeKeys: e.mime_keys,
       mimeFormats: (e.mime_formats as { key: string; mime: string; parent_keys?: string[] }[]).map(
         (f) => ({
@@ -173,6 +185,71 @@ describe("the raw-payload strip", () => {
     expect(isReplacement("[stripped unknown unknown bytes]")).toBe(true);
     expect(isReplacement("[stripped image/png lots bytes]")).toBe(false);
     expect(isReplacement("[stripped a b 3 bytes]")).toBe(false);
+  });
+
+  // Each output is the registry's reference strip on the same input.
+  it.each([
+    [
+      "keeps a link in an array under a Vercel image, and gives a data URL its own mime",
+      '{"type":"image","image":["https://x.test/a.png","AAAA","data:image/gif;base64,AAAA"]}',
+      '{"type":"image","image":["https://x.test/a.png","[stripped unknown 3 bytes]","[stripped image/gif 3 bytes]"]}',
+      [
+        { rule: "e", mime: "unknown", byte_size: 3 },
+        { rule: "b", mime: "image/gif", byte_size: 3 },
+      ],
+    ],
+    [
+      "reads the holder's mime for tagged data through an array",
+      '{"type":"file","mediaType":"image/png","data":[{"type":"data","data":"AAAA"}]}',
+      '{"type":"file","mediaType":"image/png","data":[{"type":"data","data":"[stripped image/png 3 bytes]"}]}',
+      [{ rule: "e", mime: "image/png", byte_size: 3 }],
+    ],
+    [
+      "keeps a link in tagged data whose own sibling would make it keyed",
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"https://x.test/a","mediaType":"image/png"}}',
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"https://x.test/a","mediaType":"image/png"}}',
+      [],
+    ],
+    [
+      "reads tagged data's own mime before its holder's",
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"AAAA","mime_type":"audio/wav"}}',
+      '{"type":"file","mediaType":"image/png","data":{"type":"data","data":"[stripped audio/wav 3 bytes]","mime_type":"audio/wav"}}',
+      [{ rule: "e", mime: "audio/wav", byte_size: 3 }],
+    ],
+    [
+      "leaves tagged data under a parent key it does not name",
+      '{"content":{"type":"data","data":"AAAA"}}',
+      '{"content":{"type":"data","data":"AAAA"}}',
+      [],
+    ],
+    [
+      "counts a base64 marker only with exactly its value",
+      '{"type":"image","source_type":"Base64","data":"AAAA"}',
+      '{"type":"image","source_type":"Base64","data":"AAAA"}',
+      [],
+    ],
+    [
+      "makes a base64 marker context for every keyed member",
+      '{"type":"image","source_type":"base64","result":"AAAA"}',
+      '{"type":"image","source_type":"base64","result":"[stripped unknown 3 bytes]"}',
+      [{ rule: "e", mime: "unknown", byte_size: 3 }],
+    ],
+    [
+      "reads a scheme only when it starts with a letter",
+      '{"type":"image","image":"1x:AAAA"}',
+      '{"type":"image","image":"[stripped unknown unknown bytes]"}',
+      [{ rule: "e", mime: "unknown", byte_size: "unknown" }],
+    ],
+    [
+      "reads a scheme of letters, digits, plus, dot and dash",
+      '{"type":"image","image":"a+b.c-d:rest"}',
+      '{"type":"image","image":"a+b.c-d:rest"}',
+      [],
+    ],
+  ])("%s", (_name, input, output, tokens) => {
+    const result = strip(input);
+    expect(result.text).toBe(output);
+    expect(result.tokens.map(asGolden)).toEqual(tokens);
   });
 });
 

@@ -20,6 +20,7 @@ export type MessageExample = {
   name: string;
   from: string;
   source: string;
+  attributes?: Record<string, string>;
   input: string;
   output: string;
 };
