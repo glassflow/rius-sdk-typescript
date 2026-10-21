@@ -15,7 +15,14 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-export type PartExample = { name: string; from: string; block?: string; part: string };
+export type PartExample = {
+  name: string;
+  from: string;
+  block?: string;
+  native?: string;
+  part: string;
+};
+export type InPlaceExample = { name: string; from: string; input: string; output: string };
 export type MessageExample = {
   name: string;
   from: string;
@@ -48,6 +55,7 @@ export const CONTRACT = JSON.parse(
     members: Record<string, string[]>;
     examples: PartExample[];
     message_examples?: MessageExample[];
+    in_place_examples: InPlaceExample[];
   };
 };
 

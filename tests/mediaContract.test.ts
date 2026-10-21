@@ -6,7 +6,7 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
-import { providerMediaParts } from "../src/mediaParts.js";
+import { nativeMediaPart, providerMediaParts, rebuildNativeMediaParts } from "../src/mediaParts.js";
 import { serializeMessages } from "../src/messages.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { CONTRACT, canonicalErrors } from "./mediaContract.js";
@@ -136,6 +136,32 @@ describe("the contract's part examples", () => {
     const [part] = parts([made.item][0]) ?? [];
     expect(JSON.stringify(part)).toBe(example.part);
   });
+});
+
+describe("the contract's native part examples", () => {
+  const examples = CONTRACT.part_shapes.examples.filter((e) => e.native !== undefined);
+
+  it("are there to check", () => {
+    expect(examples.length).toBeGreaterThan(0);
+  });
+
+  it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (_name, example) => {
+    const native = example.native as string;
+    const [part] = nativeMediaPart(JSON.parse(native)) ?? [];
+    expect(JSON.stringify(part)).toBe(example.part);
+    // The same part rebuilt in a message key, every other byte kept.
+    const messages = (part: string) => `[{"role":"user","parts":[${part}]}]`;
+    expect(rebuildNativeMediaParts(messages(native), true)).toBe(messages(example.part));
+  });
+});
+
+describe("the contract's in-place examples", () => {
+  it.each(CONTRACT.part_shapes.in_place_examples.map((e) => [e.name, e] as const))(
+    "%s, byte for byte",
+    (_name, example) => {
+      expect(rebuildNativeMediaParts(example.input, true)).toBe(example.output);
+    },
+  );
 });
 
 const blob = (members: Record<string, unknown> = {}) => ({

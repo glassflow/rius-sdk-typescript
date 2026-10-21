@@ -227,6 +227,10 @@ describe("the contract's attribute values", () => {
     typescript_byte_object_beside_a_number: () => [1, new Uint8Array(2)],
     typescript_byte_object_beside_a_number_in_a_mapping: () => ({ k: [1, new Uint8Array(2)] }),
     typescript_byte_object_beside_a_number_in_a_nested_array: () => [[1, new Uint8Array(1)]],
+    typescript_byte_object_beside_a_number_in_an_array_beside_a_number: () => [
+      1,
+      [1, new Uint8Array(1)],
+    ],
   };
 
   it("covers every TypeScript example of the contract", () => {
