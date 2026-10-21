@@ -155,36 +155,23 @@ export function attributeValue(value: unknown): AttributeValue | undefined {
 }
 
 /**
- * A value with every byte object in it, at any depth of its arrays and plain
- * objects, the bare marker string. OTel arrays are homogeneous, so each array
- * is looked at on its own once its elements are walked: one that held a byte
- * object beside an element that is then no string is its JSON instead, one
- * string. Any other value is kept, and a cycle is left as it came for the
+ * A value with every byte object in it, at any depth of its arrays, the bare
+ * marker string. OTel arrays are homogeneous, so each array is looked at on
+ * its own once its elements are walked: one that held a byte object beside
+ * an element that is then no string is its JSON instead, one string. Any
+ * other value is kept (a mapping can only sit in an array OTel cannot hold,
+ * which the caller encodes whole), and a cycle is left as it came for the
  * JSON encoding to mark.
  */
 function byteAttributeValue(value: unknown, ancestors: unknown[] = []): unknown {
   if (isByteObject(value)) return byteObjectMarker(value);
-  const array = Array.isArray(value);
-  if ((!array && !isPlainObject(value)) || ancestors.includes(value)) return value;
+  if (!Array.isArray(value) || ancestors.includes(value)) return value;
   ancestors.push(value);
   try {
-    if (!array) {
-      return Object.fromEntries(
-        Object.entries(value as object).map(([k, v]) => [k, byteAttributeValue(v, ancestors)]),
-      );
-    }
-    const items = (value as unknown[]).map((v) => byteAttributeValue(v, ancestors));
-    const mixed =
-      (value as unknown[]).some(isByteObject) && !items.every((v) => typeof v === "string");
+    const items = value.map((v) => byteAttributeValue(v, ancestors));
+    const mixed = value.some(isByteObject) && !items.every((v) => typeof v === "string");
     return mixed ? toAttributeValue(value) : items;
   } finally {
     ancestors.pop();
   }
-}
-
-/** An object literal's shape: its prototype is Object's, or none. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 }
