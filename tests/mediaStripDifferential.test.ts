@@ -7,50 +7,27 @@ import { startGeneration } from "../src/generation.js";
 import {
   base64Size,
   DATA_URL_PATTERN,
-  isMime,
-  type MediaToken,
+  dataUrlBlob,
   recordSplits,
-  replacement,
   splitMedia,
   stripRawPayload,
   type TextSplit,
 } from "../src/mediaParts.js";
 import { normalizeMessages } from "../src/messages.js";
 import { toAttributeValue } from "../src/serde.js";
+import { contextSizes as mainContextSizes } from "./fixtures/main/contextSizes.js";
+import {
+  base64Size as mainBase64Size,
+  dataUrlBlob as mainDataUrlBlob,
+  splitMedia as mainSplitMedia,
+  stripRawPayload as mainStripRawPayload,
+} from "./fixtures/main/mediaParts.js";
 
-// --- the strip before the data-URL size and the reused splits, frozen ------------
-
-function frozenBase64Size(value: string): number | undefined {
-  const text = value.replace(/[ \t\n\r]/g, "");
-  const body = text.replace(/=+$/, "");
-  const padding = text.length - body.length;
-  if (padding > 2 || text.length % 4 !== 0 || !/^[A-Za-z0-9+/_-]*$/.test(body)) return undefined;
-  if (/[+/]/.test(body) && /[-_]/.test(body)) return undefined;
-  return (text.length * 3) / 4 - padding;
-}
-
-/** Rule (b) on a text that is no JSON candidate: the whole of the strip there. */
-function frozenStrip(text: string): { text: string; tokens: MediaToken[]; written: number } {
-  const tokens: MediaToken[] = [];
-  let written = 0;
-  const stripped = text.replace(new RegExp(DATA_URL_PATTERN, "g"), (_, mime, _last, run) => {
-    const token: MediaToken = {
-      rule: "b",
-      mime: isMime(mime) ? mime : undefined,
-      byteSize: frozenBase64Size(run),
-    };
-    tokens.push(token);
-    const replaced = replacement(token.mime, token.byteSize);
-    written += Buffer.byteLength(replaced);
-    return replaced;
-  });
-  return { text: stripped, tokens, written };
-}
-
-function frozenSplit(text: string): TextSplit {
-  const { text: stripped, tokens, written } = frozenStrip(text);
-  return { proseBytes: Buffer.byteLength(stripped) - written, tokens };
-}
+// --- main's strip and sizes, snapshotted ---------------------------------------------
+//
+// tests/fixtures/main holds mediaParts.ts and contextSizes.ts exactly as they
+// were before the data-URL size and the reused splits, so each case compares
+// that code, not a re-implementation of it, against the current source.
 
 // --- generated inputs -------------------------------------------------------------
 
@@ -151,38 +128,19 @@ function messages(rng: () => number): Array<{ role: string; parts: Record<string
   }));
 }
 
-/** Every string leaf of a JSON value stripped by the frozen rule (b). */
-function stripLeaves(value: unknown): unknown {
-  if (typeof value === "string") return frozenStrip(value).text;
-  if (Array.isArray(value)) return value.map(stripLeaves);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, stripLeaves(v)]));
-  }
-  return value;
-}
-
-/**
- * The sizes the old code wrote: every text split from scratch, by the frozen
- * strip where rule (b) is the whole of it.
- */
-function frozenSizes(inputs: unknown[], outputs?: unknown[]): string {
-  return contextSizes(undefined, inputs, outputs, (content) =>
-    /^[ \t\n\r]*[{[]/.test(content) ? undefined : frozenSplit(content),
-  );
-}
-
 // --- the differential ---------------------------------------------------------------
 
-describe("the data-URL strip against its frozen predecessor", () => {
+describe("the data-URL strip against main", () => {
   it("sizes every base64 run as the old base64Size did", () => {
     const rng = generator(1);
     for (let i = 0; i < 5000; i++) {
       const run = base64Run(rng);
-      expect(base64Size(run)).toBe(frozenBase64Size(run));
+      expect(base64Size(run)).toBe(mainBase64Size(run));
       // The run as the pattern matched it: whole, or cut at its first invalid character.
       const url = `data:image/png;base64,${run}`;
       const matched = new RegExp(DATA_URL_PATTERN).exec(url)?.[3];
-      expect(splitMedia(url).tokens[0].byteSize).toBe(frozenBase64Size(matched ?? ""));
+      expect(splitMedia(url).tokens[0].byteSize).toBe(mainBase64Size(matched ?? ""));
+      expect(dataUrlBlob(url, "image")).toEqual(mainDataUrlBlob(url, "image"));
     }
   });
 
@@ -190,8 +148,8 @@ describe("the data-URL strip against its frozen predecessor", () => {
     const rng = generator(2);
     for (let i = 0; i < 5000; i++) {
       const value = text(rng);
-      expect(stripRawPayload(value)).toBe(frozenStrip(value).text);
-      expect(splitMedia(value)).toEqual(frozenSplit(value));
+      expect(stripRawPayload(value)).toBe(mainStripRawPayload(value));
+      expect(splitMedia(value)).toEqual(mainSplitMedia(value));
     }
   });
 
@@ -199,7 +157,8 @@ describe("the data-URL strip against its frozen predecessor", () => {
     const rng = generator(3);
     for (let i = 0; i < 2000; i++) {
       const document = JSON.parse(candidate(rng));
-      expect(stripRawPayload(JSON.stringify(document))).toBe(JSON.stringify(stripLeaves(document)));
+      const raw = JSON.stringify(document);
+      expect(stripRawPayload(raw)).toBe(mainStripRawPayload(raw));
     }
   });
 
@@ -217,7 +176,7 @@ describe("the data-URL strip against its frozen predecessor", () => {
         else expect(split).toEqual(splitMedia(content));
       }
       expect(contextSizes(undefined, msgs, undefined, (t) => splits.get(t))).toBe(
-        frozenSizes(msgs),
+        mainContextSizes(undefined, msgs, undefined),
       );
     }
   });
@@ -261,7 +220,8 @@ describe("rius.context.sizes with the reused splits", () => {
       if (output !== undefined) generation.setOutput(output);
       generation.end();
       expected.push(
-        frozenSizes(
+        mainContextSizes(
+          undefined,
           normalizeMessages(input, "user"),
           output === undefined ? undefined : normalizeMessages(output, "assistant"),
         ),
