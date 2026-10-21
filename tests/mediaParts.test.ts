@@ -480,16 +480,61 @@ describe("provider media items as parts", () => {
       { type: "uri", modality: "audio", uri: "https://x.test/a" },
     ],
     [
-      "a file block's string file_id over its base64",
+      "a file block's usable file_id over its base64 and url",
       { type: "file", file_id: "f", base64: png, url: "https://x.test/a.png" },
       { type: "file", modality: "document", file_id: "f" },
     ],
     [
-      "a file block's redacted file_id over its url",
+      "a usable url over a file block's redacted file_id",
       { type: "file", file_id: "__REDACTED__", url: "https://x.test/a.png" },
-      { type: "file", modality: "document", file_id: "__REDACTED__" },
+      { type: "uri", modality: "image", uri: "https://x.test/a.png" },
+    ],
+    [
+      "base64 over a file block's empty file_id",
+      { type: "file", file_id: "", base64: "JVBERi0=" },
+      blob("document", undefined, 5),
+    ],
+    [
+      "a file block's string file_id over a dropped url, kept as written",
+      { type: "file", file_id: "", url: "__REDACTED__" },
+      { type: "file", modality: "document", file_id: "" },
+    ],
+    [
+      "a url over a file block's file_id that is not a string",
+      { type: "file", file_id: 5, url: "https://x.test/a.wav" },
+      { type: "uri", modality: "audio", uri: "https://x.test/a.wav" },
+    ],
+    [
+      "a usable file_id over an OpenAI-style file member",
+      { type: "file", file: { file_data: png, filename: "a.png" }, file_id: "f" },
+      { type: "file", modality: "document", file_id: "f" },
     ],
   ])("reads a LangChain v1 block in its order: %s", (_name, block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      "kept by a file block by a usable file_id",
+      { type: "file", file_id: "f", modality: "audio", mime_type: "image/png" },
+      { type: "file", modality: "audio", mime_type: "image/png", file_id: "f" },
+    ],
+    [
+      "kept by a file block with a dropped file_id and nothing usable",
+      { type: "file", file_id: "", url: "", modality: "video" },
+      { type: "file", modality: "video", file_id: "" },
+    ],
+    [
+      "ignored by a block by url",
+      { type: "image", url: "https://x.test/a", modality: "audio" },
+      { type: "uri", modality: "image", uri: "https://x.test/a" },
+    ],
+    [
+      "ignored by a block by file_id",
+      { type: "audio", file_id: "f", modality: "image" },
+      { type: "file", modality: "audio", file_id: "f" },
+    ],
+  ])("has a LangChain v1 block's modality member %s", (_name, block, part) => {
     expect(providerMediaParts(block)).toEqual([part]);
   });
 

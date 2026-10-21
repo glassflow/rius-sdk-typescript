@@ -1032,24 +1032,28 @@ const LANGCHAIN_KINDS: Readonly<Record<string, Modality>> = {
 const LANGCHAIN_REFERENCE_TYPES: readonly string[] = ["image", "audio", "video", "file"];
 
 /**
- * A LangChain v1 standard content block as one part, by the first of: a file
- * block whose file_id is a string is a native file part (its file_id kept,
- * empty or redacted included); base64 is a blob; a usable file_id a file; a
- * usable url a uri (a blob when it is a data URL); a url or file_id that is a
- * string but dropped, a blob redacted upstream. Only type, base64, url,
- * file_id and mime_type are read, so a v0 url block is read the same way and
- * a v0 base64 or id block holds none of them. Undefined for any other block,
- * which stays as it came (an Anthropic image or document, an OpenAI file).
+ * A LangChain v1 standard content block as one part, by the first of:
+ * (1) a file block with a usable file_id is a native file part; (2) base64 is
+ * a blob; (3) a usable file_id a file; (4) a usable url a uri (a blob when it
+ * is a data URL); (5) a file block whose file_id is a string, with nothing
+ * else usable, a native file part, its file_id kept as written; (6) a url or
+ * file_id that is a string but dropped, a blob redacted upstream. A usable
+ * reference (base64 included) always wins over a dropped one. Only type,
+ * base64, url, file_id and mime_type are read, but for the native file parts,
+ * which keep a valid modality member first; so a v0 url block is read the
+ * same way and a v0 base64 or id block holds none of them. Undefined for any
+ * other block, which stays as it came (an Anthropic image or document, an
+ * OpenAI file).
  */
 function langchainPart(item: Record<string, unknown>): Part[] | undefined {
   const type = item.type;
   if (typeof type !== "string" || !Object.hasOwn(LANGCHAIN_KINDS, type)) return undefined;
-  if (type === "file" && typeof item.file_id === "string") return nativeMediaPart(item);
+  const fileId = usable(item.file_id);
+  if (type === "file" && fileId !== undefined) return nativeMediaPart(item);
   const kind = LANGCHAIN_KINDS[type] as Modality;
   const mime = item.mime_type;
   if (typeof item.base64 === "string") return [base64Blob(item.base64, kind, mime)];
   if (!LANGCHAIN_REFERENCE_TYPES.includes(type)) return undefined;
-  const fileId = usable(item.file_id);
   if (fileId !== undefined) return [fileIdPart(kind, mime, fileId)];
   const url = usable(item.url);
   if (url !== undefined) {
@@ -1057,6 +1061,7 @@ function langchainPart(item: Record<string, unknown>): Part[] | undefined {
     const urlKind = type === "file" && !isDataUrl(url) ? uriModality(url) : kind;
     return [urlPart(url, urlKind, mime)];
   }
+  if (type === "file" && typeof item.file_id === "string") return nativeMediaPart(item);
   if (typeof item.url === "string" || typeof item.file_id === "string") {
     return [droppedBlob(kind, mime)];
   }
