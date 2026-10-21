@@ -150,6 +150,17 @@ describe("Observation.setAttribute value handling", () => {
     expect("nil" in attrs).toBe(false);
     expect(attrs.obj).toBe('{"k":"v"}');
   });
+
+  it("writes a byte object, alone or in an array, as the bare marker", async () => {
+    const obs = startSpan("bytes");
+    obs.setAttribute("image", Buffer.from([137, 80, 78, 71]));
+    obs.setAttribute("chunks", [new Uint8Array(2), new ArrayBuffer(3)]);
+    obs.end();
+    await client.flush();
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(attrs.image).toBe("[stripped unknown 4 bytes]");
+    expect(attrs.chunks).toEqual(["[stripped unknown 2 bytes]", "[stripped unknown 3 bytes]"]);
+  });
 });
 
 // GenAI semconv: error.type is Conditionally Required on every span that ends

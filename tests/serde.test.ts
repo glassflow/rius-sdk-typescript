@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { errorType } from "../src/errorType.js";
-import { toAttributeValue } from "../src/serde.js";
+import { attributeValue, toAttributeValue } from "../src/serde.js";
 import { CONTRACT } from "./mediaContract.js";
 
 describe("toAttributeValue", () => {
@@ -167,5 +167,45 @@ describe("errorType", () => {
   it("falls back to the runtime type for a non-Error throwable", () => {
     expect(errorType("just a string")).toBe("string");
     expect(errorType(42)).toBe("number");
+  });
+});
+
+describe("a byte object set as an attribute value", () => {
+  it.each([
+    ["a Buffer", Buffer.from([137, 80, 78, 71]), "[stripped unknown 4 bytes]"],
+    ["a Uint16Array (2 bytes an item)", new Uint16Array(3), "[stripped unknown 6 bytes]"],
+    ["an ArrayBuffer", new ArrayBuffer(0), "[stripped unknown 0 bytes]"],
+    ["a DataView", new DataView(new ArrayBuffer(8), 4), "[stripped unknown 4 bytes]"],
+    [
+      "a Uint8Array from another realm",
+      runInNewContext("new Uint8Array(2)"),
+      "[stripped unknown 2 bytes]",
+    ],
+  ])("is %s as the bare marker, with no JSON quotes", (_name, value, marker) => {
+    expect(attributeValue(value)).toBe(marker);
+  });
+
+  it("is each byte object element of an array as the bare marker", () => {
+    expect(
+      attributeValue([Buffer.from("ab"), new Uint8Array(3), new SharedArrayBuffer(8)]),
+    ).toEqual([
+      "[stripped unknown 2 bytes]",
+      "[stripped unknown 3 bytes]",
+      "[stripped unknown 8 bytes]",
+    ]);
+    expect(attributeValue(["plain", new Uint8Array(1)])).toEqual([
+      "plain",
+      "[stripped unknown 1 bytes]",
+    ]);
+  });
+
+  it("keeps an array with other kinds of element JSON-encoded, its bytes as the marker", () => {
+    expect(attributeValue([1, new Uint8Array(2)])).toBe('[1,"[stripped unknown 2 bytes]"]');
+  });
+});
+
+describe("a lone surrogate in a serialized value", () => {
+  it("is written as its lower-case \\uXXXX escape, as the reference writes it", () => {
+    expect(toAttributeValue({ s: "a\ud83db\udc00" })).toBe('{"s":"a\\ud83db\\udc00"}');
   });
 });

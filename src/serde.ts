@@ -40,9 +40,14 @@ function renderable(raw: unknown, value: unknown): unknown {
     // exploded into JSON was many times the payload's own size. The marker
     // is the strip's replacement with the unknown mime, the same text the
     // Python SDK writes for bytes, so it is never stripped again.
-    return replacement(undefined, raw.byteLength);
+    return byteObjectMarker(raw);
   }
   return value;
+}
+
+/** A byte object's marker: the strip's replacement, unknown mime, its size in bytes. */
+function byteObjectMarker(bytes: { byteLength: number }): string {
+  return replacement(undefined, bytes.byteLength);
 }
 
 /** The built-in tags of the byte objects that are not views. */
@@ -123,13 +128,19 @@ export function toAttributeValue(value: unknown): string | number | boolean {
  * but a much better one than silence. Unencoded, OTel would discard the
  * attribute with a warning and it would never reach the span. Booleans and
  * numbers are separate element types, so `[true, 1]` is encoded too.
+ *
+ * A byte object, alone or as an element of the array, is the bare marker
+ * string: no serializer is around it, so it carries no JSON quotes. The sink
+ * writes an OTLP bytes value the same way.
  */
 export function attributeValue(value: unknown): AttributeValue | undefined {
   if (value === undefined || value === null) return undefined;
+  if (isByteObject(value)) return byteObjectMarker(value);
   if (Array.isArray(value)) {
-    if (value.every((v) => typeof v === "string")) return value as string[];
-    if (value.every((v) => typeof v === "number")) return value as number[];
-    if (value.every((v) => typeof v === "boolean")) return value as boolean[];
+    const items = value.map((v) => (isByteObject(v) ? byteObjectMarker(v) : v));
+    if (items.every((v) => typeof v === "string")) return items as string[];
+    if (items.every((v) => typeof v === "number")) return items as number[];
+    if (items.every((v) => typeof v === "boolean")) return items as boolean[];
   }
   return toAttributeValue(value);
 }
