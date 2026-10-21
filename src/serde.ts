@@ -138,8 +138,9 @@ const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];
  *
  * Byte objects are walked first (see {@link byteAttributeValue}): one alone
  * is the bare marker string, and an array of byte objects and strings is an
- * array of strings. A walked value OTel cannot hold (a mapping, a nested
- * array) is set as the value's JSON, its byte objects quoted markers.
+ * array of strings. A walked value OTel cannot hold (a mapping, or an array
+ * that is not homogeneous once nulls are set aside) is set as the value's
+ * JSON, its byte objects quoted markers.
  */
 export function attributeValue(value: unknown): AttributeValue | undefined {
   if (value === undefined || value === null) return undefined;

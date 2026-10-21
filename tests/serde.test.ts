@@ -204,6 +204,10 @@ describe("a byte object set as an attribute value", () => {
     ]);
   });
 
+  it("keeps a plain array with a null as an array, null aside", () => {
+    expect(attributeValue([null, "x"])).toEqual([null, "x"]);
+  });
+
   it("keeps an array with other kinds of element JSON-encoded, its bytes as the marker", () => {
     expect(attributeValue([1, new Uint8Array(2)])).toBe('[1,"[stripped unknown 2 bytes]"]');
   });
