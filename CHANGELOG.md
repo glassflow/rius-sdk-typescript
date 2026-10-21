@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.5.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.4.1...v1.5.0) (2026-10-21)
+
+
+### Features
+
+* map pydantic-ai's Gemini image and audio token details onto the modality usage keys ([#176](https://github.com/glassflow/rius-sdk-typescript/issues/176)) ([93ab5e9](https://github.com/glassflow/rius-sdk-typescript/commit/93ab5e9a93a866890b763ef2b424219b5286c96d))
+* media leaves the SDK as stripped semconv parts ([#168](https://github.com/glassflow/rius-sdk-typescript/issues/168)) ([38b3cb4](https://github.com/glassflow/rius-sdk-typescript/commit/38b3cb460a175135ccacc52f530217acdc04890c))
+
+
+### Bug Fixes
+
+* media contract round 3: byte objects, new strip rules, LangChain v1 reference blocks ([#173](https://github.com/glassflow/rius-sdk-typescript/issues/173)) ([d785d6d](https://github.com/glassflow/rius-sdk-typescript/commit/d785d6df523e6370bdc11ba417888ea23828c6ab))
+* settle non-http URIs, empty or redacted references and the Vercel fallback ([#171](https://github.com/glassflow/rius-sdk-typescript/issues/171)) ([6dc8723](https://github.com/glassflow/rius-sdk-typescript/commit/6dc8723d499c33f6efeeb0e83a3b02404dc01dfc))
+* strip a data URL once per span and size it without re-validating ([#175](https://github.com/glassflow/rius-sdk-typescript/issues/175)) ([8104ed4](https://github.com/glassflow/rius-sdk-typescript/commit/8104ed42a4a5417a908df90a668a127860783cfe))
+* strip a data URL that follows a link or wraps across lines ([#177](https://github.com/glassflow/rius-sdk-typescript/issues/177)) ([56b020b](https://github.com/glassflow/rius-sdk-typescript/commit/56b020b89aea7acc8aa7f0ec5c2fe8b46b4e9b66))
+* strip LangChain v1, Bedrock and Mistral audio base64 ([#170](https://github.com/glassflow/rius-sdk-typescript/issues/170)) ([ed3e77e](https://github.com/glassflow/rius-sdk-typescript/commit/ed3e77eadbf2e2a6e1ede62f86f0f03ac967ae63))
+
 ## [1.4.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.4.0...v1.4.1) (2026-10-16)
 
 
