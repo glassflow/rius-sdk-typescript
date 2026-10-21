@@ -7,7 +7,7 @@ import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trac
 import { afterEach, describe, expect, it } from "vitest";
 import { type InitOptions, init, type RiusClient } from "../src/client.js";
 import { startGeneration } from "../src/generation.js";
-import { rebuildNativeMediaParts } from "../src/mediaParts.js";
+import { rebuildNativeMediaParts, stripRawPayload } from "../src/mediaParts.js";
 import { NormalizingSpanProcessor, normalizeNativeMediaParts } from "../src/normalize.js";
 import { startSpan } from "../src/spans.js";
 import { afterFirstReturn, upFromStackBottom } from "./stack.js";
@@ -407,6 +407,100 @@ describe("native media parts are rebuilt in place", () => {
     expect(attributes).toEqual({
       "gen_ai.input.messages": `[{"role": "user", "parts": [${BLOB}, {"type": "blob", "type": "text", "content": "Look."}]}]`,
     });
+  });
+});
+
+describe("a native message key's file parts, read as the SDKs and the sink read them", () => {
+  // Each part alone in a user message, rebuilt and then stripped as the exporter does.
+  // A type-file object with a string base64 or url is a LangChain v1 file block.
+  it.each([
+    [
+      '{"type":"file","url":" data:image/png;base64,iVBO\\nRw0KGgo="}',
+      '{"type":"blob","modality":"document","stripped_reason":"not_captured"}',
+    ],
+    [
+      '{"type":"file","url":"https://x/a.png\\ndata:image/png;base64,iVBO\\nRw0KGgo="}',
+      '{"type":"blob","modality":"document","stripped_reason":"not_captured"}',
+    ],
+    [
+      '{"type":"file","file_id":"","url":"https://x/a.pdf"}',
+      '{"type":"uri","modality":"document","uri":"https://x/a.pdf"}',
+    ],
+    [
+      '{"type":"file","file_id":5,"url":"https://x/a.wav"}',
+      '{"type":"uri","modality":"audio","uri":"https://x/a.wav"}',
+    ],
+    [
+      '{"type":"file","file_id":"__REDACTED__","base64":"QUFB"}',
+      '{"type":"blob","modality":"document","byte_size":3,"stripped_reason":"not_captured"}',
+    ],
+    ['{"type":"file","file_id":5}', '{"type":"file","file_id":5}'],
+    ['{"type":"file","file_id":"f-1"}', '{"type":"file","modality":"document","file_id":"f-1"}'],
+    [
+      '{"type":"file","file_id":"f-1","modality":"image","mime_type":"application/pdf","extra":1}',
+      '{"type":"file","modality":"image","mime_type":"application/pdf","file_id":"f-1"}',
+    ],
+    [
+      '{"type":"file","file_id":"f-1","url":"https://x/a.png"}',
+      '{"type":"file","modality":"document","file_id":"f-1"}',
+    ],
+    [
+      '{"type":"file","file_id":"f-1","base64":"QUFB"}',
+      '{"type":"file","modality":"document","file_id":"f-1"}',
+    ],
+    [
+      '{"type":"file","file_id":"f-1","base64":""}',
+      '{"type":"file","modality":"document","file_id":"f-1"}',
+    ],
+    [
+      '{"type":"file","base64":"QUFB","mime_type":"audio/wav"}',
+      '{"type":"blob","modality":"audio","mime_type":"audio/wav","byte_size":3,"stripped_reason":"not_captured"}',
+    ],
+    [
+      '{"type":"file","url":"data:application/pdf;base64,QUFB"}',
+      '{"type":"blob","modality":"document","mime_type":"application/pdf","byte_size":3,"stripped_reason":"not_captured"}',
+    ],
+    [
+      '{"type":"file","url":"__REDACTED__"}',
+      '{"type":"blob","modality":"document","stripped_reason":"redacted_upstream"}',
+    ],
+    [
+      '{"type":"file","url":""}',
+      '{"type":"blob","modality":"document","stripped_reason":"redacted_upstream"}',
+    ],
+    [
+      '{"type":"file","url":"","file_id":"__REDACTED__"}',
+      '{"type":"file","modality":"document","file_id":"__REDACTED__"}',
+    ],
+    [
+      '{"type":"file","url":"https://x/a.mp4","mime_type":"video/mp4"}',
+      '{"type":"uri","modality":"video","mime_type":"video/mp4","uri":"https://x/a.mp4"}',
+    ],
+    [
+      '{"type":"file","url":5,"file_id":"f-2"}',
+      '{"type":"file","modality":"document","file_id":"f-2"}',
+    ],
+    ['{"type":"file","file":{"file_id":"f-3"}}', '{"type":"file","file":{"file_id":"f-3"}}'],
+    [
+      '{"type":"blob","modality":"image","content":"QUFB"}',
+      '{"type":"blob","modality":"image","byte_size":3,"stripped_reason":"not_captured"}',
+    ],
+    [
+      '{"type":"uri","uri":" data:image/png;base64,iVBO\\nRw0KGgo="}',
+      '{"type":"blob","modality":"document","stripped_reason":"not_captured"}',
+    ],
+    [
+      '{"type":"uri","modality":"audio","uri":"https://x/a"}',
+      '{"type":"uri","modality":"audio","uri":"https://x/a"}',
+    ],
+  ])("%s becomes %s", (part, expected) => {
+    const attributes: Record<string, AttributeValue> = {
+      "gen_ai.input.messages": `[{"role":"user","parts":[${part}]}]`,
+    };
+    normalizeNativeMediaParts(attributes);
+    expect(stripRawPayload(attributes["gen_ai.input.messages"] as string)).toBe(
+      `[{"role":"user","parts":[${expected}]}]`,
+    );
   });
 });
 

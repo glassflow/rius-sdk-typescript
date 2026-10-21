@@ -1094,7 +1094,7 @@ function langchainPart(item: Record<string, unknown>): Part[] | undefined {
   const type = item.type;
   if (typeof type !== "string" || !Object.hasOwn(LANGCHAIN_KINDS, type)) return undefined;
   const fileId = usable(item.file_id);
-  if (type === "file" && fileId !== undefined) return nativeMediaPart(item);
+  if (type === "file" && fileId !== undefined) return nativeFilePart(item);
   const kind = LANGCHAIN_KINDS[type] as Modality;
   const mime = item.mime_type;
   // Beside a file block's string file_id, an empty or redacted base64 points
@@ -1113,7 +1113,7 @@ function langchainPart(item: Record<string, unknown>): Part[] | undefined {
     // A file names no modality: a link's extension does, before document.
     return [uriPart(type === "file" ? uriModality(url) : kind, mime, url)];
   }
-  if (type === "file" && typeof item.file_id === "string") return nativeMediaPart(item);
+  if (type === "file" && typeof item.file_id === "string") return nativeFilePart(item);
   if (typeof item.url === "string" || typeof item.file_id === "string") {
     return [droppedBlob(kind, mime)];
   }
@@ -1297,8 +1297,10 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * carrying content is stripped of it (sized from it, `not_captured`) and
  * takes its modality from its MIME type first (@ai-sdk/otel labels a PDF an
  * image). A uri holding a data URL is a blob, since a data URL is never a
- * uri, and so is one holding data: past its start, with no size. Undefined
- * when it is not a media part this can read, which stays as it came.
+ * uri, and so is one holding data: past its start, with no size. A file
+ * part holding a string base64 or url is a LangChain v1 file block and is
+ * read as one (see langchainPart). Undefined when it is not a media part
+ * this can read, which stays as it came.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
@@ -1331,15 +1333,28 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
       out.uri = part.uri;
       return [out];
     }
-    case "file": {
-      if (typeof part.file_id !== "string") return undefined;
-      const out = shaped("file");
-      out.file_id = part.file_id;
-      return [out];
-    }
+    case "file":
+      // A string base64 or url makes it a LangChain v1 file block, on every path.
+      if (typeof part.base64 === "string" || typeof part.url === "string") {
+        return langchainPart(part);
+      }
+      return nativeFilePart(part);
     default:
       return undefined;
   }
+}
+
+/** A native file part by its string file_id; undefined when it has none. */
+function nativeFilePart(part: Record<string, unknown>): Part[] | undefined {
+  if (typeof part.file_id !== "string") return undefined;
+  const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
+  const out: Part = {
+    type: "file",
+    modality: own ? (part.modality as Modality) : (modalityOf(part.mime_type) ?? "document"),
+  };
+  if (isMime(part.mime_type)) out.mime_type = part.mime_type;
+  out.file_id = part.file_id;
+  return [out];
 }
 
 /** The part spans of a message key, or undefined when it does not parse or is no list. */
