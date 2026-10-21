@@ -900,8 +900,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     convert: toInt,
   },
   // @ai-sdk/otel's flattening of a provider's input_token_details (OpenAI's
-  // transcription models): the audio subset of the input. Its text_tokens
-  // twin has no per-modality key we emit, and stays.
+  // transcription models): the audio subset of the input, before pydantic-ai's
+  // below. Its text_tokens twin has no per-modality key we emit, and stays.
   {
     source: "gen_ai.usage.input_token_details.audio_tokens",
     target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
@@ -929,12 +929,20 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     convert: toInt,
   },
   // pydantic-ai also writes Google's per-modality counts there, as
-  // <modality>_<prompt|cache|candidates>_tokens. The image and audio ones are
-  // subsets of the input, cache-read and output totals, never added to them.
-  // The audio ones sit after OpenInference's, which keep their targets where a
-  // span carries both. The rest of the namespace has no canonical key. Its
-  // audio_tokens stays: pydantic-ai merges a provider's input and output
-  // details under one name, so the count does not say which direction it is.
+  // <modality>_<prompt|cache|candidates|response>_tokens (response on the
+  // Gemini Live path), and its own typed audio counts, as
+  // <input|cache|output>_audio_tokens, which genai-prices fills for Google,
+  // OpenAI and the OpenAI realtime API. All of them are subsets of the input,
+  // cache-read and output totals, never added to them. The audio ones sit
+  // after OpenInference's and @ai-sdk/otel's, which keep their targets where a
+  // span carries both. The typed counts come before the Gemini splits: on
+  // Gemini both arrive with the same value, except that the typed input count
+  // also holds the tool-use prompt's audio, so it is the whole audio input.
+  // Either way the first wins and both go, so nothing is counted twice. The
+  // rest of the namespace has no canonical key. Its audio_tokens stays: it is
+  // the output audio count (OpenAI's completion_tokens_details, or the realtime
+  // output's), under a name with no direction, and output_audio_tokens
+  // carries the same count.
   {
     source: "gen_ai.usage.details.image_prompt_tokens",
     target: GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
@@ -951,6 +959,21 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
     convert: toInt,
   },
   {
+    source: "gen_ai.usage.details.input_audio_tokens",
+    target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.cache_audio_read_tokens",
+    target: GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.output_audio_tokens",
+    target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+    convert: toInt,
+  },
+  {
     source: "gen_ai.usage.details.audio_prompt_tokens",
     target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
     convert: toInt,
@@ -962,6 +985,11 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   },
   {
     source: "gen_ai.usage.details.audio_candidates_tokens",
+    target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+    convert: toInt,
+  },
+  {
+    source: "gen_ai.usage.details.audio_response_tokens",
     target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
     convert: toInt,
   },

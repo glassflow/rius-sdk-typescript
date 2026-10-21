@@ -219,9 +219,13 @@ describe("the shipped table", () => {
       "gen_ai.usage.details.image_prompt_tokens",
       "gen_ai.usage.details.image_cache_tokens",
       "gen_ai.usage.details.image_candidates_tokens",
+      "gen_ai.usage.details.input_audio_tokens",
+      "gen_ai.usage.details.cache_audio_read_tokens",
+      "gen_ai.usage.details.output_audio_tokens",
       "gen_ai.usage.details.audio_prompt_tokens",
       "gen_ai.usage.details.audio_cache_tokens",
       "gen_ai.usage.details.audio_candidates_tokens",
+      "gen_ai.usage.details.audio_response_tokens",
       "gen_ai.client.operation.time_to_first_chunk",
       "llm.invocation_parameters",
       "embedding.model_name",
@@ -248,6 +252,14 @@ describe("pydantic-ai's Gemini image and audio usage details", () => {
       "gen_ai.usage.details.audio_prompt_tokens": "gen_ai.usage.audio.input_tokens",
       "gen_ai.usage.details.audio_cache_tokens": "gen_ai.usage.audio.cache_read.input_tokens",
       "gen_ai.usage.details.audio_candidates_tokens": "gen_ai.usage.audio.output_tokens",
+    },
+    "typed audio": {
+      "gen_ai.usage.details.input_audio_tokens": "gen_ai.usage.audio.input_tokens",
+      "gen_ai.usage.details.cache_audio_read_tokens": "gen_ai.usage.audio.cache_read.input_tokens",
+      "gen_ai.usage.details.output_audio_tokens": "gen_ai.usage.audio.output_tokens",
+    },
+    "live audio": {
+      "gen_ai.usage.details.audio_response_tokens": "gen_ai.usage.audio.output_tokens",
     },
   } as const;
 
@@ -303,7 +315,7 @@ describe("pydantic-ai's Gemini image and audio usage details", () => {
     });
   });
 
-  for (const modality of ["image", "audio"] as const) {
+  for (const modality of ["image", "audio", "typed audio", "live audio"] as const) {
     const sources = Object.keys(MODALITY_SOURCES[modality]);
     const targets = Object.values(MODALITY_SOURCES[modality]);
     const fill = (keys: string[], value: Attributes[string]): Attributes =>
@@ -338,6 +350,125 @@ describe("pydantic-ai's Gemini image and audio usage details", () => {
     ).toEqual({
       "gen_ai.usage.audio.input_tokens": 300,
       "gen_ai.usage.audio.output_tokens": 80,
+    });
+  });
+
+  it("keeps the @ai-sdk/otel audio count over the pydantic-ai ones", () => {
+    expect(
+      normalized(
+        {
+          "gen_ai.usage.input_token_details.audio_tokens": 7,
+          "gen_ai.usage.details.input_audio_tokens": 21,
+          "gen_ai.usage.details.audio_prompt_tokens": 14,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({ "gen_ai.usage.audio.input_tokens": 7 });
+  });
+
+  it("keeps the OpenInference audio count over the typed pydantic-ai one", () => {
+    expect(
+      normalized(
+        {
+          "llm.token_count.prompt_details.audio": 300,
+          "llm.token_count.completion_details.audio": 80,
+          "gen_ai.usage.details.input_audio_tokens": 14,
+          "gen_ai.usage.details.output_audio_tokens": 15,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({
+      "gen_ai.usage.audio.input_tokens": 300,
+      "gen_ai.usage.audio.output_tokens": 80,
+    });
+  });
+
+  it("on Gemini, keeps the typed audio counts over the splits, which still go", () => {
+    expect(
+      normalized(
+        {
+          "gen_ai.usage.input_tokens": 520,
+          "gen_ai.usage.output_tokens": 300,
+          "gen_ai.usage.cache_read.input_tokens": 100,
+          "gen_ai.usage.details.input_audio_tokens": 320,
+          "gen_ai.usage.details.cache_audio_read_tokens": 100,
+          "gen_ai.usage.details.output_audio_tokens": 250,
+          "gen_ai.usage.details.audio_prompt_tokens": 300,
+          "gen_ai.usage.details.audio_tool_use_prompt_tokens": 20,
+          "gen_ai.usage.details.audio_cache_tokens": 100,
+          "gen_ai.usage.details.audio_candidates_tokens": 250,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({
+      "gen_ai.usage.input_tokens": 520,
+      "gen_ai.usage.output_tokens": 300,
+      "gen_ai.usage.cache_read.input_tokens": 100,
+      "gen_ai.usage.audio.input_tokens": 320,
+      "gen_ai.usage.audio.cache_read.input_tokens": 100,
+      "gen_ai.usage.audio.output_tokens": 250,
+      "gen_ai.usage.details.audio_tool_use_prompt_tokens": 20,
+    });
+  });
+
+  it("lands the Gemini Live response split on the audio output key", () => {
+    expect(
+      normalized(
+        {
+          "gen_ai.usage.output_tokens": 103,
+          "gen_ai.usage.details.text_response_tokens": 22,
+          "gen_ai.usage.details.audio_response_tokens": 81,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({
+      "gen_ai.usage.output_tokens": 103,
+      "gen_ai.usage.details.text_response_tokens": 22,
+      "gen_ai.usage.audio.output_tokens": 81,
+    });
+  });
+
+  it("keeps the typed output count over the Live response split", () => {
+    expect(
+      normalized(
+        {
+          "gen_ai.usage.details.output_audio_tokens": 81,
+          "gen_ai.usage.details.audio_response_tokens": 80,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({ "gen_ai.usage.audio.output_tokens": 81 });
+  });
+
+  it("maps OpenAI's typed counts through pydantic-ai and keeps its audio_tokens", () => {
+    expect(
+      normalized(
+        {
+          "gen_ai.usage.details.audio_tokens": 40,
+          "gen_ai.usage.details.input_audio_tokens": 30,
+          "gen_ai.usage.details.output_audio_tokens": 40,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({
+      "gen_ai.usage.details.audio_tokens": 40,
+      "gen_ai.usage.audio.input_tokens": 30,
+      "gen_ai.usage.audio.output_tokens": 40,
+    });
+  });
+
+  it("lets the Gemini split through when the typed count won't parse", () => {
+    expect(
+      normalized(
+        {
+          "gen_ai.usage.details.input_audio_tokens": "lots",
+          "gen_ai.usage.details.audio_prompt_tokens": 300,
+        },
+        NORMALIZATION_RULES,
+      ),
+    ).toEqual({
+      "gen_ai.usage.details.input_audio_tokens": "lots",
+      "gen_ai.usage.audio.input_tokens": 300,
     });
   });
 });
