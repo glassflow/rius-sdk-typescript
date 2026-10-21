@@ -139,6 +139,19 @@ export function base64Size(value: string): number | undefined {
   return (text.length * 3) / 4 - padding;
 }
 
+/**
+ * {@link base64Size} of a base64 run `DATA_URL` matched, from its length and
+ * padding: the match already holds no whitespace, nothing outside the two
+ * alphabets and at most two `=`, all at its end. Only a mix of the two
+ * alphabets is left to check.
+ */
+function matchedBase64Size(run: string): number | undefined {
+  if (run.length % 4 !== 0) return undefined;
+  if (STANDARD_EXTRA.test(run) && URL_SAFE_EXTRA.test(run)) return undefined;
+  const padding = run.endsWith("==") ? 2 : run.endsWith("=") ? 1 : 0;
+  return (run.length * 3) / 4 - padding;
+}
+
 /** The text a media token in a raw payload is replaced by. */
 export function replacement(mime: string | undefined, byteSize: number | undefined): string {
   // Function replacers: a mime may hold `$&`, which a string replacement reads.
@@ -788,7 +801,7 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   const edits: Edit[] = [];
   for (const match of text.matchAll(DATA_URL)) {
     const mime = isMime(match[1]) ? match[1] : undefined;
-    const byteSize = base64Size(match[3]);
+    const byteSize = matchedBase64Size(match[3]);
     tokens.push({ rule: "b", mime, byteSize });
     const start = match.index ?? 0;
     edits.push([start, start + match[0].length, replacement(mime, byteSize)]);
@@ -974,7 +987,7 @@ export function dataUrlBlob(url: string, kind: Modality, mimeHint?: unknown): Pa
   const match = WHOLE_DATA_URL.exec(url);
   if (match !== null) {
     const mime = isMime(match[1]) ? match[1] : mimeHint;
-    return blobPart(kind, mime, base64Size(match[3]), NOT_CAPTURED);
+    return blobPart(kind, mime, matchedBase64Size(match[3]), NOT_CAPTURED);
   }
   const header = url.slice(5).split(/[;,]/, 1)[0];
   const comma = url.indexOf(",");
