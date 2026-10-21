@@ -44,6 +44,7 @@ type TypedKey = {
   parent_keys?: string[];
   keeps_urls?: boolean;
   holder_mime?: boolean;
+  holder_types?: string[];
 };
 const REGISTRY = JSON.parse(
   readFileSync(join(HERE, "fixtures/semconv/media_parts.json"), "utf8"),
@@ -90,6 +91,7 @@ describe("the raw-payload strip", () => {
         ...(t.parent_keys ? { parentKeys: t.parent_keys } : {}),
         ...(t.keeps_urls ? { keepsUrls: t.keeps_urls } : {}),
         ...(t.holder_mime ? { holderMime: t.holder_mime } : {}),
+        ...(t.holder_types ? { holderTypes: t.holder_types } : {}),
       })),
       urlScheme: e.url_scheme,
       sourceBytesKeys: e.source_bytes_keys,
@@ -229,9 +231,9 @@ describe("the raw-payload strip", () => {
       [],
     ],
     [
-      "makes a base64 marker context for every keyed member",
-      '{"type":"image","source_type":"base64","result":"AAAA"}',
-      '{"type":"image","source_type":"base64","result":"[stripped unknown 3 bytes]"}',
+      "makes a base64 marker context for its own keys alone",
+      '{"type":"image","source_type":"base64","result":"AAAA","data":"AAAA"}',
+      '{"type":"image","source_type":"base64","result":"AAAA","data":"[stripped unknown 3 bytes]"}',
       [{ rule: "e", mime: "unknown", byte_size: 3 }],
     ],
     [
@@ -245,6 +247,48 @@ describe("the raw-payload strip", () => {
       '{"type":"image","image":"a+b.c-d:rest"}',
       '{"type":"image","image":"a+b.c-d:rest"}',
       [],
+    ],
+    [
+      "counts a tagged data's holder by any of its type members",
+      '{"type":"text","type":"image","image":{"type":"data","data":"AAAA"}}',
+      '{"type":"text","type":"image","image":{"type":"data","data":"[stripped unknown 3 bytes]"}}',
+      [{ rule: "e", mime: "unknown", byte_size: 3 }],
+    ],
+    [
+      "hands a whole data URL to rule (b) whatever the scheme's case",
+      '{"type":"image","image":"DaTa:image/png;base64,AAAA"}',
+      '{"type":"image","image":"[stripped image/png 3 bytes]"}',
+      [{ rule: "b", mime: "image/png", byte_size: 3 }],
+    ],
+    [
+      "keeps a data URL with a trailing newline a rule (e) token",
+      '{"type":"image","image":"data:image/png;base64,AAAA\\n"}',
+      '{"type":"image","image":"[stripped unknown unknown bytes]"}',
+      [{ rule: "e", mime: "unknown", byte_size: "unknown" }],
+    ],
+    [
+      "reads each data URL of an array under a URL key on its own",
+      '{"type":"image","mediaType":"image/gif","image":["data:image/png;base64,AAAA","data:,x","https://x.test/a"]}',
+      '{"type":"image","mediaType":"image/gif","image":["[stripped image/png 3 bytes]","[stripped image/gif unknown bytes]","https://x.test/a"]}',
+      [
+        { rule: "b", mime: "image/png", byte_size: 3 },
+        { rule: "e", mime: "image/gif", byte_size: "unknown" },
+      ],
+    ],
+    [
+      "keeps no URL under a base64 marker's data",
+      '{"source_type":"base64","data":["AAAA","x:y"]}',
+      '{"source_type":"base64","data":["[stripped unknown 3 bytes]","[stripped unknown unknown bytes]"]}',
+      [
+        { rule: "e", mime: "unknown", byte_size: 3 },
+        { rule: "e", mime: "unknown", byte_size: "unknown" },
+      ],
+    ],
+    [
+      "finds a tagged data's holder through an array",
+      '[{"type":"image","image":[{"type":"data","data":"AAAA"}]}]',
+      '[{"type":"image","image":[{"type":"data","data":"[stripped unknown 3 bytes]"}]}]',
+      [{ rule: "e", mime: "unknown", byte_size: 3 }],
     ],
   ])("%s", (_name, input, output, tokens) => {
     const result = strip(input);

@@ -113,47 +113,19 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
     item: { type: "file", file: { file_id: 5, filename: "a.wav" } },
   },
   input_file_with_no_reference_and_no_filename: { item: { type: "input_file" } },
-  langchain_v1_image_by_url: {
-    item: { type: "image", url: "https://example.com/a.png", mime_type: "image/png" },
-  },
-  langchain_v1_image_by_url_kind_before_extension: {
-    item: { type: "image", url: "https://example.com/download.bin" },
-  },
-  langchain_v1_file_by_url_with_only_an_extension: {
-    item: { type: "file", url: "https://example.com/a.wav" },
-  },
-  langchain_v1_file_by_url_with_no_extension: { item: { type: "file", url: "s3://bucket/report" } },
-  langchain_v1_audio_by_data_url: {
-    item: { type: "audio", url: "data:;base64,UklGRg==", mime_type: "audio/wav" },
-  },
-  langchain_v1_image_by_redacted_url: {
-    item: { type: "image", url: "__REDACTED__", mime_type: "image/png" },
-  },
-  langchain_v1_file_by_empty_url: { item: { type: "file", url: "" } },
-  langchain_v1_image_by_file_id: { item: { type: "image", file_id: "file-abc123" } },
-  langchain_v1_video_by_empty_file_id: {
-    item: { type: "video", file_id: "", mime_type: "video/mp4" },
-  },
-  langchain_v1_image_by_redacted_url_and_a_file_id: {
-    item: { type: "image", url: "__REDACTED__", file_id: "file-abc123" },
-  },
-  langchain_v1_file_by_file_id: {
-    item: { type: "file", file_id: "file-abc123", mime_type: "application/pdf" },
-  },
-  langchain_v1_file_by_empty_file_id_is_a_native_file_part: {
-    item: { type: "file", file_id: "" },
-  },
 };
 
 describe("the contract's part examples", () => {
   const examples = CONTRACT.part_shapes.examples;
 
-  it("are every one made here", () => {
-    expect(Object.keys(EXAMPLE_INPUTS).sort()).toEqual(examples.map((e) => e.name).sort());
+  it("are every one made here, from the contract's block or an input built here", () => {
+    const built = examples.filter((e) => e.block === undefined).map((e) => e.name);
+    expect(Object.keys(EXAMPLE_INPUTS).sort()).toEqual(built.sort());
   });
 
   it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (name, example) => {
-    const made = EXAMPLE_INPUTS[name];
+    const made: Made =
+      example.block === undefined ? EXAMPLE_INPUTS[name] : { item: JSON.parse(example.block) };
     if ("vercel" in made) {
       expect(vercelPart(made.vercel)).toBe(example.part);
       return;

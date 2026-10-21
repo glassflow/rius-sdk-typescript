@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-export type PartExample = { name: string; from: string; part: string };
+export type PartExample = { name: string; from: string; block?: string; part: string };
 export type MessageExample = {
   name: string;
   from: string;
