@@ -582,6 +582,54 @@ describe("provider media items as parts", () => {
     expect(providerMediaParts(block)).toEqual([part]);
   });
 
+  const notCaptured = (modality: string, mime?: string) => ({
+    type: "blob",
+    modality,
+    ...(mime === undefined ? {} : { mime_type: mime }),
+    stripped_reason: "not_captured",
+  });
+
+  it.each([
+    [
+      "a link with data: in its path",
+      { type: "image", url: "https://x.test/metadata:a.png" },
+      notCaptured("image"),
+    ],
+    [
+      "a file's url holding DATA:, by its mime type, never its extension",
+      { type: "file", url: "a.wav DATA:x", mime_type: "application/pdf" },
+      notCaptured("document", "application/pdf"),
+    ],
+    [
+      "a file's url holding data:, with no mime type",
+      { type: "file", url: "x.png\ndata:image/png;base64,AAAA" },
+      notCaptured("document"),
+    ],
+    [
+      "a relative url",
+      { type: "video", url: "clips/a" },
+      { type: "uri", modality: "video", uri: "clips/a" },
+    ],
+  ])("reads a LangChain v1 block by %s", (_name, block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      "its mime type's modality first",
+      { type: "uri", modality: "image", mime_type: "audio/wav", uri: "x data:y" },
+      notCaptured("audio", "audio/wav"),
+    ],
+    [
+      "its own modality, with no mime type",
+      { type: "uri", modality: "video", uri: "https://x.test/a\tDATA:,x" },
+      notCaptured("video"),
+    ],
+    ["document, with neither", { type: "uri", uri: "a.png data:" }, notCaptured("document")],
+  ])("makes a blob of a native uri holding data: past its start, %s", (_name, item, part) => {
+    expect(providerMediaParts(item)).toEqual([part]);
+  });
+
   it("reads a LangChain v0 url block as a v1 one, and leaves its base64 and id blocks", () => {
     expect(
       providerMediaParts({ type: "image", source_type: "url", url: "https://x.test/a.png" }),

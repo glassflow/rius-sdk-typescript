@@ -952,6 +952,15 @@ export function isDataUrl(value: string): boolean {
   return /^[dD][aA][tT][aA]:/.test(value);
 }
 
+/**
+ * Whether a string holds `data:` anywhere, in any case, with no trimming and
+ * no word boundary, as rule (b) finds one. A URL that holds it past its start
+ * (led by whitespace, or a link followed by a data URL) is no link to keep.
+ */
+function holdsDataScheme(value: string): boolean {
+  return /[dD][aA][tT][aA]:/.test(value);
+}
+
 /** What OpenInference writes in place of an image over its size limit. */
 export const OPENINFERENCE_REDACTED = "__REDACTED__";
 
@@ -1088,14 +1097,21 @@ function langchainPart(item: Record<string, unknown>): Part[] | undefined {
   if (type === "file" && fileId !== undefined) return nativeMediaPart(item);
   const kind = LANGCHAIN_KINDS[type] as Modality;
   const mime = item.mime_type;
-  if (typeof item.base64 === "string") return [base64Blob(item.base64, kind, mime)];
+  // Beside a file block's string file_id, an empty or redacted base64 points
+  // nowhere, so the block reads on; anywhere else it is a bare payload.
+  const droppedBase64 =
+    type === "file" && typeof item.file_id === "string" && isDropped(item.base64);
+  if (typeof item.base64 === "string" && !droppedBase64) {
+    return [base64Blob(item.base64, kind, mime)];
+  }
   if (!LANGCHAIN_REFERENCE_TYPES.includes(type)) return undefined;
   if (fileId !== undefined) return [fileIdPart(kind, mime, fileId)];
   const url = usable(item.url);
   if (url !== undefined) {
+    if (isDataUrl(url)) return [dataUrlBlob(url, kind, mime)];
+    if (holdsDataScheme(url)) return [blobPart(kind, mime, undefined, NOT_CAPTURED)];
     // A file names no modality: a link's extension does, before document.
-    const urlKind = type === "file" && !isDataUrl(url) ? uriModality(url) : kind;
-    return [urlPart(url, urlKind, mime)];
+    return [uriPart(type === "file" ? uriModality(url) : kind, mime, url)];
   }
   if (type === "file" && typeof item.file_id === "string") return nativeMediaPart(item);
   if (typeof item.url === "string" || typeof item.file_id === "string") {
@@ -1281,8 +1297,8 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * carrying content is stripped of it (sized from it, `not_captured`) and
  * takes its modality from its MIME type first (@ai-sdk/otel labels a PDF an
  * image). A uri holding a data URL is a blob, since a data URL is never a
- * uri. Undefined when it is not a media part this can read, which stays as
- * it came.
+ * uri, and so is one holding data: past its start, with no size. Undefined
+ * when it is not a media part this can read, which stays as it came.
  */
 export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefined {
   const own = typeof part.modality === "string" && MODALITIES.includes(part.modality);
@@ -1310,6 +1326,7 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
     case "uri": {
       if (typeof part.uri !== "string") return undefined;
       if (isDataUrl(part.uri)) return [dataUrlBlob(part.uri, kind, mime)];
+      if (holdsDataScheme(part.uri)) return [blobPart(kind, mime, undefined, NOT_CAPTURED)];
       const out = shaped("uri", uriModality(part.uri));
       out.uri = part.uri;
       return [out];

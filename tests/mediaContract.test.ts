@@ -113,6 +113,9 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
     item: { type: "file", file: { file_id: 5, filename: "a.wav" } },
   },
   input_file_with_no_reference_and_no_filename: { item: { type: "input_file" } },
+  uri_led_by_whitespace_holding_a_data_url: {
+    item: { type: "uri", modality: "image", uri: " data:image/png;base64,iVBO\nRw0KGgo=" },
+  },
 };
 
 describe("the contract's part examples", () => {
