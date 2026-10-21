@@ -40,7 +40,7 @@ export const MIME_PATTERN = "[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+";
 
 /** Rule (b): a data URL anywhere in a string. Groups: mime, last parameter, base64. */
 export const DATA_URL_PATTERN =
-  '[dD][aA][tT][aA]:([^;,:\\t\\n\\f\\r "]*)(;[^;,:\\t\\n\\f\\r "]*)*;base64,([A-Za-z0-9+/_-]*={0,2})';
+  '[dD][aA][tT][aA]:([^;,:\\t\\n\\f\\r "]*)(;[^;,:\\t\\n\\f\\r "]*)*;base64,([A-Za-z0-9+/_-]{0,76}(\\r{0,1}\\n[ \\t>]*[A-Za-z0-9+/_-]+)*[A-Za-z0-9+/_-]*={0,2})';
 
 /** Rule (d): a Buffer object, `{"type": "Buffer", "data": [...]}`. */
 export const BUFFER_RULE = {
@@ -109,8 +109,27 @@ const MESSAGE_MAX_DEPTH = 1000;
 // --- sizes, mime types, replacements --------------------------------------------
 
 const MIME = new RegExp(`^${MIME_PATTERN}$`);
-const DATA_URL = new RegExp(DATA_URL_PATTERN, "g");
-const WHOLE_DATA_URL = new RegExp(`^${DATA_URL_PATTERN}$`);
+const DATA_URL = new RegExp(`^${DATA_URL_PATTERN}`);
+/** Rule (b)'s match when it is the whole string: anchored, ending at the end. */
+const WHOLE_DATA_URL = {
+  exec: (value: string) => {
+    const match = DATA_URL.exec(value);
+    return match !== null && match[0].length === value.length ? match : null;
+  },
+  test: (value: string) => WHOLE_DATA_URL.exec(value) !== null,
+};
+
+/** Rule (b)'s matches: the pattern at the start of each piece cut before each data:. */
+function* dataUrlMatches(text: string): Generator<RegExpExecArray> {
+  const starts = Array.from(text.matchAll(/[dD][aA][tT][aA]:/g), (m) => m.index ?? 0);
+  for (let i = 0; i < starts.length; i++) {
+    const match = DATA_URL.exec(text.slice(starts[i], starts[i + 1] ?? text.length));
+    if (match !== null) {
+      match.index = starts[i];
+      yield match;
+    }
+  }
+}
 
 /** The whitespace a size removes and a JSON candidate trims: ASCII only. */
 const ASCII_WHITESPACE = /[ \t\n\r]/g;
@@ -681,7 +700,7 @@ function urlKeys(
  */
 function keptUrl(value: string): boolean {
   if (!URL_SCHEME.test(value)) return false;
-  return value.slice(0, value.indexOf(":")).toLowerCase() !== "data" || WHOLE_DATA_URL.test(value);
+  return !/[dD][aA][tT][aA]:/.test(value) || WHOLE_DATA_URL.test(value);
 }
 
 /** A string rule (e) replaces under `key`: a keyed string the key does not keep as a URL. */
@@ -786,9 +805,9 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
     }
   }
   const edits: Edit[] = [];
-  for (const match of text.matchAll(DATA_URL)) {
+  for (const match of dataUrlMatches(text)) {
     const mime = isMime(match[1]) ? match[1] : undefined;
-    const byteSize = base64Size(match[3]);
+    const byteSize = base64Size(match[3].replace(/>/g, ""));
     tokens.push({ rule: "b", mime, byteSize });
     const start = match.index ?? 0;
     edits.push([start, start + match[0].length, replacement(mime, byteSize)]);
@@ -974,7 +993,7 @@ export function dataUrlBlob(url: string, kind: Modality, mimeHint?: unknown): Pa
   const match = WHOLE_DATA_URL.exec(url);
   if (match !== null) {
     const mime = isMime(match[1]) ? match[1] : mimeHint;
-    return blobPart(kind, mime, base64Size(match[3]), NOT_CAPTURED);
+    return blobPart(kind, mime, base64Size(match[3].replace(/>/g, "")), NOT_CAPTURED);
   }
   const header = url.slice(5).split(/[;,]/, 1)[0];
   const comma = url.indexOf(",");

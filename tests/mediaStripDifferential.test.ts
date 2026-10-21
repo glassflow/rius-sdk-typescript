@@ -27,7 +27,10 @@ import {
 //
 // tests/fixtures/main holds mediaParts.ts and contextSizes.ts exactly as they
 // were before the data-URL size and the reused splits, so each case compares
-// that code, not a re-implementation of it, against the current source.
+// that code, not a re-implementation of it, against the current source. Only
+// rule (b) has since been brought up to the contract in the snapshot: its
+// pattern, the cut before each data:, the anchored whole-value test, and the
+// run's size without the `>` of a quoted line.
 
 // --- generated inputs -------------------------------------------------------------
 
@@ -138,7 +141,7 @@ describe("the data-URL strip against main", () => {
       expect(base64Size(run)).toBe(mainBase64Size(run));
       // The run as the pattern matched it: whole, or cut at its first invalid character.
       const url = `data:image/png;base64,${run}`;
-      const matched = new RegExp(DATA_URL_PATTERN).exec(url)?.[3];
+      const matched = new RegExp(`^${DATA_URL_PATTERN}`).exec(url)?.[3].replace(/>/g, "");
       expect(splitMedia(url).tokens[0].byteSize).toBe(mainBase64Size(matched ?? ""));
       expect(dataUrlBlob(url, "image")).toEqual(mainDataUrlBlob(url, "image"));
     }

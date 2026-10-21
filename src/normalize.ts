@@ -1290,17 +1290,19 @@ const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 /**
  * A file or image as a semconv media part: a `uri` when its data is a URL of
- * any scheme but data: (http, gs, s3, file, ...), else a `blob`, which never
- * keeps the bytes (their size and `not_captured` in their place). The modality
- * comes from the media type, so a PDF or a text/plain file is a document,
- * never an image; with no media type, a file by URL takes it from the URL
- * path's extension, and any other from the part kind. The AI SDK serializes
- * binary data as base64 before it reaches the span, so data is a string here;
- * any other shape is not one we can vouch for, and makes no part (null).
+ * any scheme but data: (http, gs, s3, file, ...) that holds no data: past its
+ * start, else a `blob`, which never keeps the bytes (their size and
+ * `not_captured` in their place). The modality comes from the media type, so
+ * a PDF or a text/plain file is a document, never an image; with no media
+ * type, a file's uri takes it from the URL path's extension, and any other
+ * part from the part kind. The AI SDK serializes binary data as base64 before
+ * it reaches the span, so data is a string here; any other shape is not one
+ * we can vouch for, and makes no part (null).
  */
 function filePart(type: string, data: unknown, mediaType: unknown): Record<string, unknown> | null {
   const kind = type === "image" ? "image" : "document";
-  const byUrl = (url: string) => urlPart(url, type === "file" ? uriModality(url) : kind, mediaType);
+  const byUrl = (url: string) =>
+    urlPart(url, kind, mediaType, type === "file" ? uriModality(url) : kind);
   let value = data;
   // v7's tagged file data, which v6 spans may carry from a v7 caller.
   if (isObject(value) && typeof value.type === "string") {

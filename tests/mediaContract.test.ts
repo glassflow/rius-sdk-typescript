@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { nativeMediaPart, providerMediaParts, rebuildNativeMediaParts } from "../src/mediaParts.js";
 import { serializeMessages } from "../src/messages.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
-import { CONTRACT, canonicalErrors } from "./mediaContract.js";
+import { CONTRACT, canonicalErrors, type PartExample } from "./mediaContract.js";
 
 /** The parts one provider item becomes, each of them canonical. */
 function parts(item: unknown): unknown[] | undefined {
@@ -22,10 +22,14 @@ function parts(item: unknown): unknown[] | undefined {
 
 /** gen_ai.input.messages for one user message of AI SDK parts, as a model call writes it. */
 function vercelMessages(content: unknown[]): string {
-  const attributes: Attributes = {
+  return inputMessages({
     "ai.operationId": "ai.generateText.doGenerate",
     "ai.prompt.messages": JSON.stringify([{ role: "user", content }]),
-  };
+  });
+}
+
+/** gen_ai.input.messages a span with these attributes is normalized into. */
+function inputMessages(attributes: Attributes): string {
   new NormalizingSpanProcessor().onEnd({
     attributes,
     events: [],
@@ -44,7 +48,37 @@ function vercelPart(part: Record<string, AttributeValue | object>): string {
   return JSON.stringify(message.parts[0]);
 }
 
+/**
+ * The one part an OpenInference image content entry becomes, its flattened
+ * keys written relative to the content prefix, as the contract writes them.
+ */
+function openInferencePart(entry: Record<string, string>): string {
+  const attributes: Attributes = { "llm.input_messages.0.message.role": "user" };
+  for (const [key, value] of Object.entries(entry)) {
+    attributes[`llm.input_messages.0.message.contents.0.${key}`] = value;
+  }
+  const [message] = JSON.parse(inputMessages(attributes));
+  expect(message.parts).toHaveLength(1);
+  return JSON.stringify(message.parts[0]);
+}
+
 type Made = { item: unknown } | { vercel: Record<string, AttributeValue | object> };
+
+/**
+ * The part a contract `provider` item makes, through the reader that takes
+ * it: OpenInference's flattened image entry, an AI SDK file or image part
+ * (no Anthropic source), or any other provider item.
+ */
+function providerPart(item: Record<string, unknown>): string {
+  if (Object.hasOwn(item, "message_content.type")) {
+    return openInferencePart(item as Record<string, string>);
+  }
+  if ((item.type === "file" || item.type === "image") && item.source === undefined) {
+    return vercelPart(item as Record<string, AttributeValue | object>);
+  }
+  const [part] = parts(item) ?? [];
+  return JSON.stringify(part);
+}
 
 /** Each part example of the contract, made from an input its `from` describes. */
 const EXAMPLE_INPUTS: Record<string, Made> = {
@@ -121,14 +155,23 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
 describe("the contract's part examples", () => {
   const examples = CONTRACT.part_shapes.examples;
 
-  it("are every one made here, from the contract's block or an input built here", () => {
+  it("are every one made here, from the contract's block or provider or an input built here", () => {
+    const fromContract = (e: PartExample) => e.block !== undefined || e.provider !== undefined;
+    const unbuilt = examples.filter(
+      (e) => !fromContract(e) && !Object.hasOwn(EXAMPLE_INPUTS, e.name),
+    );
+    expect(unbuilt.map((e) => e.name)).toEqual([]);
     const built = examples.filter((e) => e.block === undefined).map((e) => e.name);
-    expect(Object.keys(EXAMPLE_INPUTS).sort()).toEqual(built.sort());
+    expect(Object.keys(EXAMPLE_INPUTS).filter((name) => !built.includes(name))).toEqual([]);
   });
 
   it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (name, example) => {
-    const made: Made =
+    if (example.provider !== undefined) {
+      expect(providerPart(JSON.parse(example.provider))).toBe(example.part);
+    }
+    const made: Made | undefined =
       example.block === undefined ? EXAMPLE_INPUTS[name] : { item: JSON.parse(example.block) };
+    if (made === undefined) return;
     if ("vercel" in made) {
       expect(vercelPart(made.vercel)).toBe(example.part);
       return;

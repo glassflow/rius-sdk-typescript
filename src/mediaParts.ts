@@ -38,9 +38,14 @@ export const REPLACEMENT_UNKNOWN = "unknown";
 /** A mime type a replacement (or a part) may hold: token/token. */
 export const MIME_PATTERN = "[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+";
 
-/** Rule (b): a data URL anywhere in a string. Groups: mime, last parameter, base64. */
+/**
+ * Rule (b): a data URL anywhere in a string. Groups: mime, last parameter,
+ * base64 run (its line breaks, indent and quoting `>` included), last
+ * continuation line. The run goes on over a line break only after a first
+ * line of at most 76 characters, as MIME wraps it.
+ */
 export const DATA_URL_PATTERN =
-  '[dD][aA][tT][aA]:([^;,:\\t\\n\\f\\r "]*)(;[^;,:\\t\\n\\f\\r "]*)*;base64,([A-Za-z0-9+/_-]*={0,2})';
+  '[dD][aA][tT][aA]:([^;,:\\t\\n\\f\\r "]*)(;[^;,:\\t\\n\\f\\r "]*)*;base64,([A-Za-z0-9+/_-]{0,76}(\\r{0,1}\\n[ \\t>]*[A-Za-z0-9+/_-]+)*[A-Za-z0-9+/_-]*={0,2})';
 
 /** Rule (d): a Buffer object, `{"type": "Buffer", "data": [...]}`. */
 export const BUFFER_RULE = {
@@ -109,8 +114,10 @@ const MESSAGE_MAX_DEPTH = 1000;
 // --- sizes, mime types, replacements --------------------------------------------
 
 const MIME = new RegExp(`^${MIME_PATTERN}$`);
-const DATA_URL = new RegExp(DATA_URL_PATTERN, "g");
-const WHOLE_DATA_URL = new RegExp(`^${DATA_URL_PATTERN}$`);
+/** Rule (b) anchored at the start of a piece: never `$`, never the g flag. */
+const DATA_URL = new RegExp(`^${DATA_URL_PATTERN}`);
+/** Where a rule (b) token can start: data:, in any ASCII case. */
+const DATA_SCHEME = /[dD][aA][tT][aA]:/g;
 
 /** The whitespace a size removes and a JSON candidate trims: ASCII only. */
 const ASCII_WHITESPACE = /[ \t\n\r]/g;
@@ -140,16 +147,88 @@ export function base64Size(value: string): number | undefined {
 }
 
 /**
- * {@link base64Size} of a base64 run `DATA_URL` matched, from its length and
- * padding: the match already holds no whitespace, nothing outside the two
- * alphabets and at most two `=`, all at its end. Only a mix of the two
- * alphabets is left to check.
+ * {@link base64Size} of a base64 run `DATA_URL` matched, with the `>` of each
+ * quoted line it goes on over removed too, from its length and padding. Once
+ * its line breaks, indent and `>` are gone, the run holds nothing outside the
+ * two alphabets and at most two `=`, all at its end. Only a mix of the two
+ * alphabets is left to check. A run that holds no line break holds none of
+ * them.
  */
-function matchedBase64Size(run: string): number | undefined {
+function matchedBase64Size(matched: string): number | undefined {
+  const run = matched.includes("\n") ? matched.replace(/[ \t\r\n>]/g, "") : matched;
   if (run.length % 4 !== 0) return undefined;
   if (STANDARD_EXTRA.test(run) && URL_SAFE_EXTRA.test(run)) return undefined;
   const padding = run.endsWith("==") ? 2 : run.endsWith("=") ? 1 : 0;
   return (run.length * 3) / 4 - padding;
+}
+
+/** A rule (b) token in a string: its boundaries, mime type and size. */
+interface DataUrlSpan {
+  start: number;
+  end: number;
+  mime: string | undefined;
+  byteSize: number | undefined;
+}
+
+/** A data URL's media type as rule (b)'s first group reads it. */
+const DATA_URL_MIME = /[^;,:\t\n\f\r "]*/y;
+
+/**
+ * Rule (b)'s match of the pattern at the start of a piece, or undefined when
+ * it holds none. Undefined too, and `failed` set, when V8's regex stack runs
+ * out (from about 1.6M wrapped lines): the caller then fails closed.
+ */
+function matchDataUrl(piece: string): { match?: RegExpExecArray; failed?: true } {
+  try {
+    return { match: DATA_URL.exec(piece) ?? undefined };
+  } catch (error) {
+    if (error instanceof RangeError || isStackOverflow(error)) return { failed: true };
+    throw error;
+  }
+}
+
+/**
+ * Rule (b): every data URL token in a string, wherever it sits. The string is
+ * cut before each data: (in any ASCII case), and the pattern is tried at the
+ * start of each piece and never past its end, so a run that goes on over a
+ * line break never takes the start of the next data URL. A media type that is
+ * not token/token is unknown. When the regex stack runs out on a piece, all of
+ * the piece from its data: on is the token, its size unknown: the strip never
+ * throws and never keeps what it could not read.
+ */
+function dataUrlSpans(text: string): DataUrlSpan[] {
+  const starts = Array.from(text.matchAll(DATA_SCHEME), (m) => m.index ?? 0);
+  const spans: DataUrlSpan[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i];
+    const end = i + 1 < starts.length ? starts[i + 1] : text.length;
+    const { match, failed } = matchDataUrl(text.slice(start, end));
+    if (failed) {
+      DATA_URL_MIME.lastIndex = start + 5;
+      const head = DATA_URL_MIME.exec(text)?.[0];
+      spans.push({ start, end, mime: isMime(head) ? head : undefined, byteSize: undefined });
+    } else if (match !== undefined) {
+      const mime = isMime(match[1]) ? match[1] : undefined;
+      spans.push({
+        start,
+        end: start + match[0].length,
+        mime,
+        byteSize: matchedBase64Size(match[3]),
+      });
+    }
+  }
+  return spans;
+}
+
+/**
+ * Rule (b)'s match when it is the whole string: the pattern anchored at the
+ * start, its match ending at the end. The same as `$` would say, since the
+ * run's greedy match reaches furthest, but fast when a long value fails. A
+ * value the regex stack cannot read is no match.
+ */
+function wholeDataUrl(value: string): RegExpExecArray | undefined {
+  const { match } = matchDataUrl(value);
+  return match !== undefined && match[0].length === value.length ? match : undefined;
 }
 
 /** The text a media token in a raw payload is replaced by. */
@@ -687,14 +766,15 @@ function urlKeys(
 
 /**
  * Whether a key that keeps URLs leaves a string to rule (b): it starts with a
- * URL scheme (base64 holds no colon, so it never does), and either the scheme
- * is not data, in any ASCII case, or rule (b)'s pattern matches all of it, so
- * rule (b) replaces every byte. Any other data: string (wrapped, percent
- * encoded, a broken run) stays a rule (e) token and is replaced whole.
+ * URL scheme (base64 holds no colon, so it never does), and either it holds
+ * no data: (in any ASCII case) or rule (b)'s pattern matches all of it, so
+ * rule (b) replaces every byte. Any other string holding data: (a percent
+ * encoded data URL, a broken run, a link with a data URL after it) stays a
+ * rule (e) token and is replaced whole.
  */
 function keptUrl(value: string): boolean {
   if (!URL_SCHEME.test(value)) return false;
-  return value.slice(0, value.indexOf(":")).toLowerCase() !== "data" || WHOLE_DATA_URL.test(value);
+  return !holdsDataScheme(value) || wholeDataUrl(value) !== undefined;
 }
 
 /** A string rule (e) replaces under `key`: a keyed string the key does not keep as a URL. */
@@ -801,12 +881,9 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   }
   const found = tokens.length;
   const edits: Edit[] = [];
-  for (const match of text.matchAll(DATA_URL)) {
-    const mime = isMime(match[1]) ? match[1] : undefined;
-    const byteSize = matchedBase64Size(match[3]);
+  for (const { start, end, mime, byteSize } of dataUrlSpans(text)) {
     tokens.push({ rule: "b", mime, byteSize });
-    const start = match.index ?? 0;
-    edits.push([start, start + match[0].length, replacement(mime, byteSize)]);
+    edits.push([start, end, replacement(mime, byteSize)]);
   }
   // Rule (b) alone reads no depth, so this is what splitMedia finds. A
   // candidate is not recorded: whether it parses can depend on its depth.
@@ -1022,8 +1099,8 @@ export const OPENINFERENCE_REDACTED = "__REDACTED__";
  * it, so it is redacted upstream.
  */
 export function dataUrlBlob(url: string, kind: Modality, mimeHint?: unknown): Part {
-  const match = WHOLE_DATA_URL.exec(url);
-  if (match !== null) {
+  const match = wholeDataUrl(url);
+  if (match !== undefined) {
     const mime = isMime(match[1]) ? match[1] : mimeHint;
     return blobPart(kind, mime, matchedBase64Size(match[3]), NOT_CAPTURED);
   }
@@ -1053,12 +1130,19 @@ export function droppedBlob(kind: Modality, mime?: unknown): Part {
 }
 
 /**
- * A URL as a part: a data URL is a blob, a dropped one a blob redacted
- * upstream, and any other, whatever its scheme, a uri.
+ * A provider URI as a part: a data URL is a blob, a dropped one a blob
+ * redacted upstream, one that holds data: past its start (a link followed by
+ * a data URL, or one led by whitespace) a blob with no size, and any other,
+ * whatever its scheme, a uri. A blob's modality is the MIME type's, else
+ * `kind`; a uri's the MIME type's, else `uriKind`, for a reader that takes it
+ * from the URL's extension (a blob never does: it is no URL to read a path
+ * from).
  */
-export function urlPart(url: string, kind: Modality, mime?: unknown): Part {
+export function urlPart(url: string, kind: Modality, mime?: unknown, uriKind = kind): Part {
   if (isDropped(url)) return droppedBlob(kind, mime);
-  return isDataUrl(url) ? dataUrlBlob(url, kind, mime) : uriPart(kind, mime, url);
+  if (isDataUrl(url)) return dataUrlBlob(url, kind, mime);
+  if (holdsDataScheme(url)) return blobPart(kind, mime, undefined, NOT_CAPTURED);
+  return uriPart(uriKind, mime, url);
 }
 
 /** A provider file id as a part: a dropped one is a blob redacted upstream. */
@@ -1320,7 +1404,7 @@ function documentContent(content: unknown): Part[] | undefined {
 
 /**
  * A Gemini part, which has no type: `inline_data` is a blob, `file_data` a uri
- * (a blob when its URI is a data URL).
+ * (a blob when its URI is a data URL or holds one past its start).
  */
 function geminiPart(item: Record<string, unknown>): Part[] | undefined {
   const inline = item.inline_data ?? item.inlineData;
@@ -1331,7 +1415,7 @@ function geminiPart(item: Record<string, unknown>): Part[] | undefined {
   if (isRecord(file)) {
     const uri = file.file_uri ?? file.fileUri;
     if (typeof uri === "string") {
-      return [urlPart(uri, uriModality(uri), file.mime_type ?? file.mimeType)];
+      return [urlPart(uri, "document", file.mime_type ?? file.mimeType, uriModality(uri))];
     }
   }
   return undefined;

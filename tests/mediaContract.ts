@@ -20,6 +20,8 @@ export type PartExample = {
   from: string;
   block?: string;
   native?: string;
+  /** A provider item that points at its media by URI. */
+  provider?: string;
   part: string;
 };
 export type InPlaceExample = { name: string; from: string; input: string; output: string };
