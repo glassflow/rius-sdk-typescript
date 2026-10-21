@@ -6,12 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": [
-      "**",
-      "!**/tests/fixtures/semconv",
-      "!**/src/semconv.generated.ts",
-      "!**/tests/conformance/_recording.mjs"
-    ]
+    "includes": ["**", "!**/tests/fixtures/semconv", "!**/tests/conformance/_recording.mjs"]
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
@@ -36,6 +31,10 @@
   "overrides": [
     {
       "includes": ["**/package.json"],
+      "formatter": { "enabled": false }
+    },
+    {
+      "includes": ["**/src/semconv.generated.ts"],
       "formatter": { "enabled": false }
     },
     {
