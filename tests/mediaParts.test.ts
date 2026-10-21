@@ -341,6 +341,98 @@ describe("provider media items as parts", () => {
     expect(providerMediaParts(block)).toEqual([part]);
   });
 
+  const dropped = (modality: string, mime?: string) => ({
+    type: "blob",
+    modality,
+    ...(mime === undefined ? {} : { mime_type: mime }),
+    stripped_reason: "redacted_upstream",
+  });
+
+  it.each([
+    [
+      { type: "image", url: "https://x.test/a.bin", mime_type: "image/png" },
+      { type: "uri", modality: "image", mime_type: "image/png", uri: "https://x.test/a.bin" },
+    ],
+    [
+      { type: "video", url: "gs://bucket/clip.png" },
+      { type: "uri", modality: "video", uri: "gs://bucket/clip.png" },
+    ],
+    [
+      { type: "file", url: "https://x.test/a.mp4?x=1" },
+      { type: "uri", modality: "video", uri: "https://x.test/a.mp4?x=1" },
+    ],
+    [
+      { type: "file", url: "https://x.test/a.png", mime_type: "application/pdf" },
+      {
+        type: "uri",
+        modality: "document",
+        mime_type: "application/pdf",
+        uri: "https://x.test/a.png",
+      },
+    ],
+    [{ type: "file", url: "data:;base64,UklGRg==" }, blob("document", undefined, 4)],
+    [
+      { type: "image", url: "data:image/jpeg;base64,AAAA", mime_type: "image/png" },
+      blob("image", "image/jpeg", 3),
+    ],
+    [
+      { type: "audio", file_id: "file-1" },
+      { type: "file", modality: "audio", file_id: "file-1" },
+    ],
+    [{ type: "image", url: "", file_id: "__REDACTED__" }, dropped("image")],
+    [{ type: "file", url: "__REDACTED__", mime_type: "audio/wav" }, dropped("audio", "audio/wav")],
+    [{ type: "video", url: 5, file_id: "" }, dropped("video")],
+  ])("maps the LangChain v1 reference block %j", (block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it.each([
+    [
+      "base64 over a url and a file_id",
+      { type: "image", url: "https://x.test/a.png", file_id: "f", base64: png },
+      blob("image", undefined, 8),
+    ],
+    [
+      "a usable file_id over a url",
+      { type: "image", url: "https://x.test/a.png", file_id: "f" },
+      { type: "file", modality: "image", file_id: "f" },
+    ],
+    [
+      "a usable url over a dropped file_id",
+      { type: "audio", url: "https://x.test/a", file_id: "" },
+      { type: "uri", modality: "audio", uri: "https://x.test/a" },
+    ],
+    [
+      "a file block's string file_id over its base64",
+      { type: "file", file_id: "f", base64: png, url: "https://x.test/a.png" },
+      { type: "file", modality: "document", file_id: "f" },
+    ],
+    [
+      "a file block's redacted file_id over its url",
+      { type: "file", file_id: "__REDACTED__", url: "https://x.test/a.png" },
+      { type: "file", modality: "document", file_id: "__REDACTED__" },
+    ],
+  ])("reads a LangChain v1 block in its order: %s", (_name, block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it("reads a LangChain v0 url block as a v1 one, and leaves its base64 and id blocks", () => {
+    expect(
+      providerMediaParts({ type: "image", source_type: "url", url: "https://x.test/a.png" }),
+    ).toEqual([{ type: "uri", modality: "image", uri: "https://x.test/a.png" }]);
+    expect(providerMediaParts({ type: "image", source_type: "base64", data: png })).toBeUndefined();
+    expect(providerMediaParts({ type: "file", source_type: "id", id: "file-1" })).toBeUndefined();
+  });
+
+  it.each([
+    { type: "text-plain", url: "https://x.test/a.txt" },
+    { type: "text-plain", file_id: "file-1" },
+    { type: "image", url: 5 },
+    { type: "audio", file_id: null },
+  ])("leaves the LangChain v1 block %j as it came", (block) => {
+    expect(providerMediaParts(block)).toBeUndefined();
+  });
+
   it("leaves a base64 member on a block type that names no media", () => {
     expect(providerMediaParts({ type: "custom", base64: png })).toBeUndefined();
   });

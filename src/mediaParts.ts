@@ -947,7 +947,9 @@ function asString(value: unknown): string | undefined {
 
 /**
  * A LangChain v1 standard content block's type, when it carries base64, and
- * the modality it names.
+ * the modality it names. A file or text-plain block names none, so it is a
+ * document unless its MIME type (or, for a file by URL, the URL's extension)
+ * says otherwise.
  */
 const LANGCHAIN_KINDS: Readonly<Record<string, Modality>> = {
   image: "image",
@@ -956,6 +958,41 @@ const LANGCHAIN_KINDS: Readonly<Record<string, Modality>> = {
   file: "document",
   "text-plain": "document",
 };
+
+/** The LangChain v1 block types whose url or file_id is a reference to media. */
+const LANGCHAIN_REFERENCE_TYPES: readonly string[] = ["image", "audio", "video", "file"];
+
+/**
+ * A LangChain v1 standard content block as one part, by the first of: a file
+ * block whose file_id is a string is a native file part (its file_id kept,
+ * empty or redacted included); base64 is a blob; a usable file_id a file; a
+ * usable url a uri (a blob when it is a data URL); a url or file_id that is a
+ * string but dropped, a blob redacted upstream. Only type, base64, url,
+ * file_id and mime_type are read, so a v0 url block is read the same way and
+ * a v0 base64 or id block holds none of them. Undefined for any other block,
+ * which stays as it came (an Anthropic image or document, an OpenAI file).
+ */
+function langchainPart(item: Record<string, unknown>): Part[] | undefined {
+  const type = item.type;
+  if (typeof type !== "string" || !Object.hasOwn(LANGCHAIN_KINDS, type)) return undefined;
+  if (type === "file" && typeof item.file_id === "string") return nativeMediaPart(item);
+  const kind = LANGCHAIN_KINDS[type] as Modality;
+  const mime = item.mime_type;
+  if (typeof item.base64 === "string") return [base64Blob(item.base64, kind, mime)];
+  if (!LANGCHAIN_REFERENCE_TYPES.includes(type)) return undefined;
+  const fileId = usable(item.file_id);
+  if (fileId !== undefined) return [fileIdPart(kind, mime, fileId)];
+  const url = usable(item.url);
+  if (url !== undefined) {
+    // A file names no modality: a link's extension does, before document.
+    const urlKind = type === "file" && !isDataUrl(url) ? uriModality(url) : kind;
+    return [urlPart(url, urlKind, mime)];
+  }
+  if (typeof item.url === "string" || typeof item.file_id === "string") {
+    return [droppedBlob(kind, mime)];
+  }
+  return undefined;
+}
 
 /** The part kind's modality, for a part with no MIME type. */
 function kindModality(type: unknown): Modality {
@@ -971,13 +1008,8 @@ function kindModality(type: unknown): Modality {
  */
 export function providerMediaParts(item: unknown): Part[] | undefined {
   if (!isRecord(item)) return undefined;
-  if (
-    typeof item.type === "string" &&
-    Object.hasOwn(LANGCHAIN_KINDS, item.type) &&
-    typeof item.base64 === "string"
-  ) {
-    return [base64Blob(item.base64, LANGCHAIN_KINDS[item.type] as Modality, item.mime_type)];
-  }
+  const langchain = langchainPart(item);
+  if (langchain !== undefined) return langchain;
   switch (item.type) {
     case "blob":
     case "uri":
