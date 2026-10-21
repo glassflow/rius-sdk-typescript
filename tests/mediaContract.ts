@@ -5,7 +5,9 @@
 // A normalized media part is canonical when its members are exactly the
 // contract's, in its order, none null, with a modality and the member its type
 // cannot do without: a blob's stripped_reason, a uri's uri, a file's file_id. A
-// bare {"type":"file"} is not.
+// bare {"type":"file"} is not. Each value is one the contract allows: a
+// modality and stripped_reason from its vocabularies, a token/token mime_type, a
+// whole byte_size from 0 to 2^53 - 1, and a string uri or file_id.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -27,6 +29,7 @@ export const CONTRACT = JSON.parse(
 ) as {
   modalities: string[];
   stripped_reasons: Record<string, string>;
+  raw_payloads: { replacement: { mime_pattern: string } };
   part_shapes: {
     members: Record<string, string[]>;
     examples: PartExample[];
@@ -35,6 +38,7 @@ export const CONTRACT = JSON.parse(
 };
 
 const REQUIRED: Record<string, string> = { blob: "stripped_reason", uri: "uri", file: "file_id" };
+const MIME_PATTERN = new RegExp(`^(?:${CONTRACT.raw_payloads.replacement.mime_pattern})$`);
 
 export const MESSAGE_KEYS = [
   "gen_ai.input.messages",
@@ -61,6 +65,20 @@ export function canonicalErrors(part: Record<string, unknown>): string[] {
   }
   if (type === "blob" && !Object.hasOwn(CONTRACT.stripped_reasons, String(part.stripped_reason))) {
     errors.push(`stripped_reason ${JSON.stringify(part.stripped_reason)}`);
+  }
+  const mime = part.mime_type;
+  if (mime !== undefined && !(typeof mime === "string" && MIME_PATTERN.test(mime))) {
+    errors.push(`mime_type ${JSON.stringify(mime)} is not token/token`);
+  }
+  const size = part.byte_size;
+  if (size !== undefined && !(Number.isSafeInteger(size) && (size as number) >= 0)) {
+    errors.push(`byte_size ${JSON.stringify(size)} is not a whole number from 0 to 2^53 - 1`);
+  }
+  for (const m of ["uri", "file_id"]) {
+    const value = part[m];
+    if (value !== undefined && value !== null && typeof value !== "string") {
+      errors.push(`${m} ${JSON.stringify(value)} is not a string`);
+    }
   }
   return errors;
 }
