@@ -12,6 +12,7 @@ describe("public API", () => {
         "VERSION",
         "getTracer",
         "init",
+        "markCompaction",
         "observe",
         "registerWorkspace",
         "startAsCurrentGeneration",

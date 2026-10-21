@@ -24,6 +24,7 @@ import {
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
+import { CompactionFlagSpanProcessor } from "./compaction.js";
 import { namedAgent, type OperatorMainAgent, type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
@@ -560,6 +561,7 @@ export function init(options: InitOptions = {}): RiusClient {
     processors.add(new NormalizingSpanProcessor());
     processors.add(new SessionSpanProcessor(config.sessionId));
     processors.add(new UserSpanProcessor());
+    processors.add(new CompactionFlagSpanProcessor());
     if (routing !== undefined) {
       processors.add(new WorkspaceSpanProcessor());
     }

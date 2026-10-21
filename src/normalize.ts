@@ -6,6 +6,7 @@ import {
 } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { moveAggregatedUsage, moveWrappedCallUsage, noteWrapperStart } from "./aggregatedUsage.js";
+import { addProviderCompactions } from "./compaction.js";
 import { qualifyRecordedExceptions } from "./errorType.js";
 import {
   base64Blob,
@@ -2741,6 +2742,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }
+    // Reads the same `output.value` as the response id above, and for the same
+    // reason only at end.
+    addProviderCompactions(span, attributes);
     // Export-stage only, like the event passes, and for a reason of its own:
     // messages are content, so they must never be written at span start, where
     // a pending snapshot could carry them. The sources are an indexed family,
