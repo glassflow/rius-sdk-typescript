@@ -187,6 +187,9 @@ export class Generation extends Observation {
         (text) => this.inputSplits.get(text) ?? this.outputSplits.get(text),
       ),
     );
+    // Written once; a kept Generation need not hold a split per text after end().
+    this.inputSplits = new Map();
+    this.outputSplits = new Map();
   }
 
   /** Ends the span after recording the context sizes; idempotent like the base. */

@@ -926,7 +926,9 @@ let recording: Map<string, TextSplit | undefined> | undefined;
  * `splits` that it strips with rule (b) alone, the split {@link splitMedia}
  * would return for that text. A text the strip reads with a JSON walk, or
  * does not reach, keeps its value. The keys are never replaced, so the map
- * holds none of the strip's own strings.
+ * holds none of the strip's own strings. The slot is shared by every strip
+ * that runs inside `run`, which is safe: a recorded value depends on its text
+ * alone, so whichever strip records it, the entry is the same.
  */
 export function recordSplits<T>(splits: Map<string, TextSplit | undefined>, run: () => T): T {
   const previous = recording;
