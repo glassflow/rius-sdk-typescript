@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { errorType } from "../src/errorType.js";
-import { attributeValue, byteAttributeValue, toAttributeValue } from "../src/serde.js";
+import { attributeValue, toAttributeValue } from "../src/serde.js";
 import { CONTRACT } from "./mediaContract.js";
 
 describe("toAttributeValue", () => {
@@ -213,34 +213,26 @@ describe("the contract's attribute values", () => {
   const VALUES: Record<string, () => unknown> = {
     typescript_buffer_attribute: () => Buffer.from([137, 80, 78, 71]),
     typescript_byte_objects_in_an_array_attribute: () => [new Uint8Array(2), new ArrayBuffer(3)],
+    typescript_byte_objects_beside_strings_in_an_array_attribute: () => [new Uint8Array(2), "x"],
     typescript_byte_objects_in_a_mapping_and_a_nested_array: () => ({
       k: new Uint16Array(2),
       n: [[new DataView(new ArrayBuffer(3))], ["x"]],
     }),
+    typescript_byte_object_in_a_nested_array: () => [[new Uint8Array(3)], ["x"]],
     typescript_byte_object_beside_a_number: () => [1, new Uint8Array(2)],
+    typescript_byte_object_beside_a_number_in_a_mapping: () => ({ k: [1, new Uint8Array(2)] }),
+    typescript_byte_object_beside_a_number_in_a_nested_array: () => [[1, new Uint8Array(1)]],
   };
 
   it("covers every TypeScript example of the contract", () => {
     expect(Object.keys(VALUES).sort()).toEqual(examples.map((e) => e.name).sort());
   });
 
-  it.each(examples.map((e) => [e.name, e] as const))("%s, walked", (name, example) => {
-    expect(byteAttributeValue(VALUES[name]())).toEqual(example.output);
+  // Each output is the value as OTel holds it: a walked value it cannot hold
+  // (a mapping, a nested array) is the JSON of the original.
+  it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (name, example) => {
+    expect(attributeValue(VALUES[name]())).toEqual(example.output);
   });
-
-  // OTel holds a string or a homogeneous array of them and nothing deeper: a
-  // walked value it cannot hold (a mapping) is set as the value's JSON.
-  it.each(examples.map((e) => [e.name, e] as const))(
-    "%s, as the span holds it",
-    (name, example) => {
-      const value = attributeValue(VALUES[name]());
-      if (typeof example.output === "object" && !Array.isArray(example.output)) {
-        expect(JSON.parse(value as string)).toEqual(example.output);
-      } else {
-        expect(value).toEqual(example.output);
-      }
-    },
-  );
 });
 
 describe("an array attribute value holding a byte object", () => {

@@ -162,7 +162,7 @@ export function attributeValue(value: unknown): AttributeValue | undefined {
  * string. Any other value is kept, and a cycle is left as it came for the
  * JSON encoding to mark.
  */
-export function byteAttributeValue(value: unknown, ancestors: unknown[] = []): unknown {
+function byteAttributeValue(value: unknown, ancestors: unknown[] = []): unknown {
   if (isByteObject(value)) return byteObjectMarker(value);
   const array = Array.isArray(value);
   if ((!array && !isPlainObject(value)) || ancestors.includes(value)) return value;
