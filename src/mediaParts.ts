@@ -872,9 +872,33 @@ export function dataUrlBlob(url: string, kind: Modality, mimeHint?: unknown): Pa
   return blobPart(kind, mime, undefined, NOT_CAPTURED);
 }
 
-/** A URL as a part: a data URL is a blob, anything else a uri. */
+/** A URL or file id the instrumentor dropped: empty, or its `__REDACTED__`. */
+export function isDropped(reference: unknown): boolean {
+  return reference === "" || reference === OPENINFERENCE_REDACTED;
+}
+
+/** A URL or file id that points somewhere: a string, not dropped. */
+function usable(reference: unknown): string | undefined {
+  return typeof reference === "string" && !isDropped(reference) ? reference : undefined;
+}
+
+/** The media a dropped URL or file id pointed to: never seen, so no size. */
+export function droppedBlob(kind: Modality, mime?: unknown): Part {
+  return blobPart(kind, mime, undefined, REDACTED_UPSTREAM);
+}
+
+/**
+ * A URL as a part: a data URL is a blob, a dropped one a blob redacted
+ * upstream, and any other, whatever its scheme, a uri.
+ */
 export function urlPart(url: string, kind: Modality, mime?: unknown): Part {
+  if (isDropped(url)) return droppedBlob(kind, mime);
   return isDataUrl(url) ? dataUrlBlob(url, kind, mime) : uriPart(kind, mime, url);
+}
+
+/** A provider file id as a part: a dropped one is a blob redacted upstream. */
+function referencePart(fileId: string, kind: Modality, mime?: unknown): Part {
+  return isDropped(fileId) ? droppedBlob(kind, mime) : fileIdPart(kind, mime, fileId);
 }
 
 /** Inline base64 (not a data URL) as a blob. */
@@ -908,7 +932,7 @@ function filenameModality(filename: unknown): Modality {
 }
 
 /** The modality a URI's filename extension names (its path, query and fragment cut). */
-function uriModality(uri: string): Modality {
+export function uriModality(uri: string): Modality {
   const path = uri.split("#", 1)[0].split("?", 1)[0];
   return filenameModality(path.slice(path.lastIndexOf("/") + 1));
 }
@@ -978,10 +1002,14 @@ export function providerMediaParts(item: unknown): Part[] | undefined {
       return [base64Blob(audio.data, "audio", format && `audio/${format}`)];
     }
     case "input_image": {
-      const url = asString(item.image_url);
+      const url = usable(item.image_url);
       if (url !== undefined) return [urlPart(url, "image")];
-      const fileId = asString(item.file_id);
-      return fileId === undefined ? undefined : [fileIdPart("image", undefined, fileId)];
+      const fileId = usable(item.file_id);
+      if (fileId !== undefined) return [fileIdPart("image", undefined, fileId)];
+      if (typeof item.image_url === "string" || typeof item.file_id === "string") {
+        return [droppedBlob("image")];
+      }
+      return undefined;
     }
     case "input_file":
       return openaiFile(item);
@@ -1021,16 +1049,19 @@ function bedrockPart(item: Record<string, unknown>): Part[] | undefined {
  * OpenAI's file item: chat's `file {file_id | file_data, filename}` or the
  * Responses `input_file {file_id | file_data | file_url, filename}`. File data
  * is a data URL (its mime type names the modality) or bare base64, whose
- * modality comes from the filename.
+ * modality comes from the filename. With no usable reference (each one
+ * missing, not a string, empty or redacted), it was dropped upstream: never a
+ * part of type file without a file_id.
  */
-function openaiFile(file: Record<string, unknown>): Part[] | undefined {
+function openaiFile(file: Record<string, unknown>): Part[] {
   const kind = filenameModality(file.filename);
-  const fileId = asString(file.file_id);
+  const fileId = usable(file.file_id);
   if (fileId !== undefined) return [fileIdPart(kind, undefined, fileId)];
-  const data = asString(file.file_data);
+  const data = usable(file.file_data);
   if (data !== undefined) return [base64Blob(data, kind, undefined)];
-  const url = asString(file.file_url);
-  return url === undefined ? undefined : [urlPart(url, kind)];
+  const url = usable(file.file_url);
+  if (url !== undefined) return [urlPart(url, kind)];
+  return [droppedBlob(kind)];
 }
 
 /**
@@ -1052,7 +1083,7 @@ function anthropicSource(type: string, source: unknown): Part[] | undefined {
         : undefined;
     case "file":
       return typeof source.file_id === "string"
-        ? [fileIdPart(kind, source.media_type, source.file_id)]
+        ? [referencePart(source.file_id, kind, source.media_type)]
         : undefined;
     case "text":
       return type === "document" && typeof source.data === "string"

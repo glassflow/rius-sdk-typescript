@@ -9,9 +9,48 @@
       },
       "expected": {
         "ai.operationId": "ai.generateText.doGenerate",
-        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look:\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"https://example.com/a.png\"},{\"type\":\"blob\",\"modality\":\"audio\",\"mime_type\":\"audio/wav\",\"byte_size\":4,\"stripped_reason\":\"not_captured\"},{\"type\":\"uri\",\"modality\":\"document\",\"uri\":\"https://example.com/b.pdf\"},{\"type\":\"blob\",\"modality\":\"video\",\"mime_type\":\"video/mp4\",\"byte_size\":3,\"stripped_reason\":\"not_captured\"},{\"type\":\"blob\",\"modality\":\"document\",\"mime_type\":\"text/plain\",\"byte_size\":5,\"stripped_reason\":\"not_captured\"},{\"type\":\"file\"},{\"type\":\"blob\",\"modality\":\"image\",\"byte_size\":5,\"stripped_reason\":\"not_captured\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"content\":\"Thinking.\"},{\"type\":\"tool_call\",\"id\":null,\"name\":\"lookup\",\"arguments\":{\"q\":1.5}},{\"type\":\"custom-part\"}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"c1\",\"response\":{\"ok\":true}},{\"type\":\"tool_call_response\",\"id\":\"c2\",\"response\":\"boom\"},{\"type\":\"tool_call_response\",\"id\":\"c3\",\"response\":{\"denied\":true,\"reason\":\"no\"}},{\"type\":\"tool_call_response\",\"id\":\"c4\",\"response\":{\"type\":\"content\",\"value\":[]}},{\"type\":\"tool_call_response\",\"id\":\"c5\"}]}]",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look:\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"https://example.com/a.png\"},{\"type\":\"blob\",\"modality\":\"audio\",\"mime_type\":\"audio/wav\",\"byte_size\":4,\"stripped_reason\":\"not_captured\"},{\"type\":\"uri\",\"modality\":\"document\",\"uri\":\"https://example.com/b.pdf\"},{\"type\":\"blob\",\"modality\":\"video\",\"mime_type\":\"video/mp4\",\"byte_size\":3,\"stripped_reason\":\"not_captured\"},{\"type\":\"blob\",\"modality\":\"document\",\"mime_type\":\"text/plain\",\"byte_size\":5,\"stripped_reason\":\"not_captured\"},{\"type\":\"blob\",\"modality\":\"image\",\"byte_size\":5,\"stripped_reason\":\"not_captured\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"content\":\"Thinking.\"},{\"type\":\"tool_call\",\"id\":null,\"name\":\"lookup\",\"arguments\":{\"q\":1.5}},{\"type\":\"custom-part\"}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"c1\",\"response\":{\"ok\":true}},{\"type\":\"tool_call_response\",\"id\":\"c2\",\"response\":\"boom\"},{\"type\":\"tool_call_response\",\"id\":\"c3\",\"response\":{\"denied\":true,\"reason\":\"no\"}},{\"type\":\"tool_call_response\",\"id\":\"c4\",\"response\":{\"type\":\"content\",\"value\":[]}},{\"type\":\"tool_call_response\",\"id\":\"c5\"}]}]",
         "gen_ai.operation.name": "chat",
         "gen_ai.system_instructions": "[{\"type\":\"text\",\"content\":\"Be brief.\"}]",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a file or image part by a URL of any scheme keeps the link",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"user\",\"content\":[{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":\"gs://bucket/a.png\"},{\"type\":\"file\",\"data\":{\"type\":\"url\",\"url\":\"s3://bucket/report.pdf\"}},{\"type\":\"file\",\"data\":\"file:///tmp/clip.mov\"},{\"type\":\"file\",\"data\":{\"type\":\"url\",\"url\":\"file:///tmp/talk.MP3?x=1#t\"}},{\"type\":\"file\",\"data\":\"https://example.com/a.png\"},{\"type\":\"image\",\"image\":\"gs://bucket/b\"},{\"type\":\"file\",\"mediaType\":\"application/pdf\",\"data\":{\"type\":\"data\",\"data\":\"custom+scheme.v1:abc\"}},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":\"data:image/png;base64,iVBORw0KGgo=\"},{\"type\":\"file\",\"data\":{\"type\":\"url\",\"url\":\"data:audio/wav;base64,UklGRg==\"}}]}]"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"gs://bucket/a.png\"},{\"type\":\"uri\",\"modality\":\"document\",\"uri\":\"s3://bucket/report.pdf\"},{\"type\":\"uri\",\"modality\":\"video\",\"uri\":\"file:///tmp/clip.mov\"},{\"type\":\"uri\",\"modality\":\"audio\",\"uri\":\"file:///tmp/talk.MP3?x=1#t\"},{\"type\":\"uri\",\"modality\":\"image\",\"uri\":\"https://example.com/a.png\"},{\"type\":\"uri\",\"modality\":\"image\",\"uri\":\"gs://bucket/b\"},{\"type\":\"uri\",\"modality\":\"document\",\"mime_type\":\"application/pdf\",\"uri\":\"custom+scheme.v1:abc\"},{\"type\":\"blob\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"byte_size\":8,\"stripped_reason\":\"not_captured\"},{\"type\":\"blob\",\"modality\":\"audio\",\"mime_type\":\"audio/wav\",\"byte_size\":4,\"stripped_reason\":\"not_captured\"}]}]",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a dropped URL and an unknown data tag make blobs with no byte_size",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"user\",\"content\":[{\"type\":\"file\",\"data\":{\"type\":\"url\",\"url\":\"\"}},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":{\"type\":\"url\",\"url\":\"__REDACTED__\"}},{\"type\":\"image\",\"image\":{\"type\":\"url\",\"url\":\"\"}},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":{\"type\":\"reference\",\"id\":\"x\"}},{\"type\":\"image\",\"image\":{\"type\":\"reference\"}}]}]"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"blob\",\"modality\":\"document\",\"stripped_reason\":\"redacted_upstream\"},{\"type\":\"blob\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"stripped_reason\":\"redacted_upstream\"},{\"type\":\"blob\",\"modality\":\"image\",\"stripped_reason\":\"redacted_upstream\"},{\"type\":\"blob\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"stripped_reason\":\"not_captured\"},{\"type\":\"blob\",\"modality\":\"image\",\"stripped_reason\":\"not_captured\"}]}]",
+        "gen_ai.operation.name": "chat",
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "a file or image part whose data cannot be read makes no part",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Look:\"},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":{\"0\":1}},{\"type\":\"image\",\"image\":7},{\"type\":\"file\",\"mediaType\":\"text/plain\",\"data\":{\"type\":\"text\",\"text\":7}},{\"type\":\"file\",\"mediaType\":\"image/png\"},{\"type\":\"file\",\"data\":{\"type\":\"url\",\"url\":7}},{\"type\":\"file\",\"data\":{\"type\":\"data\",\"data\":null}}]}]"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look:\"}]}]",
+        "gen_ai.operation.name": "chat",
         "openinference.span.kind": "LLM"
       }
     },

@@ -372,6 +372,14 @@ describe("provider media items as parts", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    ["no reference", { type: "input_image" }],
+    ["a file_id that is not a string", { type: "input_image", file_id: 5 }],
+    ["a null image_url", { type: "input_image", image_url: null }],
+  ])("leaves an input_image with %s as it came", (_name, block) => {
+    expect(providerMediaParts(block)).toBeUndefined();
+  });
+
   it("leaves a Bedrock Converse source by S3 location as it came", () => {
     expect(
       providerMediaParts({ image: { format: "png", source: { s3Location: { uri: "s3://b/a" } } } }),
