@@ -138,7 +138,7 @@ export function base64Size(value: string): number | undefined {
 }
 
 /** The text a media token in a raw payload is replaced by. */
-function replacement(mime: string | undefined, byteSize: number | undefined): string {
+export function replacement(mime: string | undefined, byteSize: number | undefined): string {
   // Function replacers: a mime may hold `$&`, which a string replacement reads.
   return REPLACEMENT_FORMAT.replace("<mime>", () => mime ?? REPLACEMENT_UNKNOWN).replace(
     "<byte_size>",

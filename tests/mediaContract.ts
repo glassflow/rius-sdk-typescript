@@ -25,12 +25,22 @@ export type MessageExample = {
   output: string;
 };
 
+export type ByteObjectExample = {
+  name: string;
+  language: string;
+  value: string;
+  output: string;
+};
+
 export const CONTRACT = JSON.parse(
   readFileSync(join(HERE, "fixtures/semconv/media_parts.json"), "utf8"),
 ) as {
   modalities: string[];
   stripped_reasons: Record<string, string>;
-  raw_payloads: { replacement: { mime_pattern: string } };
+  raw_payloads: {
+    replacement: { mime_pattern: string };
+    byte_objects: { examples: ByteObjectExample[] };
+  };
   part_shapes: {
     members: Record<string, string[]>;
     examples: PartExample[];

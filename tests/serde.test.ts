@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { errorType } from "../src/errorType.js";
 import { toAttributeValue } from "../src/serde.js";
+import { CONTRACT } from "./mediaContract.js";
 
 describe("toAttributeValue", () => {
   it("passes primitives through untouched", () => {
@@ -76,6 +77,63 @@ describe("toAttributeValue", () => {
     expect(parsed.y.z).toEqual({ id: 42 });
     // No [Circular] marker
     expect(result).not.toContain("[Circular]");
+  });
+});
+
+describe("a byte object in a serialized value", () => {
+  const examples = CONTRACT.raw_payloads.byte_objects.examples.filter(
+    (e) => e.language === "typescript",
+  );
+
+  /** Each TypeScript byte_objects example's value, built as the example writes it. */
+  const VALUES: Record<string, () => unknown> = {
+    typescript_uint8array: () => ({ u: new Uint8Array(3) }),
+    typescript_node_buffer_is_a_byte_object: () => ({
+      type: "file",
+      data: Buffer.from([137, 80, 78, 71]),
+      mediaType: "image/png",
+    }),
+    typescript_typed_array_counts_bytes_not_items: () => new Uint16Array(2),
+    typescript_array_buffer_and_data_view: () => [
+      new ArrayBuffer(5),
+      new DataView(new ArrayBuffer(8), 2, 3),
+    ],
+  };
+
+  it("covers every TypeScript example of the contract", () => {
+    expect(Object.keys(VALUES).sort()).toEqual(examples.map((e) => e.name).sort());
+  });
+
+  it.each(examples.map((e) => [e.name, e] as const))("%s, byte for byte", (name, example) => {
+    expect(toAttributeValue(VALUES[name]())).toBe(example.output);
+  });
+
+  it.each([
+    ["a SharedArrayBuffer", new SharedArrayBuffer(6), '"[stripped unknown 6 bytes]"'],
+    [
+      "a Float64Array (8 bytes an item)",
+      { f: new Float64Array(2) },
+      '{"f":"[stripped unknown 16 bytes]"}',
+    ],
+    [
+      "a Buffer cut from a larger one (its own length)",
+      { b: Buffer.from("abcdefgh").subarray(2, 5) },
+      '{"b":"[stripped unknown 3 bytes]"}',
+    ],
+    ["an empty Buffer", [Buffer.alloc(0)], '["[stripped unknown 0 bytes]"]'],
+    [
+      "bytes in a Map and a Set",
+      { m: new Map([["k", new Uint8Array(2)]]), s: new Set([new Int32Array(1)]) },
+      '{"m":{"k":"[stripped unknown 2 bytes]"},"s":["[stripped unknown 4 bytes]"]}',
+    ],
+  ])("writes %s as the marker", (_name, value, output) => {
+    expect(toAttributeValue(value)).toBe(output);
+  });
+
+  it("never writes a Buffer's toJSON object or its bytes", () => {
+    const text = toAttributeValue({ a: { b: [Buffer.from([1, 2, 3])] } }) as string;
+    expect(text).toBe('{"a":{"b":["[stripped unknown 3 bytes]"]}}');
+    expect(text).not.toContain('"Buffer"');
   });
 });
 

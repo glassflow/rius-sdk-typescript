@@ -32,8 +32,8 @@ describe("serde robustness", () => {
   });
 
   it("summarises binary payloads instead of exploding them into byte arrays", () => {
-    expect(toAttributeValue({ b: Buffer.alloc(8) })).toBe('{"b":"<Buffer 8 bytes>"}');
-    expect(toAttributeValue({ u: new Uint8Array(3) })).toBe('{"u":"<Uint8Array 3 bytes>"}');
+    expect(toAttributeValue({ b: Buffer.alloc(8) })).toBe('{"b":"[stripped unknown 8 bytes]"}');
+    expect(toAttributeValue({ u: new Uint8Array(3) })).toBe('{"u":"[stripped unknown 3 bytes]"}');
   });
 });
 

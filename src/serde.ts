@@ -1,5 +1,5 @@
 import type { AttributeValue } from "@opentelemetry/api";
-import { stripRawPayload } from "./mediaParts.js";
+import { replacement, stripRawPayload } from "./mediaParts.js";
 
 /**
  * Serialized payload cap, in characters, shared with the Python SDK so a
@@ -35,13 +35,27 @@ function renderable(raw: unknown, value: unknown): unknown {
   if (typeof raw === "bigint") return String(raw);
   if (raw instanceof Map) return Object.fromEntries(raw);
   if (raw instanceof Set) return [...raw];
-  if (ArrayBuffer.isView(raw)) {
+  if (isByteObject(raw)) {
     // Bytes are not content a trace can show; a size is, and a byte array
-    // exploded into JSON was many times the payload's own size.
-    return `<${raw.constructor.name} ${raw.byteLength} bytes>`;
+    // exploded into JSON was many times the payload's own size. The marker
+    // is the strip's replacement with the unknown mime, the same text the
+    // Python SDK writes for bytes, so it is never stripped again.
+    return replacement(undefined, raw.byteLength);
   }
-  if (raw instanceof ArrayBuffer) return `<ArrayBuffer ${raw.byteLength} bytes>`;
   return value;
+}
+
+/**
+ * An ArrayBuffer, a SharedArrayBuffer or any view on one (each typed array,
+ * a Node Buffer, a DataView). Its byteLength is its size in bytes, a view's
+ * own length rather than its buffer's.
+ */
+function isByteObject(raw: unknown): raw is { byteLength: number } {
+  return (
+    ArrayBuffer.isView(raw) ||
+    raw instanceof ArrayBuffer ||
+    (typeof SharedArrayBuffer !== "undefined" && raw instanceof SharedArrayBuffer)
+  );
 }
 
 /**
