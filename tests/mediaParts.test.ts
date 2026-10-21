@@ -77,6 +77,11 @@ describe("the raw-payload strip", () => {
       sourceType: e.source_type,
       blobType: e.blob_type,
       blobKey: e.blob_key,
+      typedKeys: (e.typed_keys as { key: string; types: string[] }[]).map((t) => ({
+        key: t.key,
+        types: t.types,
+      })),
+      sourceBytesKeys: e.source_bytes_keys,
       mimeKeys: e.mime_keys,
       mimeFormats: (e.mime_formats as { key: string; mime: string; parent_keys?: string[] }[]).map(
         (f) => ({
@@ -293,6 +298,84 @@ describe("provider media items as parts", () => {
       { type: "text", content: "a" },
       { type: "text", content: "b" },
     ]);
+  });
+
+  const blob = (modality: string, mime: string | undefined, size: number) => ({
+    type: "blob",
+    modality,
+    ...(mime === undefined ? {} : { mime_type: mime }),
+    byte_size: size,
+    stripped_reason: "not_captured",
+  });
+
+  it("maps a Mistral input_audio string to an audio blob with no mime", () => {
+    expect(providerMediaParts({ type: "input_audio", input_audio: "UklGRiQAAABXQVZF" })).toEqual([
+      blob("audio", undefined, 12),
+    ]);
+    expect(
+      providerMediaParts({ type: "input_audio", input_audio: "data:audio/wav;base64,UklGRg==" }),
+    ).toEqual([blob("audio", "audio/wav", 4)]);
+  });
+
+  it("maps Mistral's TypeScript inputAudio string to an audio blob with no mime", () => {
+    expect(providerMediaParts({ type: "input_audio", inputAudio: "UklGRiQAAABXQVZF" })).toEqual([
+      blob("audio", undefined, 12),
+    ]);
+  });
+
+  it.each([
+    [{ type: "image", base64: png, mime_type: "image/png" }, blob("image", "image/png", 8)],
+    [{ type: "audio", base64: "UklGRg==" }, blob("audio", undefined, 4)],
+    [{ type: "video", base64: "AAAA", mime_type: "video/mp4" }, blob("video", "video/mp4", 3)],
+    [
+      { type: "file", base64: "JVBERi0=", mime_type: "application/pdf" },
+      blob("document", "application/pdf", 5),
+    ],
+    [{ type: "file", base64: "JVBERi0=" }, blob("document", undefined, 5)],
+    [{ type: "file", base64: png, mime_type: "image/png" }, blob("image", "image/png", 8)],
+    [
+      { type: "text-plain", base64: "aGVsbG8=", mime_type: "text/plain" },
+      blob("document", "text/plain", 5),
+    ],
+  ])("maps the LangChain v1 base64 block %j to a blob", (block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it("leaves a base64 member on a block type that names no media", () => {
+    expect(providerMediaParts({ type: "custom", base64: png })).toBeUndefined();
+  });
+
+  it.each([
+    [{ image: { format: "png", source: { bytes: png } } }, blob("image", "image/png", 8)],
+    [{ video: { format: "mp4", source: { bytes: "AAAA" } } }, blob("video", undefined, 3)],
+    [
+      { document: { format: "pdf", name: "report", source: { bytes: "JVBERi0=" } } },
+      blob("document", undefined, 5),
+    ],
+    [{ audio: { format: "mp3", source: { bytes: "UklGRg==" } } }, blob("audio", undefined, 4)],
+    [{ image: { source: { bytes: png } } }, blob("image", undefined, 8)],
+    [
+      { image: { format: "jpeg", source: { bytes: new Uint8Array([255, 216, 255, 224]) } } },
+      blob("image", "image/jpeg", 4),
+    ],
+    [
+      { audio: { format: "wav", source: { bytes: new Uint8Array([82, 73, 70, 70]) } } },
+      blob("audio", undefined, 4),
+    ],
+  ])("maps the Bedrock Converse block %j to a blob", (block, part) => {
+    expect(providerMediaParts(block)).toEqual([part]);
+  });
+
+  it("leaves a typed block with a Bedrock key as it came", () => {
+    expect(
+      providerMediaParts({ type: "custom", image: { format: "png", source: { bytes: png } } }),
+    ).toBeUndefined();
+  });
+
+  it("leaves a Bedrock Converse source by S3 location as it came", () => {
+    expect(
+      providerMediaParts({ image: { format: "png", source: { s3Location: { uri: "s3://b/a" } } } }),
+    ).toBeUndefined();
   });
 
   it("maps Gemini inline_data and file_data", () => {
