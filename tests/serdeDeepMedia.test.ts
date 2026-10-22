@@ -3,6 +3,7 @@ import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
 import { stripSpanPayloads } from "../src/normalize.js";
 import { stripMedia, textValue, toAttributeValue } from "../src/serde.js";
+import cutCases from "./fixtures/deep_media_cut_cases.json" with { type: "json" };
 
 // The media strip's parser gives up past its depth limit, so a text nested
 // deeper is not JSON to it and only its data URLs are found: a keyed image's
@@ -127,4 +128,15 @@ describe("a string cut before its closing quote", () => {
     const text = `{"s": "${word} \\"x\\": ${"[".repeat(10)}`;
     expect(stripMedia(text)).toBe(text);
   });
+});
+
+describe("a text cut inside a string, byte for byte with the Python SDK", () => {
+  // Inputs and outputs dumped from the Python SDK's text_value, so the two
+  // SDKs strip a string the text ends inside the same way.
+  it.each(cutCases.map((c) => [c.name, c.input, c.expected] as const))(
+    "%s",
+    (_, input, expected) => {
+      expect(textValue(input)).toBe(expected);
+    },
+  );
 });
