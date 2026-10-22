@@ -756,7 +756,7 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  * first-token event. Spelled here rather than in semconv.ts for the reason
  * gen_ai.system is: a source spelling we map and never emit.
  */
-export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk";
+const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk";
 
 /**
  * The OpenInference model-call and usage families.

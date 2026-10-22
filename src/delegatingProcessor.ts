@@ -17,15 +17,6 @@ export class DelegatingSpanProcessor implements SpanProcessor {
     this.delegates.push(processor);
   }
 
-  /**
-   * Insert ahead of existing delegates, for a processor that must observe a
-   * span before the pipeline's own processors do: normalization rewrites the
-   * attributes in place, so only a processor added first sees them raw.
-   */
-  addFirst(processor: SpanProcessor): void {
-    this.delegates.unshift(processor);
-  }
-
   /** Delegates that already threw, so each is reported once, not once per span. */
   private readonly warned = new WeakSet<SpanProcessor>();
 
