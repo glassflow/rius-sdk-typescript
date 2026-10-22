@@ -304,7 +304,9 @@ function firstFrom(starts: readonly number[], from: number, end: number): number
  * or after the run's start, so a percent-encoded data URL glued after it is a
  * token of its own: the pattern is tried again at the same start, never past
  * that data%3A, through the same catch. `end` comes back as the end of the
- * slice last tried, where a token the regex stack could not read ends.
+ * slice last tried, where a token the regex stack could not read ends. A run
+ * stops at %, so the retry's slice is the first one less the run's trailing
+ * `data`: its overflow branch is defensive.
  */
 function plainMatch(
   pattern: RegExp,
@@ -315,7 +317,8 @@ function plainMatch(
 ): { match?: RegExpExecArray; failed?: true; end: number } {
   const first = matchDataUrl(pattern, text.slice(start, end));
   if (first.match === undefined) return { ...first, end };
-  // The header and its parameters hold no comma: the first is ;base64,'s.
+  // The header and its parameters hold no comma: the first is ;base64,'s, so
+  // this is the run's (group 3's) start.
   const runStart = start + first.match[0].indexOf(",") + 1;
   const cut = firstFrom(percents, runStart, end);
   if (cut >= start + first.match[0].length) return { ...first, end };
