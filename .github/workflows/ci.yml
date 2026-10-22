@@ -93,7 +93,7 @@ jobs:
         if: matrix.node-version == '24'
         run: |
           npm i --no-save @anthropic-ai/sdk@0.133.0
-          npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts
+          npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts tests/anthropicNativeSpansBridgedE2E.test.ts
 
   packaging:
     runs-on: ubuntu-latest
