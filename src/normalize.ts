@@ -816,8 +816,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Provider. One rule, two spellings, first present wins: llm.provider is
   // OpenInference's and the more specific (azure/aws/google rather than the
   // product), gen_ai.system is the deprecated GenAI key, which is mapped here
-  // and never emitted. That is why gen_ai.system is spelled inline rather
-  // than in semconv.ts: that module is the set of keys we EMIT.
+  // and never emitted. Like the llm.* keys, both are source spellings the
+  // registry names so they are not typed here.
   {
     source: [LLM_PROVIDER, GEN_AI_SYSTEM],
     target: GEN_AI_PROVIDER_NAME,
@@ -908,8 +908,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // target where a span somehow carries both, and a separate rule rather than
   // a second source means an OpenInference count that won't parse still lets
   // a usable alternate through (a rule converts only its first present
-  // source). Spelled inline for the reason gen_ai.system is: source spellings
-  // we map and never emit.
+  // source). Like gen_ai.system, they are source spellings we map and never
+  // emit.
   //
   // cache_creation is the cache-write count's name before the upstream rename
   // to cache_write. Permanent, not a transition aid: current third-party
@@ -1051,7 +1051,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
 // way, so raw AI SDK traffic that never passed through this SDK stores it too.
 //
 // Source spellings throughout, read from the `ai` package at 5.0.273 and
-// 6.0.304 (the recorded versions) and spelled inline, as for every dialect.
+// 6.0.304 (the recorded versions) and spelled inline: the registry names only
+// ai.operationId among them.
 
 /**
  * What an operation id says: its kind, and whether the span is ONE model call
@@ -2353,7 +2354,8 @@ export function stripSpanPayloads(span: ReadableSpan): void {
 
 /**
  * OpenInference's indexed tool-definition family, `llm.tools.{i}.tool.json_schema`.
- * A source spelling, inline for the reason the `llm.*` rule sources are.
+ * A source spelling the registry has no constant for (a pattern over indexed
+ * keys, not one key), so it is spelled here.
  */
 const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
 
@@ -2612,7 +2614,8 @@ export function promoteSystemInstruction(
 
 /**
  * OpenInference's embedding vectors, `embedding.embeddings.N.embedding.vector`.
- * A source spelling, inline for the reason the `llm.*` rule sources are.
+ * A source spelling the registry has no constant for (a pattern over indexed
+ * keys, not one key), so it is spelled here.
  */
 const EMBEDDING_VECTOR = /^embedding\.embeddings\.[0-9]+\.embedding\.vector$/;
 
