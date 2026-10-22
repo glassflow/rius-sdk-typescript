@@ -11,6 +11,7 @@ import {
   base64Size,
   blobPart,
   DATA_URL_PATTERN,
+  ESCAPED_DATA_URL_PATTERN,
   EXTENSION_MODALITY,
   fileIdPart,
   isReplacement,
@@ -18,6 +19,9 @@ import {
   MAX_DEPTH,
   type MediaToken,
   MIME_PATTERN,
+  nativeMediaPart,
+  PERCENT_DATA_URL_PATTERN,
+  PERCENT_DATA_URL_SCHEME,
   providerMediaParts,
   REPLACEMENT_FORMAT,
   REPLACEMENT_UNKNOWN,
@@ -72,6 +76,9 @@ describe("the raw-payload strip", () => {
     expect(RAW.replacement.unknown).toBe(REPLACEMENT_UNKNOWN);
     expect(RAW.replacement.mime_pattern).toBe(MIME_PATTERN);
     expect(rule("b").pattern).toBe(DATA_URL_PATTERN);
+    expect(rule("b").escaped_pattern).toBe(ESCAPED_DATA_URL_PATTERN);
+    expect(rule("b").percent_scheme).toBe(PERCENT_DATA_URL_SCHEME);
+    expect(rule("b").percent_pattern).toBe(PERCENT_DATA_URL_PATTERN);
     expect({
       type: rule("d").type,
       arrayKey: rule("d").array_key,
@@ -262,8 +269,14 @@ describe("the raw-payload strip", () => {
       [{ rule: "b", mime: "image/png", byte_size: 3 }],
     ],
     [
-      "keeps a data URL with a trailing newline a rule (e) token",
+      "replaces a data URL and one final newline whole, by rule (b)",
       '{"type":"image","image":"data:image/png;base64,AAAA\\n"}',
+      '{"type":"image","image":"[stripped image/png 3 bytes]"}',
+      [{ rule: "b", mime: "image/png", byte_size: 3 }],
+    ],
+    [
+      "keeps a data URL with two trailing newlines a rule (e) token",
+      '{"type":"image","image":"data:image/png;base64,AAAA\\n\\n"}',
       '{"type":"image","image":"[stripped unknown unknown bytes]"}',
       [{ rule: "e", mime: "unknown", byte_size: "unknown" }],
     ],
@@ -349,6 +362,295 @@ describe("a data URL the regex stack cannot read", () => {
     expect(providerMediaParts({ type: "image_url", image_url: { url } })).toEqual([
       blobPart("image", "image/png", undefined, "not_captured"),
     ]);
+  });
+});
+
+/** The size the reference's run_size gives a run: escaped breaks and `>` dropped. */
+const runSize = (run: string) => base64Size(run.replace(/\\r{0,1}\\{0,1}n/g, "").replace(/>/g, ""));
+
+describe("a data URL percent-encoded whole", () => {
+  it.each([
+    ["data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgo%3D", "image/png", 8],
+    ["DATA%3aimage%2fpng%3bbase64%2civBORw0KGgo%3d", "image/png", 8],
+    ["data%3Aimage/png%3Bbase64%2C%2B%2B%2B%2B////AA%3D%3D", "image/png", 7],
+    ["data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CQUFB", "image/svg+xml", 3],
+    ["data%3Aimage%2Fpng%3Bname%3Da.png%3Bbase64%2CQUFB", "image/png", 3],
+    ["data%3A%3Bbase64%2CQUFB", undefined, 3],
+    ["data%3Aimage%3Bbase64%2CQUFB", undefined, 3],
+    ["data%3Aa%2Fb%2Fc%3Bbase64%2CQUFB", undefined, 3],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%3D%3D%3D", "a/b", undefined],
+    ["data%3Aa%2Fb%3Bbase64%2C", "a/b", 0],
+    // Wrapped before it was encoded: the encoded line breaks are no bytes.
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%0AQkJD", "a/b", 6],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%0d%0aQkJD", "a/b", 6],
+    // %2A, %0B and %2D are in the run, and no base64 holds the first two.
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%2A", "a/b", undefined],
+    ["data%3Aa%2Fb%3Bbase64%2CQUF%0BB", "a/b", undefined],
+    ["data%3Aa%2Fb%3Bbase64%2CQUF%2DB", "a/b", undefined],
+  ])("%s is one token, its mime and run percent-decoded", (text, mime, byteSize) => {
+    const rest = text.endsWith("%3D%3D%3D") ? "%3D" : "";
+    expect(strip(text)).toEqual({
+      text: `[stripped ${mime ?? "unknown"} ${byteSize ?? "unknown"} bytes]${rest}`,
+      tokens: [{ rule: "b", mime, byteSize }],
+    });
+  });
+
+  it.each([
+    ["x data%3Aa%2Fb%3Bbase64%2CQUFB%0AQkJD", "data%3Aa%2Fb%3Bbase64%2CQUFB%0AQkJD"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%0d%0aQkJD%0A ", "data%3Aa%2Fb%3Bbase64%2CQUFB%0d%0aQkJD%0A"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%3D%0AQkJD", "data%3Aa%2Fb%3Bbase64%2CQUFB%3D"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%20QkJD", "data%3Aa%2Fb%3Bbase64%2CQUFB"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%0CQkJD", "data%3Aa%2Fb%3Bbase64%2CQUFB"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB%2C", "data%3Aa%2Fb%3Bbase64%2CQUFB"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFB&w=1", "data%3Aa%2Fb%3Bbase64%2CQUFB"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFBdata%3Aa%2Fb%3Bbase64%2CQkJD", "data%3Aa%2Fb%3Bbase64%2CQUFB"],
+    ["data%3Aa%2Fb%3Bbase64%2CQUFBdata:a/b;base64,QkJD", "data%3Aa%2Fb%3Bbase64%2CQUFB"],
+    ["data:a/b;base64,QUFBdata%3Aa%2Fb%3Bbase64%2CQkJD", "data:a/b;base64,QUFB"],
+    ["data%3Aa%3Bbase64%2cQUFB", "data%3Aa%3Bbase64%2cQUFB"],
+    ["https://p/?u=data%3Aa%2Fb%3Bbase64%2CQUFB%3D&w=1", "data%3Aa%2Fb%3Bbase64%2CQUFB%3D"],
+    ["héllo 😀 data%3Aa%2Fb%3Bbase64%2CQUFB%0A😀", "data%3Aa%2Fb%3Bbase64%2CQUFB%0A"],
+  ])("%s: the first token is %s, and the rest is read on from its end", (text, token) => {
+    const at = text.indexOf(token);
+    const { text: out, tokens } = strip(text);
+    const [first] = tokens;
+    const head = `${text.slice(0, at)}[stripped ${first.mime ?? "unknown"} ${first.byteSize ?? "unknown"} bytes]`;
+    expect(out.slice(0, head.length)).toBe(head);
+    expect(out.slice(head.length)).toBe(strip(text.slice(at + token.length)).text);
+  });
+
+  it.each([
+    "data%3Aa%2Cb%3Bbase64%2CQUFB",
+    "data%3Aa b%3Bbase64%2CQUFB",
+    "data%253Aa%3Bbase64%2CQUFB",
+    "data%3Aa%3BBASE64%2CQUFB",
+    "data%3Aimage%2Fpng;base64,QUFB",
+    "data:xdata%3A;base64,QUFB",
+  ])("%s is no token", (text) => {
+    expect(strip(text)).toEqual({ text, tokens: [] });
+  });
+});
+
+describe("a key that keeps URLs", () => {
+  const png = "data:image/png;base64,iVBORw0KGgo=";
+  const encoded = "data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgo%3D";
+  const rules = (value: string) =>
+    strip(JSON.stringify({ type: "image", image: value })).tokens.map((t) => t.rule);
+
+  it.each([
+    ["", true],
+    ["\n", true],
+    ["\r\n", true],
+    ["\n\n", false],
+    ["\r", false],
+    [" \n", false],
+    ["\n ", false],
+    ["\n\r\n", false],
+  ])("takes a data URL and one final line break %j: %s", (tail, kept) => {
+    expect(rules(png + tail)).toEqual([kept ? "b" : "e"]);
+  });
+
+  it.each([
+    [encoded, true],
+    [`${encoded}\n`, true],
+    [`${encoded} `, false],
+    [`${encoded}%0A`, true],
+    [`${encoded}%0d%0A`, true],
+    [`${encoded}%0A%0A`, false],
+    [`${encoded}%0A\n`, false],
+    [`${png}%0A`, false],
+    [`https://x/?u=${encoded}`, true],
+    [` ${encoded}`, false],
+  ])("leaves %j to rule (b): %s", (value, kept) => {
+    expect(rules(value)).toEqual([kept ? "b" : "e"]);
+  });
+
+  it.each([
+    [`${png}\n`, "image/png", 8],
+    [`${png}\r\n`, "image/png", 8],
+    [`${encoded}%0A`, "image/png", 8],
+    [`${encoded}\r\n`, "image/png", 8],
+    ["data:a/b;base64,QUFB\nQkJD\n", "a/b", 6],
+  ])("replaces %j whole, its line break with it", (value, mime, size) => {
+    const stripped = `[stripped ${mime} ${size} bytes]`;
+    expect(strip(JSON.stringify({ type: "image", image: value })).text).toBe(
+      JSON.stringify({ type: "image", image: stripped }),
+    );
+    expect(strip(JSON.stringify({ type: "image", image: ["x", value] })).text).toBe(
+      JSON.stringify({ type: "image", image: ["[stripped unknown unknown bytes]", stripped] }),
+    );
+    // A rule (e) key's own object: a holder of type file, under data.
+    const tagged = { type: "file", data: { type: "data", data: value } };
+    expect(strip(JSON.stringify(tagged)).text).toBe(
+      JSON.stringify({ type: "file", data: { type: "data", data: stripped } }),
+    );
+  });
+
+  it("replaces only the URL under a key that does not keep URLs, and the break stays", () => {
+    expect(strip(JSON.stringify({ image_url: { url: `${png}\n` } })).text).toBe(
+      JSON.stringify({ image_url: { url: "[stripped image/png 8 bytes]\n" } }),
+    );
+  });
+});
+
+describe("JSON that does not parse", () => {
+  it.each([
+    ["data:a/b;base64,QUFB\\nQkJD", "QUFB\\nQkJD"],
+    ["data:a/b;base64,QUFB\\r\\nQkJD", "QUFB\\r\\nQkJD"],
+    ["data:a/b;base64,QUFB\\n> QkJD=", "QUFB\\n> QkJD="],
+    ["data:a/b;base64,QUFB\\n\\nQkJD", "QUFB"],
+    ["data:a/b;base64,QUFB\\rQkJD", "QUFB"],
+    ["data:a/b;base64,QUFB\\tQkJD", "QUFB"],
+    ["data:a/b;base64,QUE=\\nQkJD", "QUE="],
+    ["data:a/b;base64,QUFB\\n", "QUFB"],
+    ["data:a/b;base64,QUFB\nQkJD\\nQ0ND", "QUFB\nQkJD\\nQ0ND"],
+    ["data:a/b;base64,QUFB\\nQkJD\nQ0ND", "QUFB\\nQkJD"],
+    [`data:a/b;base64,${"A".repeat(77)}\\nQkJD`, "A".repeat(77)],
+    ["data:a/b;base64,QUFB\\ndata:a/b;base64,QkJD", "QUFB"],
+    ["data:a/b;base64,QUFB\\rnQkJD\\\\nQ0ND", "QUFB\\rnQkJD\\\\nQ0ND"],
+    ["data:a/b;base64,QUFB\\u000aQkJD", "QUFB"],
+  ])("goes on over an escaped line break: %j", (text, run) => {
+    const token = `data:a/b;base64,${run}`;
+    const replaced = `[stripped a/b ${runSize(run) ?? "unknown"} bytes]`;
+    const { text: out } = strip(`[${text}`);
+    expect(out.slice(0, replaced.length + 1)).toBe(`[${replaced}`);
+    expect(out.slice(replaced.length + 1)).toBe(strip(text.slice(token.length)).text);
+  });
+
+  it.each([
+    ['{"u":"data:a/b;base64,QUFB\\nQkJD', 6],
+    ['{"u":"data:a/b;base64,QUFB\\r\\n> QkJD', 6],
+    ['{"u":"data:a/b;base64,QUFB\\nQkJD"}', 6],
+  ])("is the only text an escaped line break goes on in: %s", (text, size) => {
+    expect(strip(text).tokens.map((t) => t.byteSize)).toEqual([size]);
+    // The same text outside a candidate keeps to the raw pattern.
+    expect(strip(`x ${text}`).tokens.map((t) => t.byteSize)).toEqual([3]);
+  });
+
+  it("is read the same way at any depth", () => {
+    const truncated = '{"u":"data:a/b;base64,QUFB\\nQkJD';
+    for (const text of [
+      JSON.stringify({ a: truncated }),
+      JSON.stringify([[{ a: [truncated] }]]),
+      JSON.stringify({ a: JSON.stringify({ b: truncated }) }),
+    ]) {
+      expect(strip(text).tokens).toEqual([{ rule: "b", mime: "a/b", byteSize: 6 }]);
+    }
+    // A string that is no candidate keeps to the raw pattern, at any depth too.
+    expect(strip(JSON.stringify({ a: `x ${truncated}` })).tokens).toEqual([
+      { rule: "b", mime: "a/b", byteSize: 3 },
+    ]);
+  });
+});
+
+describe("a data URL the regex stack cannot read, in the other two patterns", () => {
+  /** `make(n)` doubled from 2^21 until `pattern` throws on it, as V8's regex stack runs out. */
+  const pastTheStack = (pattern: string, make: (n: number) => string) => {
+    const anchored = new RegExp(`^${pattern}`);
+    const throws = (value: string) => {
+      try {
+        anchored.exec(value);
+        return false;
+      } catch (error) {
+        return error instanceof RangeError;
+      }
+    };
+    let n = 1 << 21;
+    while (!throws(make(n)) && n < 1 << 23) n *= 2;
+    const value = make(n);
+    expect(throws(value)).toBe(true);
+    return value;
+  };
+  const percent = pastTheStack(
+    PERCENT_DATA_URL_PATTERN,
+    (n) => `data%3Aimage%2Fpng%3Bbase64%2CA${"%2BA".repeat(n)}`,
+  );
+  const escaped = pastTheStack(
+    ESCAPED_DATA_URL_PATTERN,
+    (n) => `data:image/png;base64,A${"\\nA".repeat(n)}`,
+  );
+
+  it("strips the rest of a percent-encoded piece, size unknown, and the next data URL as usual", () => {
+    const result = strip(`see ${percent} so data:image/gif;base64,R0lGODlh, bye`);
+    expect(result.text).toBe(
+      "see [stripped image/png unknown bytes][stripped image/gif 6 bytes], bye",
+    );
+    expect(result.tokens).toEqual([
+      { rule: "b", mime: "image/png", byteSize: undefined },
+      { rule: "b", mime: "image/gif", byteSize: 6 },
+    ]);
+  });
+
+  it("reads a percent-encoded mime type only when it is token/token", () => {
+    expect(strip(percent.replace("image%2Fpng", "image")).text).toBe(
+      "[stripped unknown unknown bytes]",
+    );
+    expect(strip(percent.replace("image%2Fpng", "image%2Fpng%3Bx%3Dy")).text).toBe(
+      "[stripped image/png unknown bytes]",
+    );
+  });
+
+  it("strips the rest of an escaped piece in JSON that does not parse", () => {
+    expect(strip(`["${escaped}`)).toEqual({
+      text: '["[stripped image/png unknown bytes]',
+      tokens: [{ rule: "b", mime: "image/png", byteSize: undefined }],
+    });
+  });
+
+  it("is no whole data URL, so a key that keeps URLs replaces it whole", () => {
+    expect(stripRawPayload(JSON.stringify({ type: "image", image: percent }))).toBe(
+      '{"type":"image","image":"[stripped unknown unknown bytes]"}',
+    );
+  });
+
+  it("is a blob with no size in the part rules", () => {
+    expect(providerMediaParts({ type: "image_url", image_url: { url: percent } })).toEqual([
+      blobPart("image", "image/png", undefined, "not_captured"),
+    ]);
+    expect(nativeMediaPart({ type: "uri", uri: `${percent}%0A` })).toEqual([
+      blobPart("image", "image/png", undefined, "not_captured"),
+    ]);
+  });
+});
+
+describe("the part rules on a data URL percent-encoded whole", () => {
+  it.each([
+    [
+      { type: "uri", uri: "data%3Aimage%2Fpng%2C" },
+      blobPart("image", "image/png", undefined, "redacted_upstream"),
+    ],
+    [
+      { type: "uri", mime_type: "audio/wav", uri: "data%3A%3Bbase64%2CQUFB%20" },
+      blobPart("audio", "audio/wav", undefined, "not_captured"),
+    ],
+    [
+      { type: "blob", content: "data%3Aimage%2Fpng%3Bbase64%2CQUFB" },
+      blobPart("image", "image/png", 3, "not_captured"),
+    ],
+    [
+      { type: "uri", uri: "https://e/?u=data%3Aimage%2Fpng%3Bbase64%2CQUFB" },
+      uriPart("document", undefined, "https://e/?u=data%3Aimage%2Fpng%3Bbase64%2CQUFB"),
+    ],
+    [
+      { type: "uri", uri: "Data%3aimage%2Fpng%3Bbase64%2CQUFB%0D%0A" },
+      blobPart("image", "image/png", 3, "not_captured"),
+    ],
+    [
+      { type: "uri", uri: "data%3Aimage%2Fpng%3Bbase64%2CQUFB%0D" },
+      blobPart("image", "image/png", 3, "not_captured"),
+    ],
+  ])("makes %j %j", (part, made) => {
+    expect(nativeMediaPart(part)).toEqual([made]);
+  });
+
+  it("reads it in every part reader", () => {
+    const url = "data%3Aimage%2Fpng%3Bbase64%2CQUFB";
+    const sized = blobPart("image", "image/png", 3, "not_captured");
+    expect(providerMediaParts({ type: "image_url", image_url: { url } })).toEqual([sized]);
+    expect(providerMediaParts({ type: "input_image", image_url: url })).toEqual([sized]);
+    expect(providerMediaParts({ type: "image", url })).toEqual([sized]);
+    expect(providerMediaParts({ type: "image", base64: url })).toEqual([sized]);
+    expect(providerMediaParts({ file_data: { file_uri: url } })).toEqual([sized]);
+    expect(providerMediaParts({ type: "file", file: { file_data: url } })).toEqual([sized]);
   });
 });
 

@@ -155,8 +155,9 @@ const EXAMPLE_INPUTS: Record<string, Made> = {
 describe("the contract's part examples", () => {
   const examples = CONTRACT.part_shapes.examples;
 
-  it("are every one made here, from the contract's block or provider or an input built here", () => {
-    const fromContract = (e: PartExample) => e.block !== undefined || e.provider !== undefined;
+  it("are every one made here, from the contract's block, provider or native part, or an input built here", () => {
+    const fromContract = (e: PartExample) =>
+      e.block !== undefined || e.provider !== undefined || e.native !== undefined;
     const unbuilt = examples.filter(
       (e) => !fromContract(e) && !Object.hasOwn(EXAMPLE_INPUTS, e.name),
     );

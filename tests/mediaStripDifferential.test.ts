@@ -143,7 +143,10 @@ describe("the data-URL strip against main", () => {
       const url = `data:image/png;base64,${run}`;
       const matched = new RegExp(`^${DATA_URL_PATTERN}`).exec(url)?.[3].replace(/>/g, "");
       expect(splitMedia(url).tokens[0].byteSize).toBe(mainBase64Size(matched ?? ""));
-      expect(dataUrlBlob(url, "image")).toEqual(mainDataUrlBlob(url, "image"));
+      // A URL and one final line break is now read as main read the URL alone.
+      const bare = url.replace(/\r{0,1}\n$/, "");
+      const whole = new RegExp(`^${DATA_URL_PATTERN}`).exec(bare)?.[0] === bare;
+      expect(dataUrlBlob(url, "image")).toEqual(mainDataUrlBlob(whole ? bare : url, "image"));
     }
   });
 

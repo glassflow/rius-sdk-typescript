@@ -47,6 +47,26 @@ export const MIME_PATTERN = "[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+";
 export const DATA_URL_PATTERN =
   '[dD][aA][tT][aA]:([^;,:\\t\\n\\f\\r "]*)(;[^;,:\\t\\n\\f\\r "]*)*;base64,([A-Za-z0-9+/_-]{0,76}(\\r{0,1}\\n[ \\t>]*[A-Za-z0-9+/_-]+)*[A-Za-z0-9+/_-]*={0,2})';
 
+/**
+ * Rule (b) in the text of a JSON candidate that does not parse: the pattern,
+ * its run going on over a line break written as a JSON escape too (a
+ * backslash, an optional r, an optional backslash, then n), after any raw
+ * ones. A fifth group, the last escaped line.
+ */
+export const ESCAPED_DATA_URL_PATTERN =
+  '[dD][aA][tT][aA]:([^;,:\\t\\n\\f\\r "]*)(;[^;,:\\t\\n\\f\\r "]*)*;base64,([A-Za-z0-9+/_-]{0,76}(\\r{0,1}\\n[ \\t>]*[A-Za-z0-9+/_-]+)*(\\\\r{0,1}\\\\{0,1}n[ \\t>]*[A-Za-z0-9+/_-]+)*[A-Za-z0-9+/_-]*={0,2})';
+
+/** Where a data URL percent-encoded whole starts: data%3A, in any ASCII case. */
+export const PERCENT_DATA_URL_SCHEME = "[dD][aA][tT][aA]%3[aA]";
+
+/**
+ * Rule (b) for a data URL percent-encoded whole. Groups: the header (mime and
+ * parameters, still encoded), a header escape, the base64 run (with its
+ * encoded `+`, `/` and line breaks), a run escape, the padding.
+ */
+export const PERCENT_DATA_URL_PATTERN =
+  '[dD][aA][tT][aA]%3[aA]([^%;,:\\t\\n\\f\\r "]*(%[0-9A-Fa-f][0-9ABD-Fabd-f][^%;,:\\t\\n\\f\\r "]*)*)%3[bB]base64%2[cC]([A-Za-z0-9+/_-]*(%[02][ABDFabdf][A-Za-z0-9+/_-]*)*(%3[dD]){0,2})';
+
 /** Rule (d): a Buffer object, `{"type": "Buffer", "data": [...]}`. */
 export const BUFFER_RULE = {
   type: "Buffer",
@@ -116,8 +136,12 @@ const MESSAGE_MAX_DEPTH = 1000;
 const MIME = new RegExp(`^${MIME_PATTERN}$`);
 /** Rule (b) anchored at the start of a piece: never `$`, never the g flag. */
 const DATA_URL = new RegExp(`^${DATA_URL_PATTERN}`);
-/** Where a rule (b) token can start: data:, in any ASCII case. */
+const ESCAPED_DATA_URL = new RegExp(`^${ESCAPED_DATA_URL_PATTERN}`);
+const PERCENT_DATA_URL = new RegExp(`^${PERCENT_DATA_URL_PATTERN}`);
+/** Where a rule (b) token can start: data: or data%3A, in any ASCII case. */
 const DATA_SCHEME = /[dD][aA][tT][aA]:/g;
+const PERCENT_SCHEME = new RegExp(PERCENT_DATA_URL_SCHEME, "g");
+const PERCENT_SCHEME_START = new RegExp(`^${PERCENT_DATA_URL_SCHEME}`);
 
 /** The whitespace a size removes and a JSON candidate trims: ASCII only. */
 const ASCII_WHITESPACE = /[ \t\n\r]/g;
@@ -146,20 +170,59 @@ export function base64Size(value: string): number | undefined {
   return (text.length * 3) / 4 - padding;
 }
 
+/** A line break written as a JSON escape, as the escaped pattern reads one. */
+const ESCAPED_LINE_BREAK = /\\r{0,1}\\{0,1}n/g;
+
 /**
- * {@link base64Size} of a base64 run `DATA_URL` matched, with the `>` of each
- * quoted line it goes on over removed too, from its length and padding. Once
- * its line breaks, indent and `>` are gone, the run holds nothing outside the
- * two alphabets and at most two `=`, all at its end. Only a mix of the two
- * alphabets is left to check. A run that holds no line break holds none of
- * them.
+ * {@link base64Size} of a base64 run `DATA_URL` or `ESCAPED_DATA_URL` matched,
+ * with each escaped line break and the `>` of each quoted line it goes on over
+ * removed too, from its length and padding. Once its line breaks, indent and
+ * `>` are gone, the run holds nothing outside the two alphabets and at most
+ * two `=`, all at its end. Only a mix of the two alphabets is left to check. A
+ * run that holds no line break, raw or escaped, holds none of them.
  */
 function matchedBase64Size(matched: string): number | undefined {
-  const run = matched.includes("\n") ? matched.replace(/[ \t\r\n>]/g, "") : matched;
+  const run = /[\n\\]/.test(matched)
+    ? matched.replace(ESCAPED_LINE_BREAK, "").replace(/[ \t\r\n>]/g, "")
+    : matched;
   if (run.length % 4 !== 0) return undefined;
   if (STANDARD_EXTRA.test(run) && URL_SAFE_EXTRA.test(run)) return undefined;
   const padding = run.endsWith("==") ? 2 : run.endsWith("=") ? 1 : 0;
   return (run.length * 3) / 4 - padding;
+}
+
+const PERCENT_ESCAPE = /%([0-9A-Fa-f]{2})/g;
+
+/**
+ * Each %XX escape as the one character (code unit) it encodes, as the
+ * registry's reference decodes it: never decodeURIComponent, which reads
+ * UTF-8 sequences and throws on a byte that starts none.
+ */
+function percentDecode(text: string): string {
+  return text.replace(PERCENT_ESCAPE, (_, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+}
+
+/** Where a percent-encoded data URL's media type ends: its first %3B. */
+const PERCENT_SEMICOLON = /%3[bB]/;
+
+/**
+ * The mime type and size of one rule (b) match. A percent-encoded one's mime
+ * type is its header up to its first %3B, percent-decoded, and its run is
+ * percent-decoded (%2B, %2F, %3D, and the line breaks %0A and %0D that the
+ * size then drops) before it is sized. Its run can then hold characters no
+ * base64 holds (%0B, %2A), so it is sized by {@link base64Size} in full.
+ */
+function matchToken(match: RegExpExecArray): {
+  mime: string | undefined;
+  byteSize: number | undefined;
+} {
+  if (match[0][4] === ":") {
+    return { mime: isMime(match[1]) ? match[1] : undefined, byteSize: matchedBase64Size(match[3]) };
+  }
+  const head = percentDecode(match[1].split(PERCENT_SEMICOLON, 1)[0]);
+  return { mime: isMime(head) ? head : undefined, byteSize: base64Size(percentDecode(match[3])) };
 }
 
 /** A rule (b) token in a string: its boundaries, mime type and size. */
@@ -172,63 +235,122 @@ interface DataUrlSpan {
 
 /** A data URL's media type as rule (b)'s first group reads it. */
 const DATA_URL_MIME = /[^;,:\t\n\f\r "]*/y;
+/** What a percent-encoded header takes: a character, and an escape not ending in C. */
+const PERCENT_HEADER_CHAR = /[^%;,:\t\n\f\r "]/;
+const PERCENT_HEADER_ESCAPE = /^%[0-9A-Fa-f][0-9ABD-Fabd-f]$/;
 
 /**
- * Rule (b)'s match of the pattern at the start of a piece, or undefined when
- * it holds none. Undefined too, and `failed` set, when V8's regex stack runs
- * out (from about 1.6M wrapped lines): the caller then fails closed.
+ * A percent-encoded data URL's media type, read by hand from `from` (just
+ * past its scheme) to its first %3B, or to the first character or escape its
+ * header cannot take, never past `end`: for a piece the pattern could not
+ * read, so no regex that could run out of stack again.
  */
-function matchDataUrl(piece: string): { match?: RegExpExecArray; failed?: true } {
+function percentMime(text: string, from: number, end: number): string | undefined {
+  let i = from;
+  while (i < end) {
+    if (text[i] !== "%") {
+      if (!PERCENT_HEADER_CHAR.test(text[i])) break;
+      i++;
+      continue;
+    }
+    const encoded = text.slice(i, Math.min(i + 3, end));
+    if (!PERCENT_HEADER_ESCAPE.test(encoded) || PERCENT_SEMICOLON.test(encoded)) break;
+    i += 3;
+  }
+  const head = percentDecode(text.slice(from, i));
+  return isMime(head) ? head : undefined;
+}
+
+/**
+ * A rule (b) pattern's match at the start of a piece, or undefined when it
+ * holds none. Undefined too, and `failed` set, when V8's regex stack runs out
+ * (from about 1.6M wrapped lines, plain or escaped, or about 2.4M percent
+ * escapes): the caller then fails closed.
+ */
+function matchDataUrl(pattern: RegExp, piece: string): { match?: RegExpExecArray; failed?: true } {
   try {
-    return { match: DATA_URL.exec(piece) ?? undefined };
+    return { match: pattern.exec(piece) ?? undefined };
   } catch (error) {
     if (isStackOverflow(error)) return { failed: true };
     throw error;
   }
 }
 
+/** The starts of every data: and every data%3A in a string, in order. */
+function dataUrlStarts(text: string): number[] {
+  const starts = Array.from(text.matchAll(DATA_SCHEME), (m) => m.index ?? 0);
+  if (!text.includes("%")) return starts;
+  for (const m of text.matchAll(PERCENT_SCHEME)) starts.push(m.index ?? 0);
+  return starts.sort((a, b) => a - b);
+}
+
 /**
  * Rule (b): every data URL token in a string, wherever it sits. The string is
- * cut before each data: (in any ASCII case), and the pattern is tried at the
- * start of each piece and never past its end, so a run that goes on over a
- * line break never takes the start of the next data URL. A media type that is
- * not token/token is unknown. When the regex stack runs out on a piece, all of
- * the piece from its data: on is the token, its size unknown: the strip never
- * throws and never keeps what it could not read.
+ * cut before each data: and each data%3A (in any ASCII case), and the pattern
+ * is tried at the start of each piece and never past its end, so a run that
+ * goes on over a line break never takes the start of the next data URL: the
+ * pattern at a data:, the percent pattern at a data%3A. A media type that is
+ * not token/token is unknown. `escaped`, for the text of a JSON candidate that
+ * does not parse, tries the escaped pattern instead of the pattern, whose run
+ * also goes on over a line break written as a JSON escape. When the regex
+ * stack runs out on a piece, all of the piece from its scheme on is the token,
+ * its size unknown: the strip never throws and never keeps what it could not
+ * read.
  */
-function dataUrlSpans(text: string): DataUrlSpan[] {
-  const starts = Array.from(text.matchAll(DATA_SCHEME), (m) => m.index ?? 0);
+function dataUrlSpans(text: string, escaped = false): DataUrlSpan[] {
+  const starts = dataUrlStarts(text);
+  const plain = escaped ? ESCAPED_DATA_URL : DATA_URL;
   const spans: DataUrlSpan[] = [];
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i];
     const end = i + 1 < starts.length ? starts[i + 1] : text.length;
-    const { match, failed } = matchDataUrl(text.slice(start, end));
+    const percent = text[start + 4] === "%";
+    const piece = text.slice(start, end);
+    const { match, failed } = matchDataUrl(percent ? PERCENT_DATA_URL : plain, piece);
     if (failed) {
-      DATA_URL_MIME.lastIndex = start + 5;
-      const head = DATA_URL_MIME.exec(text)?.[0];
-      spans.push({ start, end, mime: isMime(head) ? head : undefined, byteSize: undefined });
+      let mime: string | undefined;
+      if (percent) {
+        mime = percentMime(text, start + 7, end);
+      } else {
+        DATA_URL_MIME.lastIndex = start + 5;
+        const head = DATA_URL_MIME.exec(text)?.[0];
+        mime = isMime(head) ? head : undefined;
+      }
+      spans.push({ start, end, mime, byteSize: undefined });
     } else if (match !== undefined) {
-      const mime = isMime(match[1]) ? match[1] : undefined;
-      spans.push({
-        start,
-        end: start + match[0].length,
-        mime,
-        byteSize: matchedBase64Size(match[3]),
-      });
+      spans.push({ start, end: start + match[0].length, ...matchToken(match) });
     }
   }
   return spans;
 }
 
+/** The one final line break a whole data URL may end in: encodebytes writes one. */
+const FINAL_LINE_BREAKS: readonly string[] = ["\n", "\r\n"];
+/** The same line break percent-encoded, for a data URL percent-encoded whole. */
+const PERCENT_FINAL_LINE_BREAKS: readonly string[] = ["%0A", "%0D%0A"];
+
 /**
- * Rule (b)'s match when it is the whole string: the pattern anchored at the
- * start, its match ending at the end. The same as `$` would say, since the
- * run's greedy match reaches furthest, but fast when a long value fails. A
- * value the regex stack cannot read is no match.
+ * Rule (b)'s match when it is the whole string: the pattern (the percent
+ * pattern for a value that starts with data%3A) anchored at the start, its
+ * match ending at the end. The same as `$` would say, since the run's greedy
+ * match reaches furthest, but fast when a long value fails. With `lineBreak`,
+ * as a key that keeps URLs and the part rules read it, the match may also end
+ * one final line break before the end (a newline, or a carriage return and
+ * newline), and a percent-encoded one also one final %0A or %0D%0A, its hex
+ * digits in either case. A value the regex stack cannot read is no match.
  */
-function wholeDataUrl(value: string): RegExpExecArray | undefined {
-  const { match } = matchDataUrl(value);
-  return match !== undefined && match[0].length === value.length ? match : undefined;
+function wholeDataUrl(value: string, lineBreak = false): RegExpExecArray | undefined {
+  const percent = PERCENT_SCHEME_START.test(value);
+  const { match } = matchDataUrl(percent ? PERCENT_DATA_URL : DATA_URL, value);
+  if (match === undefined) return undefined;
+  const rest = value.slice(match[0].length);
+  if (rest === "") return match;
+  // Every line break is ASCII and at most 6 long, so no longer rest is one.
+  if (!lineBreak || rest.length > 6) return undefined;
+  const upper = rest.toUpperCase();
+  return FINAL_LINE_BREAKS.includes(rest) || (percent && PERCENT_FINAL_LINE_BREAKS.includes(upper))
+    ? match
+    : undefined;
 }
 
 /** The text a media token in a raw payload is replaced by. */
@@ -767,14 +889,18 @@ function urlKeys(
 /**
  * Whether a key that keeps URLs leaves a string to rule (b): it starts with a
  * URL scheme (base64 holds no colon, so it never does), and either it holds
- * no data: (in any ASCII case) or rule (b)'s pattern matches all of it, so
- * rule (b) replaces every byte. Any other string holding data: (a percent
- * encoded data URL, a broken run, a link with a data URL after it) stays a
- * rule (e) token and is replaced whole.
+ * no data: (in any ASCII case) or rule (b)'s pattern matches all of it, or all
+ * of it but one final line break, so rule (b) replaces every byte (see
+ * {@link urlLineBreakToken}). Any other string holding data: (a data URL whose
+ * payload is percent-encoded, a broken run, a link with a data URL after it)
+ * stays a rule (e) token and is replaced whole. A value that starts with
+ * data%3A has no URL scheme, but it is left to rule (b) when it is one whole
+ * percent-encoded data URL too.
  */
 function keptUrl(value: string): boolean {
+  if (PERCENT_SCHEME_START.test(value)) return wholeDataUrl(value, true) !== undefined;
   if (!URL_SCHEME.test(value)) return false;
-  return !holdsDataScheme(value) || wholeDataUrl(value) !== undefined;
+  return !holdsDataScheme(value) || wholeDataUrl(value, true) !== undefined;
 }
 
 /** A string rule (e) replaces under `key`: a keyed string the key does not keep as a URL. */
@@ -858,7 +984,9 @@ function literal(mime: string | undefined, byteSize: number | undefined): string
 /**
  * The edits on a string's text (an attribute, or a JSON string's decoded value
  * inside `depth` arrays and objects): the JSON walk when it is a candidate
- * that parses, else rule (b) alone. A complete replacement is left as it is.
+ * that parses, else rule (b) alone, by the escaped pattern for a candidate
+ * that does not parse (or that the stack left here cannot hold). A complete
+ * replacement is left as it is.
  */
 function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   if (isReplacement(text)) return [];
@@ -881,7 +1009,7 @@ function stripText(text: string, tokens: MediaToken[], depth: number): Edit[] {
   }
   const found = tokens.length;
   const edits: Edit[] = [];
-  for (const { start, end, mime, byteSize } of dataUrlSpans(text)) {
+  for (const { start, end, mime, byteSize } of dataUrlSpans(text, candidate)) {
     tokens.push({ rule: "b", mime, byteSize });
     edits.push([start, end, replacement(mime, byteSize)]);
   }
@@ -918,17 +1046,20 @@ function walk(
     }
     const keyed = keyedBase64(members, parentKey, holder);
     const mime = keyed.size > 0 ? keyedMime(members, parentKey, holder) : undefined;
-    const urls = keyed.size > 0 ? urlKeys(members, parentKey, holder) : new Set<string>();
+    const urls = urlKeys(members, parentKey, holder);
     members.forEach(([key, child], i) => {
-      if (!keyed.has(i)) {
+      if (urls.has(key) && urlLineBreakToken(child, tokens, edits)) return;
+      if (!keyed.has(i) && !(urls.has(key) && child.items !== undefined)) {
         walk(child, key, members, depth + 1, tokens, edits);
       } else if (child.items === undefined) {
         replaceKeyed(child, mime, tokens, edits);
       } else {
         // A string array under the key: each string element is a token.
         for (const item of child.items) {
-          if (keyedToken(item, key, urls)) replaceKeyed(item, mime, tokens, edits);
-          else walk(item, key, members, depth + 2, tokens, edits);
+          if (keyed.has(i) && keyedToken(item, key, urls)) replaceKeyed(item, mime, tokens, edits);
+          else if (!(urls.has(key) && urlLineBreakToken(item, tokens, edits))) {
+            walk(item, key, members, depth + 2, tokens, edits);
+          }
         }
       }
     });
@@ -943,6 +1074,23 @@ function walk(
       edits.push([rawStart, rawEnd, jsonEscape(text)]);
     }
   }
+}
+
+/**
+ * Rule (b) on a string under a key that keeps URLs that is one data URL and
+ * one final line break: the whole value, its line break included, replaced
+ * inside its quotes, with the data URL's mime type and size. Rule (b)'s usual
+ * span would leave the break, which a second pass would then read as rule
+ * (e)'s. False, with no edit, for any other value.
+ */
+function urlLineBreakToken(node: JsonNode, tokens: MediaToken[], edits: Edit[]): boolean {
+  if (node.text === undefined || node.text === "") return false;
+  const match = wholeDataUrl(node.text, true);
+  if (match === undefined || match[0].length === node.text.length) return false;
+  const { mime, byteSize } = matchToken(match);
+  tokens.push({ rule: "b", mime, byteSize });
+  edits.push([node.start + 1, node.end - 1, jsonEscape(replacement(mime, byteSize))]);
+  return true;
 }
 
 /** Rule (e) on one string literal: replaced whole, quotes included. */
@@ -1075,9 +1223,12 @@ export function fileIdPart(kind: Modality, mime: unknown, fileId: string): Part 
   return part;
 }
 
-/** Whether a string is a data URL (the scheme in any case). */
+/**
+ * Whether a string is a data URL: it starts with data:, or with data%3A (a
+ * data URL percent-encoded whole), the scheme in any ASCII case.
+ */
 export function isDataUrl(value: string): boolean {
-  return /^[dD][aA][tT][aA]:/.test(value);
+  return /^[dD][aA][tT][aA]:/.test(value) || PERCENT_SCHEME_START.test(value);
 }
 
 /**
@@ -1093,20 +1244,25 @@ function holdsDataScheme(value: string): boolean {
 export const OPENINFERENCE_REDACTED = "__REDACTED__";
 
 /**
- * A data URL as a blob: its own media type, and the size of its base64 run.
- * One that holds no bytes (`data:None;url,None`, what OpenInference's
- * Anthropic instrumentor writes for a url image) was emptied before we saw
- * it, so it is redacted upstream.
+ * A data URL as a blob: rule (b)'s pattern matching the whole URL, or all of
+ * it but one final line break, is base64, with its own media type and the
+ * size of its run; any other is not base64, with no size. One that holds no
+ * bytes (`data:None;url,None`, what OpenInference's Anthropic instrumentor
+ * writes for a url image) was emptied before we saw it, so it is redacted
+ * upstream. A data URL percent-encoded whole is matched by the percent
+ * pattern, its mime type and run decoded as rule (b) reads them; when it does
+ * not match, it is read as any other once each %XX is decoded.
  */
 export function dataUrlBlob(url: string, kind: Modality, mimeHint?: unknown): Part {
-  const match = wholeDataUrl(url);
+  const match = wholeDataUrl(url, true);
   if (match !== undefined) {
-    const mime = isMime(match[1]) ? match[1] : mimeHint;
-    return blobPart(kind, mime, matchedBase64Size(match[3]), NOT_CAPTURED);
+    const { mime, byteSize } = matchToken(match);
+    return blobPart(kind, mime ?? mimeHint, byteSize, NOT_CAPTURED);
   }
-  const header = url.slice(5).split(/[;,]/, 1)[0];
-  const comma = url.indexOf(",");
-  const payload = comma < 0 ? "" : url.slice(comma + 1);
+  const text = url[4] === ":" ? url : percentDecode(url);
+  const header = text.slice(5).split(/[;,]/, 1)[0];
+  const comma = text.indexOf(",");
+  const payload = comma < 0 ? "" : text.slice(comma + 1);
   const mime = isMime(header) ? header : mimeHint;
   if (payload === "" || payload === "None") {
     return blobPart(kind, mime, undefined, REDACTED_UPSTREAM);

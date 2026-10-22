@@ -32,11 +32,20 @@ describe("with the stack nearly used up", () => {
       .replace('"QUFB"', '"[stripped image/png 3 bytes]"')
       .replace("data:image/png;base64,QUFB", "[stripped image/png 3 bytes]");
     const ruleB = candidate.replace("data:image/png;base64,QUFB", "[stripped image/png 3 bytes]");
+    // Parsed, but the walk's frames left rule (b)'s regex no stack: it fails
+    // closed, the rest of its piece (here the whole string) replaced, size unknown.
+    const closed = parsed.replace(
+      '"u":"[stripped image/png 3 bytes]"',
+      '"u":"[stripped image/png unknown bytes]"',
+    );
     const results = afterFirstReturn(upFromStackBottom(() => strip(candidate)));
-    expect(new Set(results.map((r) => r.text))).toEqual(new Set([ruleB, parsed]));
+    const texts = new Set(results.map((r) => r.text));
+    expect(texts).toContain(ruleB);
+    expect(texts).toContain(parsed);
+    expect([...texts].filter((t) => ![ruleB, parsed, closed].includes(t))).toEqual([]);
     expect(results.at(-1)?.text).toBe(parsed);
     for (const result of results) {
-      expect(result.tokens.map((t) => t.rule)).toEqual(result.text === parsed ? ["e", "b"] : ["b"]);
+      expect(result.tokens.map((t) => t.rule)).toEqual(result.text === ruleB ? ["b"] : ["e", "b"]);
     }
   });
 });
