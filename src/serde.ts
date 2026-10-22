@@ -276,6 +276,29 @@ export function attributeValue(value: unknown): AttributeValue | undefined {
 }
 
 /**
+ * A value set through a span's `setAttribute`: as {@link attributeValue},
+ * except that an array holding an array or a mapping is one JSON encoding of
+ * the whole value, byte objects as quoted markers, whatever the inner array
+ * holds, as the Python SDK's `set_attribute` writes it. `attributeValue`
+ * walks a nested array element by element instead, which would turn
+ * `[[1, bytes]]` into an array of the inner array's JSON.
+ */
+export function setterAttributeValue(value: unknown): AttributeValue | undefined {
+  if (!Array.isArray(value)) return attributeValue(value);
+  let structured: boolean;
+  try {
+    structured = value.some(
+      (v) => Array.isArray(v) || (typeof v === "object" && v !== null && !isByteObject(v)),
+    );
+  } catch {
+    // An element getter or a Proxy trap that throws: never into the caller.
+    // toAttributeValue never throws, and writes what it can read.
+    return toAttributeValue(value);
+  }
+  return structured ? toAttributeValue(value) : attributeValue(value);
+}
+
+/**
  * A value with every byte object in it, at any depth of its arrays, the bare
  * marker string. OTel arrays are homogeneous, so each array is looked at on
  * its own once its elements are walked: one that held a byte object beside

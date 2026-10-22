@@ -376,3 +376,61 @@ describe("OTEL_RESOURCE_ATTRIBUTES prototype keys", () => {
     });
   });
 });
+
+describe("setAttribute with an array holding an array or a mapping", () => {
+  const m = (n: number) => `[stripped unknown ${n} bytes]`;
+
+  for (const [label, value, written] of [
+    ["a nested array beside a number", [[1, new Uint8Array(1)]], `[[1,"${m(1)}"]]`],
+    ["a nested array of a byte object", [[new Uint8Array(1)]], `[["${m(1)}"]]`],
+    ["a nested array beside null", [null, [1, new Uint8Array(1)]], `[null,[1,"${m(1)}"]]`],
+    ["a nested array beside a string", ["x", [1, new Uint8Array(1)]], `["x",[1,"${m(1)}"]]`],
+    ["a mapping holding a byte object", [{ k: new Uint8Array(2) }], `[{"k":"${m(2)}"}]`],
+    ["nested strings", [["x"], ["y"]], '[["x"],["y"]]'],
+  ] as const) {
+    it(`writes ${label} as one JSON string, as Python does`, async () => {
+      const exporter = start();
+      startSpan("s")
+        .setAttribute("k", value as unknown)
+        .end();
+      const [span] = await finished(exporter);
+      expect(span.attributes.k).toBe(written);
+    });
+  }
+});
+
+describe("setAttribute with an array that throws when read", () => {
+  function throwingGetter(): unknown[] {
+    const value: unknown[] = [1];
+    Object.defineProperty(value, 1, {
+      enumerable: true,
+      get() {
+        throw new Error("element getter");
+      },
+    });
+    return value;
+  }
+
+  function throwingProxy(): unknown[] {
+    return new Proxy([1, 2], {
+      get(target, key, receiver) {
+        if (key === "length" || typeof key === "symbol") return Reflect.get(target, key, receiver);
+        throw new Error("proxy trap");
+      },
+    });
+  }
+
+  for (const [label, make] of [
+    ["an element getter", throwingGetter],
+    ["a Proxy trap", throwingProxy],
+  ] as const) {
+    it(`never throws into the caller from ${label}, and records a string`, async () => {
+      const exporter = start();
+      const span = startSpan("s");
+      expect(() => span.setAttribute("k", make())).not.toThrow();
+      span.end();
+      const [finishedSpan] = await finished(exporter);
+      expect(typeof finishedSpan.attributes.k).toBe("string");
+    });
+  }
+});

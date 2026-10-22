@@ -9,10 +9,13 @@
 # normalized result; tests/conformance.test.ts replays them through this SDK's
 # processors. Only the data is copied (manifests, recordings, expected results
 # and the format README), never the recorders, plus the module that encodes a
-# replayed span, vendored unchanged as tests/conformance/_recording.mjs, and
-# the media parts registry (registry/media_parts.yaml) as JSON, whose golden
-# strip examples tests/mediaParts.test.ts runs. Converting it needs python3
-# with PyYAML.
+# replayed span, vendored unchanged as tests/conformance/_recording.mjs, the
+# media parts registry (registry/media_parts.yaml) as JSON, whose golden strip
+# examples tests/mediaParts.test.ts runs, the usage-key registry
+# (registry/usage_keys.yaml) as JSON, whose rows tests/usageKeys.test.ts holds
+# the normalizer to, and sdk_cases/, the cases both SDKs run
+# (tests/sdkCases.test.ts). Converting the registries needs python3 with
+# PyYAML.
 # SOURCE records the commit the copy came from. Both copies are excluded from
 # biome (biome.json) so they stay byte-for-byte what rius-semconv wrote.
 set -euo pipefail
@@ -34,7 +37,8 @@ COMMIT="$(git -C "$SRC" rev-parse "$REF^{commit}")"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-git -C "$SRC" archive "$COMMIT" fixtures registry/media_parts.yaml | tar -x -C "$WORK"
+git -C "$SRC" archive "$COMMIT" fixtures sdk_cases registry/media_parts.yaml registry/usage_keys.yaml |
+  tar -x -C "$WORK"
 
 rm -rf "$DATA"
 mkdir -p "$DATA/fixtures"
@@ -50,9 +54,13 @@ for family in "$WORK"/fixtures/*/; do
     cp "$file" "$DATA/fixtures/$name/"
   done
 done
-python3 -c 'import json, sys, yaml
+for registry in media_parts usage_keys; do
+  python3 -c 'import json, sys, yaml
 json.dump(yaml.safe_load(open(sys.argv[1], encoding="utf-8")), sys.stdout, ensure_ascii=False, indent=2)
-print()' "$WORK/registry/media_parts.yaml" >"$DATA/media_parts.json"
+print()' "$WORK/registry/$registry.yaml" >"$DATA/$registry.json"
+done
+mkdir -p "$DATA/sdk_cases"
+cp "$WORK"/sdk_cases/*.json "$WORK/sdk_cases/README.md" "$DATA/sdk_cases/"
 printf 'rius-semconv %s\n' "$COMMIT" >"$DATA/SOURCE"
 
 mkdir -p "$CODE"

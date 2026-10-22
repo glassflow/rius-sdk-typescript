@@ -25,7 +25,7 @@ import {
   SpanKind,
   USER_ID,
 } from "./semconv.js";
-import { attributeValue, toAttributeValue } from "./serde.js";
+import { setterAttributeValue, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";
 import { warnOnce } from "./warn.js";
 
@@ -204,12 +204,13 @@ export class Observation {
 
   /**
    * Set an arbitrary attribute. Primitives and homogeneous primitive arrays
-   * are passed through as the OTel values they are; objects are JSON-encoded
-   * and bounded; `undefined` and `null` set nothing, since "no value" is not
-   * an empty string.
+   * are passed through as the OTel values they are; objects, mixed arrays and
+   * arrays holding an array or an object are JSON-encoded once and bounded;
+   * `undefined` and `null` set nothing, since "no value" is not an empty
+   * string.
    */
   setAttribute(key: string, value: unknown): this {
-    const coerced = attributeValue(value);
+    const coerced = setterAttributeValue(value);
     if (coerced !== undefined) this.span.setAttribute(key, coerced);
     return this;
   }
