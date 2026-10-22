@@ -79,29 +79,66 @@ const REGISTRY_KEYS = [
   "GEN_AI_USAGE_DETAILS_AUDIO_RESPONSE_TOKENS",
 ] as const;
 
-describe("registry keys", () => {
-  it("are imported, never typed by hand", () => {
-    const values = new Map<string, string>();
-    for (const name of REGISTRY_KEYS) {
-      values.set((semconv as Record<string, unknown>)[name] as string, name);
+/** Each REGISTRY_KEYS name resolved to its key. A name that is not exported,
+ * or not a key, must fail here: left out, the scan would pass vacuously. */
+function registryValues(): Map<string, string> {
+  const values = new Map<string, string>();
+  for (const name of REGISTRY_KEYS) {
+    const value = (semconv as Record<string, unknown>)[name];
+    expect(typeof value === "string" && value.length > 0, `${name} is not a key`).toBe(true);
+    values.set(value as string, name);
+  }
+  expect(values.size).toBe(REGISTRY_KEYS.length);
+  return values;
+}
+
+/** String literals in `text` that spell one of `values`. A literal in a type
+ * position (`{ kind: "metadata" }` as a type) is never an attribute key at run
+ * time, so it is not counted. */
+function handTypedKeys(file: string, text: string, values: Map<string, string>): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeNode(node)) return;
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      const name = values.get(node.text);
+      if (name !== undefined) {
+        const { line } = source.getLineAndCharacterOfPosition(node.getStart());
+        found.push(`${file}:${line + 1} "${node.text}" (${name})`);
+      }
     }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+describe("registry keys", () => {
+  it("each resolve to a key", () => {
+    registryValues();
+  });
+
+  it("are caught when typed as a value", () => {
+    const values = registryValues();
+    expect(handTypedKeys("x.ts", 'const v = attributes["metadata"];', values)).toEqual([
+      'x.ts:1 "metadata" (METADATA)',
+    ]);
+    expect(handTypedKeys("x.ts", 'const r = { source: "tool.name" };', values)).toHaveLength(1);
+  });
+
+  it("are not confused with a string literal type", () => {
+    const values = registryValues();
+    const text = 'type Part = { kind: "metadata" } | { kind: "tool.name" };';
+    expect(handTypedKeys("x.ts", text, values)).toEqual([]);
+  });
+
+  it("are imported, never typed by hand", () => {
+    const values = registryValues();
     const dir = new URL("../src/", import.meta.url);
     const found: string[] = [];
     for (const file of readdirSync(dir, { recursive: true }) as string[]) {
       if (!file.endsWith(".ts") || file.endsWith("semconv.generated.ts")) continue;
-      const text = readFileSync(new URL(file, dir), "utf8");
-      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-      const visit = (node: ts.Node): void => {
-        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-          const name = values.get(node.text);
-          if (name !== undefined) {
-            const { line } = source.getLineAndCharacterOfPosition(node.getStart());
-            found.push(`${file}:${line + 1} "${node.text}" (${name})`);
-          }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(source);
+      found.push(...handTypedKeys(file, readFileSync(new URL(file, dir), "utf8"), values));
     }
     expect(found).toEqual([]);
   });

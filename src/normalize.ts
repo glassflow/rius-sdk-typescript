@@ -2668,7 +2668,8 @@ export function responseIdFromOutput(
   // Declared anything but JSON, the output is the model's own words: the JS
   // instrumentors record a stream's accumulated reply as text/plain, and a
   // JSON-mode reply's "id" is the model's, not the response's. Undeclared is
-  // taken, as the contract has it. A source spelling, inline.
+  // taken, as the contract has it. OUTPUT_MIME_TYPE is a source spelling:
+  // read here, never emitted.
   const mime = attributes[OUTPUT_MIME_TYPE];
   if (mime !== undefined && mime !== "application/json") return {};
   const output = attributes[OUTPUT_VALUE];
