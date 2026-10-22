@@ -1,0 +1,305 @@
+import { trace } from "@opentelemetry/api";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { init, type RiusClient } from "../src/client.js";
+import { observe } from "../src/observe.js";
+import { SpanKind } from "../src/semconv.js";
+import { startAsCurrentSpan } from "../src/spans.js";
+
+// A wrapped generator's span covers the whole iteration, as the Python SDK's
+// does: it opens on the first step, ends when the iteration finishes, fails or
+// is closed, and the span is current only while the generator's own code runs.
+
+let exporter: InMemorySpanExporter;
+let client: RiusClient;
+
+beforeEach(() => {
+  exporter = new InMemorySpanExporter();
+  client = init({ spanExporter: exporter, heartbeatTransport: async () => {} });
+});
+afterEach(async () => {
+  await client.shutdown();
+});
+
+async function finished() {
+  await client.flush();
+  return exporter.getFinishedSpans();
+}
+
+describe("observe on a generator function", () => {
+  it("returns a generator, not a Promise, and yields what the original yields", async () => {
+    const observedCount = observe(function* count(n: number) {
+      for (let i = 0; i < n; i++) yield i;
+    });
+    const iterator = observedCount(3);
+    expect(typeof (iterator as unknown as { then?: unknown }).then).toBe("undefined");
+    expect([...iterator]).toEqual([0, 1, 2]);
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].name).toBe("count");
+    expect(spans[0].attributes["input.value"]).toBe('{"args":[3],"kwargs":{}}');
+  });
+
+  it("keeps the span open until the iteration finishes", async () => {
+    const observedStream = observe(function* stream() {
+      yield 1;
+      yield 2;
+    });
+    const iterator = observedStream();
+    iterator.next();
+    expect(await finished()).toHaveLength(0);
+    iterator.next();
+    iterator.next();
+    expect(await finished()).toHaveLength(1);
+  });
+
+  it("opens no span until the first step, like the Python SDK", async () => {
+    const observedStream = observe(function* stream() {
+      yield 1;
+    });
+    observedStream();
+    expect(await finished()).toHaveLength(0);
+  });
+
+  it("records no output, as the Python SDK records none for a generator", async () => {
+    const observedStream = observe(function* stream() {
+      yield "a";
+      return "done";
+    });
+    const iterator = observedStream();
+    expect(iterator.next()).toEqual({ value: "a", done: false });
+    // The generator's own return value still reaches the caller.
+    expect(iterator.next()).toEqual({ value: "done", done: true });
+    expect((await finished())[0].attributes["output.value"]).toBeUndefined();
+  });
+
+  it("records an error raised mid-iteration and rethrows it", async () => {
+    const observedBoom = observe(function* boom() {
+      yield 1;
+      throw new RangeError("mid-stream");
+    });
+    expect(() => [...observedBoom()]).toThrow("mid-stream");
+    const span = (await finished())[0];
+    expect(span.status.code).toBe(2);
+    expect(span.attributes["error.type"]).toBe("RangeError");
+    expect(span.events.filter((e) => e.name === "exception")).toHaveLength(1);
+  });
+
+  it("closes the inner generator and ends the span on break", async () => {
+    let cleanedUp = false;
+    const observedStream = observe(function* stream() {
+      try {
+        yield 1;
+        yield 2;
+      } finally {
+        cleanedUp = true;
+      }
+    });
+    for (const _ of observedStream()) break;
+    expect(cleanedUp).toBe(true);
+    const span = (await finished())[0];
+    expect(span.status.code).not.toBe(2);
+  });
+
+  it("forwards the caller's next() argument and throw() to the inner generator", async () => {
+    const received: unknown[] = [];
+    const observedEcho = observe(function* echo() {
+      try {
+        received.push(yield "first");
+      } catch (error) {
+        received.push((error as Error).message);
+      }
+      received.push(yield "second");
+    });
+    const iterator = observedEcho();
+    iterator.next();
+    expect(iterator.throw(new Error("from caller"))).toEqual({ value: "second", done: false });
+    iterator.next("sent");
+    expect(received).toEqual(["from caller", "sent"]);
+    expect((await finished())[0].attributes["error.type"]).toBeUndefined();
+  });
+
+  it("records a caller's throw() the generator does not handle", async () => {
+    const observedStream = observe(function* stream() {
+      yield 1;
+    });
+    const iterator = observedStream();
+    iterator.next();
+    expect(() => iterator.throw(new TypeError("stop"))).toThrow("stop");
+    expect((await finished())[0].attributes["error.type"]).toBe("TypeError");
+  });
+
+  it("is current inside the generator body, never in the caller between steps", async () => {
+    const tracer = trace.getTracer("test");
+    const observedStream = observe(function* stream() {
+      const inner = tracer.startSpan("inner-work");
+      inner.end();
+      yield 1;
+      yield 2;
+    });
+    const iterator = observedStream();
+    iterator.next();
+    expect(trace.getActiveSpan()).toBeUndefined();
+    tracer.startSpan("caller-work").end();
+    iterator.next();
+    iterator.next();
+    const spans = await finished();
+    const byName = Object.fromEntries(spans.map((s) => [s.name, s]));
+    expect(byName["inner-work"].parentSpanContext?.spanId).toBe(byName.stream.spanContext().spanId);
+    expect(byName["caller-work"].parentSpanContext).toBeUndefined();
+  });
+
+  it("composes a TOOL name from the generator function, as the other wrappers do", async () => {
+    const observedLookup = observe(
+      function* lookup() {
+        yield 1;
+      },
+      { kind: SpanKind.TOOL },
+    );
+    [...observedLookup()];
+    const span = (await finished())[0];
+    expect(span.name).toBe("execute_tool lookup");
+    expect(span.attributes["gen_ai.tool.name"]).toBe("lookup");
+  });
+
+  it("keeps the receiver of a wrapped generator method", async () => {
+    const holder = {
+      items: [7, 8],
+      list: observe(function* list(this: { items: number[] }) {
+        yield* this.items;
+      }),
+    };
+    expect([...holder.list()]).toEqual([7, 8]);
+  });
+});
+
+describe("observe on an async generator function", () => {
+  it("returns an async generator whose span covers the iteration", async () => {
+    const observedTokens = observe(async function* tokens(prefix: string) {
+      yield `${prefix}1`;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      yield `${prefix}2`;
+    });
+    const seen: string[] = [];
+    for await (const token of observedTokens("t")) seen.push(token);
+    expect(seen).toEqual(["t1", "t2"]);
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].name).toBe("tokens");
+    expect(spans[0].attributes["input.value"]).toBe('{"args":["t"],"kwargs":{}}');
+    expect(spans[0].attributes["output.value"]).toBeUndefined();
+  });
+
+  it("keeps the span open between steps", async () => {
+    const observedStream = observe(async function* stream() {
+      yield 1;
+      yield 2;
+    });
+    const iterator = observedStream();
+    await iterator.next();
+    expect(await finished()).toHaveLength(0);
+    await iterator.next();
+    await iterator.next();
+    expect(await finished()).toHaveLength(1);
+  });
+
+  it("records an error raised mid-iteration and rethrows it", async () => {
+    const observedBoom = observe(async function* boom() {
+      yield 1;
+      await Promise.resolve();
+      throw new RangeError("async mid-stream");
+    });
+    await expect(
+      (async () => {
+        for await (const _ of observedBoom()) {
+        }
+      })(),
+    ).rejects.toThrow("async mid-stream");
+    const span = (await finished())[0];
+    expect(span.status.code).toBe(2);
+    expect(span.attributes["error.type"]).toBe("RangeError");
+  });
+
+  it("closes the inner generator and ends the span on break", async () => {
+    let cleanedUp = false;
+    const observedStream = observe(async function* stream() {
+      try {
+        yield 1;
+        yield 2;
+      } finally {
+        cleanedUp = true;
+      }
+    });
+    for await (const _ of observedStream()) break;
+    expect(cleanedUp).toBe(true);
+    expect(await finished()).toHaveLength(1);
+  });
+
+  it("nests spans opened across awaits in the body, and none opened by the caller", async () => {
+    const tracer = trace.getTracer("test");
+    const observedStream = observe(async function* stream() {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      tracer.startSpan("inner-work").end();
+      yield 1;
+      yield 2;
+    });
+    const iterator = observedStream();
+    await iterator.next();
+    tracer.startSpan("caller-work").end();
+    await iterator.next();
+    await iterator.next();
+    const byName = Object.fromEntries((await finished()).map((s) => [s.name, s]));
+    expect(byName["inner-work"].parentSpanContext?.spanId).toBe(byName.stream.spanContext().spanId);
+    expect(byName["caller-work"].parentSpanContext).toBeUndefined();
+  });
+
+  it("scopes an AGENT generator over the TOOL spans opened inside it", async () => {
+    const tool = observe(async () => 1, { kind: SpanKind.TOOL, toolName: "search" });
+    const agent = observe(
+      async function* plan() {
+        await tool();
+        yield 1;
+      },
+      { kind: SpanKind.AGENT, agentName: "planner" },
+    );
+    for await (const _ of agent()) {
+    }
+    const byName = Object.fromEntries((await finished()).map((s) => [s.name, s]));
+    expect(byName["invoke_agent planner"]).toBeDefined();
+    expect(byName["execute_tool search"].attributes["gen_ai.agent.name"]).toBe("planner");
+  });
+
+  it("parents to the span current at the first step", async () => {
+    const observedStream = observe(async function* stream() {
+      yield 1;
+    });
+    let outerId: string | undefined;
+    await startAsCurrentSpan("outer", async (observation) => {
+      outerId = observation.span.spanContext().spanId;
+      for await (const _ of observedStream()) {
+      }
+    });
+    const byName = Object.fromEntries((await finished()).map((s) => [s.name, s]));
+    expect(byName.stream.parentSpanContext?.spanId).toBe(outerId);
+  });
+});
+
+describe("observe's return type", () => {
+  it("is the generator for a generator function and a Promise otherwise", () => {
+    const gen = observe(function* gen(n: number) {
+      yield n;
+      return "r";
+    });
+    expectTypeOf(gen).returns.toEqualTypeOf<Generator<number, string, unknown>>();
+    const agen = observe(async function* agen() {
+      yield 1;
+    });
+    expectTypeOf(agen).returns.toEqualTypeOf<AsyncGenerator<number, void, unknown>>();
+    expectTypeOf(observe(async (s: string) => s.length)).returns.toEqualTypeOf<Promise<number>>();
+    expectTypeOf(observe((a: number) => a)).returns.toEqualTypeOf<Promise<number>>();
+    // `any` must not be mistaken for a generator: untyped callbacks keep the
+    // Promise they always had.
+    // biome-ignore lint/suspicious/noExplicitAny: the case under test.
+    expectTypeOf(observe((x: any) => x)).returns.toEqualTypeOf<Promise<any>>();
+  });
+});

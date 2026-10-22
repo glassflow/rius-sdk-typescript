@@ -10,7 +10,7 @@ export type {
   MarkCompactionOptions,
 } from "./markCompaction.js";
 export { markCompaction } from "./markCompaction.js";
-export type { ObserveOptions } from "./observe.js";
+export type { ObservedReturn, ObserveOptions } from "./observe.js";
 export { observe } from "./observe.js";
 export { SpanKind } from "./semconv.js";
 export { withSession } from "./session.js";

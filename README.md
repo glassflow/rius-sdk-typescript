@@ -98,8 +98,10 @@ Each surface has more detail below: `observe` for the function wrapper,
 
 ### `observe`: wrap a function
 
-`observe` wraps a function so every call becomes a span. It always
-returns a **promise**, even when the wrapped function is synchronous.
+`observe` wraps a function so every call becomes a span. It returns a
+**promise**, even when the wrapped function is synchronous. The exception is
+a generator function (`function*` or `async function*`): its wrapper returns
+a generator, and the span covers the whole iteration (see below).
 
 Use a named function expression (or pass `{ name }`) so the span gets a
 real name. An arrow function has no inferrable name, and its span falls
@@ -137,6 +139,27 @@ An AGENT wrapper is named after the agent it invokes (`agentName`, or the
 one `init()` was given), a RETRIEVER after its `dataSourceId`. A function
 name is not an agent or an index, so it is never used as one. Pass `{ name }`
 to override any of this.
+
+A wrapped generator function stays a generator. Its span opens on the first
+step and ends when the iteration finishes, throws (recorded as an error), or
+is closed early by `break` or `return()`, which also closes the wrapped
+generator so its `finally` blocks run. The span is current only while the
+generator's own code runs, so spans the caller opens between steps do not nest
+under it. Its input is recorded; what it yields is not, as in the Python SDK.
+
+```ts
+const streamAnswer = observe(async function* streamAnswer(query: string) {
+  for await (const chunk of callModelStreaming(query)) yield chunk;
+});
+
+for await (const chunk of streamAnswer("hello")) process.stdout.write(chunk);
+```
+
+Generators are recognised by function kind, so wrap the generator function
+itself: a plain function that returns a generator is an ordinary function to
+`observe`, and so is an async generator compiled to a target older than
+ES2018. A generator abandoned mid-iteration without being closed leaves its
+span open.
 
 An AGENT span (from `observe`, `startSpan` or `startAsCurrentSpan`) can also
 carry `agentId` and `agentVersion`, which describe the agent it *invoked*, as
