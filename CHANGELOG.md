@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.7.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.6.0...v1.7.0) (2026-10-22)
+
+
+### Features
+
+* **observe:** trace generators over the whole iteration; serde, docs and API parity fixes ([#189](https://github.com/glassflow/rius-sdk-typescript/issues/189)) ([6e0ee88](https://github.com/glassflow/rius-sdk-typescript/commit/6e0ee88213ac14b7e28d2b28f76444432240191a))
+
+
+### Bug Fixes
+
+* always drop credential headers from spans, whatever captureContent is ([#188](https://github.com/glassflow/rius-sdk-typescript/issues/188)) ([60f9790](https://github.com/glassflow/rius-sdk-typescript/commit/60f979071a808d179911d58b4bd9e88dfdcb1b62))
+* mask exception events, keep content off pending snapshots, strip more ai.* content keys ([#186](https://github.com/glassflow/rius-sdk-typescript/issues/186)) ([eb32bde](https://github.com/glassflow/rius-sdk-typescript/commit/eb32bde41aef89260f9ea3920958c64fc0584d5d))
+* **sdk:** never break a foreign OTel SDK on shutdown or throw into host code ([#184](https://github.com/glassflow/rius-sdk-typescript/issues/184)) ([13c3a10](https://github.com/glassflow/rius-sdk-typescript/commit/13c3a10a624b92ffeb41fb9f5ac106bfa36a48c7))
+* **sdk:** report the SDK's own version when bundled; fix serde, context and workspace leaks ([#183](https://github.com/glassflow/rius-sdk-typescript/issues/183)) ([86c22b1](https://github.com/glassflow/rius-sdk-typescript/commit/86c22b1b5abbcfdca2fb40a8ab3e356c8378176d))
+* **spans:** setAttribute writes an array holding an array or an object as one JSON string; run the shared SDK cases and usage-key rows ([#190](https://github.com/glassflow/rius-sdk-typescript/issues/190)) ([70210c2](https://github.com/glassflow/rius-sdk-typescript/commit/70210c21d9aa5041be669def6ffad459a6d72654))
+* **wire:** align value encoding, env parsing and resource attributes with the Python SDK ([#185](https://github.com/glassflow/rius-sdk-typescript/issues/185)) ([ecfca08](https://github.com/glassflow/rius-sdk-typescript/commit/ecfca08d09ceb2d86d0a235e928c24a5a5662fb2))
+
 ## [1.6.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.5.0...v1.6.0) (2026-10-22)
 
 
