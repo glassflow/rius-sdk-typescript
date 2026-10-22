@@ -99,7 +99,11 @@ describe("a provider 404", () => {
           messages: [{ role: "user", content: "hi" }],
         }),
       );
-      const llm = spans.find((s) => s.attributes["openinference.span.kind"] === "LLM");
+      // One LLM span for the call: from 0.134 the Anthropic SDK traces the
+      // call itself as well, and that span would carry the body's error type.
+      const llms = spans.filter((s) => s.attributes["openinference.span.kind"] === "LLM");
+      expect(llms).toHaveLength(1);
+      const llm = llms[0];
       const root = spans.find((s) => s.name === "agent");
       expect(llm).toBeDefined();
       expect(llm?.attributes["error.type"]).toBe("anthropic.NotFoundError");

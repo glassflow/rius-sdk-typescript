@@ -436,7 +436,7 @@ npm install @arizeai/openinference-instrumentation-openai @arizeai/openinference
 Install only the ones you use:
 
 - **`openai`** wraps the OpenAI SDK, via `@arizeai/openinference-instrumentation-openai`, turning provider calls into spans.
-- **`anthropic`** wraps the Anthropic SDK, via `@arizeai/openinference-instrumentation-anthropic`, turning Messages calls into LLM spans with model, messages and token counts.
+- **`anthropic`** wraps the Anthropic SDK, via `@arizeai/openinference-instrumentation-anthropic`, turning Messages calls into LLM spans with model, messages and token counts. Tested with `@anthropic-ai/sdk` 0.133 and 1.1. From 0.134 the Anthropic SDK also starts a span of its own for each API call when a tracer provider is registered. While this integration is enabled, Rius keeps that span but takes its `gen_ai.*` keys off it, except `gen_ai.provider.name` and `gen_ai.conversation.id`, so each call counts and is priced once, as the instrumentation's LLM span. The Anthropic SDK's span is exported as a plain CLIENT span, with HTTP spans from your own instrumentation under it. Inside an `observe`d function or any other span, it sits in the same trace as the instrumentation's span. A `messages.stream()` or `beta.messages.stream()` call made outside any span is the exception: the Anthropic SDK starts its span before the instrumentation's, so each is the root of its own trace, and the trace with the demoted span (and its HTTP spans) has no LLM span. The call is still counted and priced once. The demoted span keeps `gen_ai.conversation.id`, which the backend reads as the session when a span has no `session.id`, so if you pass a conversation id to the Anthropic SDK but set no Rius session, that span can be grouped in a different session from the rest of the call. The same holds for the Bedrock and Vertex clients (`@anthropic-ai/bedrock-sdk`, `@anthropic-ai/vertex-sdk`). The Anthropic SDK's tool runner spans are left as they are. Without this integration, the Anthropic SDK's span is the call's LLM span.
 - **`langchain`** traces LangChain.js chains, models, tools and retrievers, via `@arizeai/openinference-instrumentation-langchain`. It patches the callback manager in `@langchain/core`, which every LangChain.js application already has, and the SDK resolves that module for you so nothing has to be passed in at `init()`.
 - **`vercel-ai`** traces the Vercel AI SDK. On AI SDK v7 it registers `@ai-sdk/otel`'s OpenTelemetry integration with the SDK's tracer, so calls are traced with no telemetry code; install `@ai-sdk/otel` beside `ai` (both require Node 22 or newer). AI SDK v5 and v6 trace the calls you pass `experimental_telemetry: { isEnabled: true }`, and the SDK maps their `ai.*` spans (generate, stream, object, embed, rerank and tool calls) onto the GenAI conventions itself, on any Node version, with nothing else to install. v5 and v6 do not trace image, speech or transcription calls.
 - **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span named `execute_tool <tool>`, carrying the tool name, arguments, result, latency, and error status. The span follows the OpenTelemetry MCP conventions: OTel `SpanKind` CLIENT, `mcp.method.name` set to `tools/call`, `mcp.protocol.version` set to the negotiated version when the transport exposes it (Streamable HTTP does; stdio and SSE do not), and `error.type` set to `tool_error` when the server returns an `isError` result.
@@ -518,8 +518,12 @@ the provider happens lazily after `init()` (requiring it anywhere
 before `init()` avoids this), and (the mirror image) an ESM
 application where some CommonJS dependency `require`d the provider
 before `init()`, which wins the choice away from the ESM build the
-application itself is calling. The `langchain`, `vercel-ai` and `mcp`
-integrations attach differently and have no such edge.
+application itself is calling. In those two combinations an Anthropic
+call through the unpatched build has no LLM span: from 0.134 the
+Anthropic SDK's own span for it is there, but demoted like every other
+while the `anthropic` integration is enabled (see above). The
+`langchain`, `vercel-ai` and `mcp` integrations attach differently and
+have no such edge.
 
 Content captured by these integrations, prompts, tool arguments and
 results, and so on, is covered by the same `mask` and `captureContent`

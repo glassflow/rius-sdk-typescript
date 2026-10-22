@@ -93,7 +93,7 @@
   "devDependencies": {
     "@ai-sdk/openai": "^4.0.94",
     "@ai-sdk/otel": "^1.0.141",
-    "@anthropic-ai/sdk": "^0.133.0",
+    "@anthropic-ai/sdk": "^1.1.0",
     "@arizeai/openinference-instrumentation-anthropic": "0.2.11",
     "@arizeai/openinference-instrumentation-langchain": "4.1.4",
     "@arizeai/openinference-instrumentation-openai": "^4.4.1",
@@ -103,7 +103,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^20.0.0",
     "ai": "^7.0.141",
-    "openai": "^7.4.0",
+    "openai": "^7.42.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.2.7"

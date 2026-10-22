@@ -51,6 +51,7 @@ import {
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
 import { enableInstrumentations, type InstrumentModules } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
+import { NativeProviderSpanDemoter } from "./nativeProviderSpans.js";
 import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
 import {
@@ -575,6 +576,8 @@ export function init(options: InitOptions = {}): RiusClient {
   let health: ExportOutcomeExporter | undefined;
   let routing: RoutingSpanExporter | undefined;
   let detector: ForeignParentDetector | undefined;
+  // Enabled with the OpenInference Anthropic instrumentation, below.
+  const demoter = new NativeProviderSpanDemoter();
   if (!config.disabled) {
     let base =
       options.spanExporter ??
@@ -617,12 +620,17 @@ export function init(options: InitOptions = {}): RiusClient {
     // span before the pending snapshot is built from it.
     detector = new ForeignParentDetector(foreignGlobal);
     processors.add(detector);
+    // The first of our own processors, ahead of normalization at both hooks:
+    // a demoted span must not have its LLM kind derived from the operation it
+    // is about to lose, and the pending snapshot must not see it either. It
+    // only ever deletes keys, so normalization still sees every key it fills.
+    processors.add(demoter);
     // Added BEFORE the pending processor: both act at onStart, and the
     // pending snapshot is built from the attributes already on the span, so
     // the session id (and the workspace route, which decides which
     // destination the snapshot itself goes to) must be stamped first to
     // ride it.
-    // FIRST of our own processors, at both hooks. At onEnd it must run before
+    // Normalization comes next, at both hooks. At onEnd it must run before
     // the batch processor queues the span, so the canonical keys exist by the
     // time MaskingSpanExporter (which sits in the exporter chain, downstream of
     // the queue) decides what is content. At onStart it must run before the
@@ -676,6 +684,15 @@ export function init(options: InitOptions = {}): RiusClient {
     ? Promise.resolve<string[]>([])
     : enableInstrumentations(provider, undefined, teardown, {
         instrumentModules: options.instrumentModules,
+        onEnabled: (name) => {
+          // From here every Anthropic call has an OpenInference LLM span, so
+          // the Anthropic SDK's own chat span would be a second one.
+          if (name !== "anthropic") return;
+          demoter.enable();
+          // Queued right after the instrumentation's own disable, so the
+          // demoter stops when the instrumentation is unbound, not later.
+          teardown.push(() => demoter.disable());
+        },
       });
 
   // Registered even when disabled: a provider whose only processor has no
