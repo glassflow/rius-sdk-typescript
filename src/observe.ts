@@ -236,11 +236,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       // Reached on completion, on a throw, and on the caller's return()
       // (a `break` out of for-of). Closing an already finished generator is a
       // no-op; closing a suspended one runs its finally blocks now.
-      try {
-        step.run(() => inner.return(undefined));
-      } finally {
-        step.observation.end();
-      }
+      closeIteration(step, () => inner.return(undefined));
     }
   };
 
@@ -270,11 +266,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       step.observation.recordException(error);
       throw error;
     } finally {
-      try {
-        await step.run(() => inner.return(undefined));
-      } finally {
-        step.observation.end();
-      }
+      await closeAsyncIteration(step, () => inner.return(undefined));
     }
   };
 
@@ -326,4 +318,38 @@ function openIterationSpan(
       scopeName === undefined ? fn() : withAgentScope(scopeName, fn),
     );
   return { observation, run };
+}
+
+type IterationStep = ReturnType<typeof openIterationSpan>;
+
+/**
+ * Close the wrapped generator inside its step, then end the span. Closing a
+ * suspended generator runs its finally blocks, which may throw; the wrapper's
+ * own catch has already run by then, so the error is recorded here before it
+ * reaches the caller.
+ */
+function closeIteration(step: IterationStep, close: () => unknown): void {
+  try {
+    step.run(close);
+  } catch (error) {
+    step.observation.recordException(error);
+    throw error;
+  } finally {
+    step.observation.end();
+  }
+}
+
+/** {@link closeIteration} for an async generator. */
+async function closeAsyncIteration(
+  step: IterationStep,
+  close: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await step.run(close);
+  } catch (error) {
+    step.observation.recordException(error);
+    throw error;
+  } finally {
+    step.observation.end();
+  }
 }

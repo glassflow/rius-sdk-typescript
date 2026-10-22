@@ -101,6 +101,26 @@ describe("observe on a generator function", () => {
     expect(span.status.code).not.toBe(2);
   });
 
+  it("records an error the inner generator's finally throws on break", async () => {
+    const observedStream = observe(function* stream() {
+      try {
+        yield 1;
+        yield 2;
+      } finally {
+        // biome-ignore lint/correctness/noUnsafeFinally: the case under test.
+        throw new TypeError("cleanup failed");
+      }
+    });
+    expect(() => {
+      for (const _ of observedStream()) break;
+    }).toThrow("cleanup failed");
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(2);
+    expect(spans[0].attributes["error.type"]).toBe("TypeError");
+    expect(spans[0].events.filter((e) => e.name === "exception")).toHaveLength(1);
+  });
+
   it("forwards the caller's next() argument and throw() to the inner generator", async () => {
     const received: unknown[] = [];
     const observedEcho = observe(function* echo() {
@@ -233,6 +253,26 @@ describe("observe on an async generator function", () => {
     for await (const _ of observedStream()) break;
     expect(cleanedUp).toBe(true);
     expect(await finished()).toHaveLength(1);
+  });
+
+  it("records an error the inner generator's finally throws on break", async () => {
+    const observedStream = observe(async function* stream() {
+      try {
+        yield 1;
+        yield 2;
+      } finally {
+        // biome-ignore lint/correctness/noUnsafeFinally: the case under test.
+        throw new TypeError("cleanup failed");
+      }
+    });
+    await expect(async () => {
+      for await (const _ of observedStream()) break;
+    }).rejects.toThrow("cleanup failed");
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(2);
+    expect(spans[0].attributes["error.type"]).toBe("TypeError");
+    expect(spans[0].events.filter((e) => e.name === "exception")).toHaveLength(1);
   });
 
   it("nests spans opened across awaits in the body, and none opened by the caller", async () => {
