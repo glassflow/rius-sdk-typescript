@@ -28,8 +28,8 @@ updates:
         patterns:
           - "ai"
           - "@ai-sdk/*"
-    # A newer @types/node major type-checks calls to APIs that the oldest
-    # Node in `engines` lacks. Bump its major by hand when `engines` moves.
+    # Each @types/node major types APIs that the oldest Node in `engines`
+    # may lack, so its major moves by hand, alongside `engines`.
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
