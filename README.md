@@ -487,7 +487,7 @@ variables, then the defaults below.
 | `disabled`         | `RIUS_DISABLED`          | `false`                                       |
 | `sampleRate`       | `RIUS_SAMPLE_RATE`       | `1.0`                                         |
 | `captureContent`   | `RIUS_CAPTURE_CONTENT`   | `true`                                        |
-| `mask`             | (options only)           | none (`(value, { key }) => unknown`; the return value is stored, JSON-encoded if not a primitive; return `""` to blank) |
+| `mask`             | (options only)           | none (`(value, { key }) => unknown`; the return value is stored, JSON-encoded if not a primitive; return `""` to blank, `null` or `undefined` to drop the attribute) |
 | `heartbeat`        | `RIUS_HEARTBEAT`         | `true`                                        |
 | `heartbeatInterval` | `RIUS_HEARTBEAT_INTERVAL` | `15` (seconds; clamped 5-300)               |
 | `agentName`        | `RIUS_AGENT_NAME`        | `serviceName`                                 |
@@ -501,14 +501,23 @@ variables, then the defaults below.
 
 Traces are posted to `<endpoint>/v1/traces`.
 
+An empty `endpoint` or `serviceName` (option or environment variable) counts
+as unset. A numeric environment variable that is not a number (`0.5abc`,
+`10s`) is ignored with a warning, and the default applies. `sampleRate`,
+`heartbeatInterval` and `partialSpansDelay` are range-checked the same way
+whether they come from an option or the environment: out of range is clamped
+with a warning, and `NaN` or an infinity warns and uses the default.
+
 `serviceVersion` is stamped on the resource as `service.version`, so the
 console can tell one build of an agent from another. It has no default on
 purpose: an invented version would put every unversioned process under the
 same wrong number, the way `unknown_service` does for unnamed ones, so the
 key is simply absent until you supply one. This SDK builds its resource
 explicitly, which in OpenTelemetry for JavaScript means the OTel environment
-is not merged into it, so `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is
-read here by hand as the last tier after the option and `RIUS_SERVICE_VERSION`.
+is not merged into it, so the SDK reads `OTEL_RESOURCE_ATTRIBUTES` by hand:
+every key it carries (`deployment.environment.name`, `cloud.region`, ...) is
+put on the resource, under the SDK's own keys, which win. `service.version`
+there is the last tier after the option and `RIUS_SERVICE_VERSION`.
 
 The agent this process *is* is described on the resource under the GenAI
 conventions' `gen_ai.main_agent.*`. `gen_ai.main_agent.id` is the entity's
@@ -527,9 +536,10 @@ allow the entity without an identifier. The deprecated `rius.main_agent.name`,
 `.id` and `.description` keep their old behaviour through their deprecation
 window (`rius.main_agent.id` only ever carries a configured `mainAgentId`),
 and `rius.main_agent.version`, which has no upstream twin, carries the
-optional agent version. `gen_ai.agent.name` is still stamped alongside them,
-unchanged: the keys are additive so that no deployment loses its agent
-identity between an SDK upgrade and a backend one. The main-agent keys exist
+optional agent version. `gen_ai.agent.name` is still stamped alongside them
+(and, like them, left off for the `unknown_service` placeholder): the keys are
+additive so that no deployment loses its agent identity between an SDK upgrade
+and a backend one. The main-agent keys exist
 because `gen_ai.agent.name` has no resource-level meaning in the conventions
 and on a span means the agent being *invoked*, so one key was answering two
 questions.
@@ -624,8 +634,9 @@ graceful exit if you want that distinction to show up.
 The heartbeat never keeps the process alive, its timer is unref'd, and never
 throws into your code; delivery failures are logged once per client and
 silent after that. `agentName` identifies the agent in heartbeat payloads and
-on every span, where it is stamped on the resource as `gen_ai.agent.name`. It
-defaults to `serviceName`, so the two agree unless you set it.
+on every span, where it is stamped on the resource as `gen_ai.agent.name`
+(unless nothing was named, see above). It defaults to `serviceName`, so the
+two agree unless you set it.
 
 ### Partial spans
 
@@ -660,8 +671,9 @@ Export is designed to never block or crash your application:
   returns `false` when the most recent export failed, so you can check
   delivery explicitly instead of relying on logs alone.
 - **Mask failures fail safe.** If a `mask` callback throws, the affected
-  attribute value is replaced with the literal `"[mask error]"` rather
-  than dropping the batch or letting the exception escape.
+  attribute (or status description) is dropped and a warning logged, rather
+  than leaking the unmasked value, dropping the batch or letting the
+  exception escape.
 - **No automatic flush on exit.** The SDK does not register a process-exit
   hook. Call `client.flush()` to force a pending export, or
   `client.shutdown()` to drain the queue and tear the client down, before

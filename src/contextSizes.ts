@@ -218,10 +218,21 @@ class Context {
   messageEntry(message: unknown): MessageEntry {
     const role = isRecord(message) ? message.role : undefined;
     return {
-      role: typeof role === "string" ? role : String(role),
+      role: roleName(role),
       parts: partsOf(message).flatMap((part) => this.partEntry(part)),
     };
   }
+}
+
+/**
+ * The role a message entry reports. A message with no role (an explicit
+ * `null`, which the normalizer keeps on the message, or none to read) is
+ * reported as `user`, the role `fold` already counts its bytes under, rather
+ * than as a spelling of null that differs between languages.
+ */
+function roleName(role: unknown): string {
+  if (role === null || role === undefined) return "user";
+  return typeof role === "string" ? role : String(role);
 }
 
 /**

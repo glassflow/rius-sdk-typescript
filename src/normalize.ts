@@ -189,18 +189,41 @@ function isExpanding(rule: NormalizationRule): rule is ExpandingRule {
 export const copy: Converter = (values) => values[0];
 
 /**
- * A count that arrived as a string. Instrumentations that build attributes
- * from JSON routinely emit token counts as strings; the conventions type them
- * as int, and the backend sums them. A non-integral or unparseable value maps
- * to nothing rather than to a wrong number.
+ * A token count, as Python's `to_int` reads one. Instrumentations that build
+ * attributes from JSON routinely emit token counts as strings; the
+ * conventions type them as int, and the backend sums them.
+ *
+ * A string is read as the integer it spells, and only that: Python's `int()`
+ * takes surrounding whitespace, a sign, leading zeros and single underscores
+ * between digits, and refuses `"12.9"`, `"12.0"` or `"1e3"`. What it reads
+ * then goes through {@link count}, as a number does.
  */
 export const toInt: Converter = (values) => {
-  const value = values[0];
-  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : undefined;
-  if (typeof value !== "string") return undefined;
-  const parsed = Number.parseInt(value.trim(), 10);
-  return Number.isNaN(parsed) ? undefined : parsed;
+  let value = values[0];
+  if (typeof value === "string") {
+    const spelled = value.trim();
+    if (!INTEGER_TEXT.test(spelled)) return undefined;
+    value = Number(spelled.replaceAll("_", ""));
+  }
+  return count(value);
 };
+
+/**
+ * What Python's `int()` accepts in base 10, after stripping whitespace, in
+ * ASCII digits only: Python also reads other Unicode decimal digits.
+ */
+const INTEGER_TEXT = /^[+-]?\d+(?:_\d+)*$/;
+
+/**
+ * A non-negative whole number, or nothing. Booleans are not counts, nor is a
+ * fractional number (truncating 12.9 would invent a value) or a non-finite
+ * one. A negative count is no count.
+ */
+function count(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
+  // -0 passes `value < 0`; Python's int(-0.0) is 0.
+  return value === 0 ? 0 : value;
+}
 
 /**
  * A scalar the conventions type as a list — `gen_ai.response.finish_reasons`

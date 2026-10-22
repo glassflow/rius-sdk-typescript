@@ -457,7 +457,10 @@ export function init(options: InitOptions = {}): RiusClient {
     // agent name, so a process that configures the two differently sees its
     // agents view and its trace list disagree. Resolution defaults the agent
     // name to the service name, so nothing changes when they are the same.
-    [GEN_AI_AGENT_NAME]: config.agentName,
+    // Spread, and absent on the `unknown_service` placeholder, by the same
+    // rule as the main-agent keys below: a process that named nothing claims
+    // no agent identity.
+    ...(config.mainAgentName === undefined ? {} : { [GEN_AI_AGENT_NAME]: config.mainAgentName }),
     // The same fact under the conventions' main-agent keys (and, through its
     // deprecation window, `rius.main_agent.name`), which the sink reads first.
     // `gen_ai.agent.name` above is kept ADDITIVELY and on purpose: it has no
@@ -504,7 +507,13 @@ export function init(options: InitOptions = {}): RiusClient {
       ? {}
       : { [ATTR_SERVICE_VERSION]: config.serviceVersion }),
   });
-  const resource = defaultResource().merge(riusAttributes);
+  // OTEL_RESOURCE_ATTRIBUTES sits between the two, as Python's
+  // Resource.create merges it: every key it carries reaches the resource
+  // (deployment.environment.name, cloud.region, ...), and the SDK's own keys
+  // win over it.
+  const resource = defaultResource()
+    .merge(resourceFromAttributes(config.otelResourceAttributes))
+    .merge(riusAttributes);
 
   // Shared with the heartbeat sender below: both hit the same managed
   // endpoint under the same API key.

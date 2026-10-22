@@ -51,10 +51,11 @@ describe("converters", () => {
     expect(copy(["gpt-4o"])).toBe("gpt-4o");
   });
 
-  it("toInt parses strings, truncates numbers and rejects junk", () => {
+  it("toInt parses strings, keeps whole numbers and rejects junk", () => {
     expect(toInt(["42"])).toBe(42);
     expect(toInt([" 42 "])).toBe(42);
-    expect(toInt([42.9])).toBe(42);
+    expect(toInt([42])).toBe(42);
+    expect(toInt([42.9])).toBeUndefined();
     expect(toInt(["not a number"])).toBeUndefined();
     expect(toInt([true])).toBeUndefined();
   });

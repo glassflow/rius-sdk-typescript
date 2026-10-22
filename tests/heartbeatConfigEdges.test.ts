@@ -14,9 +14,9 @@ it("(1) an out-of-range RIUS_HEARTBEAT_INTERVAL env value warns and clamps", () 
   const delay = resolveConfig({}, { RIUS_PARTIAL_SPANS_DELAY: "600" });
   expect(delay.partialSpansDelayMs).toBe(60000);
   expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
-    "[rius] heartbeatInterval=1 is outside [5, 300]; clamped to 5.",
-    "[rius] heartbeatInterval=9999 is outside [5, 300]; clamped to 300.",
-    "[rius] partialSpansDelay=600 is outside [0, 60]; clamped to 60.",
+    "[rius] RIUS_HEARTBEAT_INTERVAL=1 is outside [5, 300]; clamped to 5.",
+    "[rius] RIUS_HEARTBEAT_INTERVAL=9999 is outside [5, 300]; clamped to 300.",
+    "[rius] RIUS_PARTIAL_SPANS_DELAY=600 is outside [0, 60]; clamped to 60.",
   ]);
 });
 

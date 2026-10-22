@@ -1,3 +1,10 @@
+import {
+  GEN_AI_MAIN_AGENT_DESCRIPTION,
+  GEN_AI_MAIN_AGENT_ID,
+  GEN_AI_MAIN_AGENT_NAME,
+  SERVICE_VERSION,
+} from "./semconv.js";
+
 export const DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com";
 /**
  * What `service.name` AND `agentName` both resolve to when nothing was
@@ -166,11 +173,15 @@ export interface ResolvedConfig {
   mainAgentVersion?: string;
   /**
    * The `gen_ai.main_agent.*` keys an operator put in
-   * `OTEL_RESOURCE_ATTRIBUTES`. The resource never merges that variable (see
-   * `otelResourceAttribute`), so these are read here and kept by the
-   * main-agent rule rather than overwritten or dropped.
+   * `OTEL_RESOURCE_ATTRIBUTES`, which the main-agent rule weighs rather than
+   * letting the merge below simply overwrite or keep them.
    */
   operatorMainAgent: OperatorMainAgent;
+  /**
+   * Every key `OTEL_RESOURCE_ATTRIBUTES` carries, merged UNDER the SDK's own
+   * resource keys (see {@link otelResourceAttributes}).
+   */
+  otelResourceAttributes: Record<string, string>;
   partialSpans: boolean;
   partialSpansDelayMs: number;
   sessionId?: string;
@@ -198,19 +209,42 @@ function bool(name: string, raw: string | undefined, fallback: boolean): boolean
   return fallback;
 }
 
-function rate(raw: string | undefined, fallback: number): number {
-  if (raw === undefined) return fallback;
-  const parsed = Number.parseFloat(raw);
-  if (Number.isNaN(parsed)) return fallback;
-  return Math.min(1, Math.max(0, parsed));
+/**
+ * A decimal number as Python's `float()` reads one: optional sign, digits with
+ * an optional point (or a point and digits), optional exponent, surrounding
+ * whitespace allowed. `parseFloat` read a leading number out of any text
+ * (`0.5abc`, `10s`) and `Number` reads `0x1` and an empty string; Python
+ * rejects all of them, so this SDK does too.
+ */
+const DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/**
+ * A numeric env var, or undefined when unset. A value that is not a number
+ * warns and reads as unset, so the option's default applies; a non-finite
+ * one (`inf`, `nan`) is caught by the range check that follows.
+ */
+function envNumber(name: string, raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const text = raw.trim();
+  if (DECIMAL.test(text)) return Number(text);
+  console.warn(`[rius] ${name}="${raw}" is not a number; using the default.`);
+  return undefined;
 }
 
-/** Parses a numeric env var; an unparseable value silently falls back to the default. */
-function seconds(raw: string | undefined, fallback: number): number {
-  if (raw === undefined) return fallback;
-  const parsed = Number.parseFloat(raw);
-  if (Number.isNaN(parsed)) return fallback;
-  return parsed;
+/**
+ * The option, else the env var, as a number checked by {@link clamp}, named
+ * after where it came from in a warning. Both paths go through the same
+ * check: an option is no more trustworthy than the environment.
+ */
+function numberSetting(
+  option: { name: string; value: number | undefined },
+  env: { name: string; raw: string | undefined },
+  bounds: { min: number; max: number; fallback: number },
+): number {
+  const { min, max, fallback } = bounds;
+  if (option.value !== undefined) return clamp(option.name, option.value, min, max, fallback);
+  const value = envNumber(env.name, env.raw);
+  return value === undefined ? fallback : clamp(env.name, value, min, max, fallback);
 }
 
 /**
@@ -238,38 +272,51 @@ export interface OperatorMainAgent {
 }
 
 /**
- * One key as `OTEL_RESOURCE_ATTRIBUTES` carries it, or undefined.
+ * Every key `OTEL_RESOURCE_ATTRIBUTES` carries.
  *
  * Parsed here by hand because, unlike Python, the JS SDK never reads that
  * variable on this path: `Resource.create` merges the OTel env detector in
  * Python, whereas `NodeTracerProvider` takes `options.resource ??
  * defaultResource()` and `resourceFromAttributes` merges nothing — so an
  * explicit resource, which is what client.ts builds, shuts the variable out
- * entirely. Only `service.version` and the `gen_ai.main_agent.*` keys are
- * read, each as a tier of its own rule: pulling the whole detector in would
- * also let the variable rewrite `service.name` and the agent name, which
- * resolve through their own precedence rules above.
+ * entirely. client.ts merges these UNDER its own keys, as `Resource.create`
+ * does, so the variable cannot rewrite `service.name` or the agent name,
+ * which resolve through their own precedence rules.
  *
  * The format is the spec's: comma-separated `key=value` pairs, values
- * percent-encoded. A malformed pair is skipped rather than thrown on — a
- * broken environment variable must not stop a process from starting. A key
- * given twice takes its last value, as the OTel SDKs' detectors do.
+ * percent-encoded. A malformed pair warns and is skipped, as Python's
+ * detector does, rather than thrown on — a broken environment variable must
+ * not stop a process from starting. A key given twice takes its last value,
+ * as the OTel SDKs' detectors do.
  */
-function otelResourceAttribute(raw: string | undefined, key: string): string | undefined {
-  if (raw === undefined) return undefined;
-  let found: string | undefined;
-  for (const pair of raw.split(",")) {
+export function otelResourceAttributes(raw: string | undefined): Record<string, string> {
+  // A Map, then fromEntries: a `__proto__` key becomes an own property
+  // rather than reaching the prototype through an assignment.
+  const found = new Map<string, string>();
+  for (const pair of (raw ?? "").split(",")) {
+    if (pair.trim() === "") continue;
     const separator = pair.indexOf("=");
-    if (separator === -1) continue;
-    if (pair.slice(0, separator).trim() !== key) continue;
+    const key = pair.slice(0, separator).trim();
+    if (separator === -1 || key === "") {
+      console.warn(`[rius] OTEL_RESOURCE_ATTRIBUTES: skipping malformed pair "${pair}".`);
+      continue;
+    }
     const value = pair.slice(separator + 1).trim();
     try {
-      found = decodeURIComponent(value);
+      found.set(key, decodeURIComponent(value));
     } catch {
-      found = value;
+      found.set(key, value);
     }
   }
-  return found || undefined;
+  return Object.fromEntries(found);
+}
+
+/** One key of {@link otelResourceAttributes}, empty reading as unset. */
+function otelResourceAttribute(
+  attributes: Record<string, string>,
+  key: string,
+): string | undefined {
+  return (Object.hasOwn(attributes, key) && attributes[key]) || undefined;
 }
 
 /**
@@ -277,22 +324,35 @@ function otelResourceAttribute(raw: string | undefined, key: string): string | u
  * GLASSFLOW_* is deliberately not read: this package never shipped under it.
  */
 export function resolveConfig(options: RiusOptions = {}, env: Env = process.env): ResolvedConfig {
-  const endpoint = (options.endpoint ?? env.RIUS_ENDPOINT ?? DEFAULT_ENDPOINT).replace(/\/+$/, "");
-  const serviceName = options.serviceName ?? env.RIUS_SERVICE_NAME ?? DEFAULT_SERVICE_NAME;
+  const otelResource = otelResourceAttributes(env.OTEL_RESOURCE_ATTRIBUTES);
+  // Empty is unset, as in Python's `or` chain: an empty endpoint posted
+  // traces to the relative `/v1/traces`, an empty name stamped
+  // `service.name=""`.
+  const endpoint = (options.endpoint || env.RIUS_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/+$/, "");
+  const serviceName = options.serviceName || env.RIUS_SERVICE_NAME || DEFAULT_SERVICE_NAME;
 
-  const heartbeatIntervalSeconds = clamp(
-    "heartbeatInterval",
-    options.heartbeatInterval ?? seconds(env.RIUS_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_INTERVAL),
-    HEARTBEAT_INTERVAL_MIN,
-    HEARTBEAT_INTERVAL_MAX,
-    DEFAULT_HEARTBEAT_INTERVAL,
+  const sampleRate = numberSetting(
+    { name: "sampleRate", value: options.sampleRate },
+    { name: "RIUS_SAMPLE_RATE", raw: env.RIUS_SAMPLE_RATE },
+    { min: 0, max: 1, fallback: 1.0 },
   );
-  const partialSpansDelaySeconds = clamp(
-    "partialSpansDelay",
-    options.partialSpansDelay ?? seconds(env.RIUS_PARTIAL_SPANS_DELAY, DEFAULT_PARTIAL_SPANS_DELAY),
-    PARTIAL_SPANS_DELAY_MIN,
-    PARTIAL_SPANS_DELAY_MAX,
-    DEFAULT_PARTIAL_SPANS_DELAY,
+  const heartbeatIntervalSeconds = numberSetting(
+    { name: "heartbeatInterval", value: options.heartbeatInterval },
+    { name: "RIUS_HEARTBEAT_INTERVAL", raw: env.RIUS_HEARTBEAT_INTERVAL },
+    {
+      min: HEARTBEAT_INTERVAL_MIN,
+      max: HEARTBEAT_INTERVAL_MAX,
+      fallback: DEFAULT_HEARTBEAT_INTERVAL,
+    },
+  );
+  const partialSpansDelaySeconds = numberSetting(
+    { name: "partialSpansDelay", value: options.partialSpansDelay },
+    { name: "RIUS_PARTIAL_SPANS_DELAY", raw: env.RIUS_PARTIAL_SPANS_DELAY },
+    {
+      min: PARTIAL_SPANS_DELAY_MIN,
+      max: PARTIAL_SPANS_DELAY_MAX,
+      fallback: DEFAULT_PARTIAL_SPANS_DELAY,
+    },
   );
 
   return {
@@ -306,10 +366,10 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     serviceVersion:
       options.serviceVersion ||
       env.RIUS_SERVICE_VERSION ||
-      otelResourceAttribute(env.OTEL_RESOURCE_ATTRIBUTES, "service.version") ||
+      otelResourceAttribute(otelResource, SERVICE_VERSION) ||
       undefined,
     disabled: options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false),
-    sampleRate: options.sampleRate ?? rate(env.RIUS_SAMPLE_RATE, 1.0),
+    sampleRate,
     captureContent:
       options.captureContent ?? bool("RIUS_CAPTURE_CONTENT", env.RIUS_CAPTURE_CONTENT, true),
     mask: options.mask,
@@ -331,13 +391,11 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
       options.mainAgentDescription || env.RIUS_MAIN_AGENT_DESCRIPTION || undefined,
     mainAgentVersion: options.mainAgentVersion || env.RIUS_MAIN_AGENT_VERSION || undefined,
     operatorMainAgent: {
-      id: otelResourceAttribute(env.OTEL_RESOURCE_ATTRIBUTES, "gen_ai.main_agent.id"),
-      name: otelResourceAttribute(env.OTEL_RESOURCE_ATTRIBUTES, "gen_ai.main_agent.name"),
-      description: otelResourceAttribute(
-        env.OTEL_RESOURCE_ATTRIBUTES,
-        "gen_ai.main_agent.description",
-      ),
+      id: otelResourceAttribute(otelResource, GEN_AI_MAIN_AGENT_ID),
+      name: otelResourceAttribute(otelResource, GEN_AI_MAIN_AGENT_NAME),
+      description: otelResourceAttribute(otelResource, GEN_AI_MAIN_AGENT_DESCRIPTION),
     },
+    otelResourceAttributes: otelResource,
     partialSpans: options.partialSpans ?? bool("RIUS_PARTIAL_SPANS", env.RIUS_PARTIAL_SPANS, false),
     partialSpansDelayMs: partialSpansDelaySeconds * 1000,
     // Empty is unset, like agentName: a blank session id would group every

@@ -18,7 +18,7 @@ import { type Observation, startAsCurrentSpan } from "./spans.js";
  * (it usually IS the answer, bounded like every attribute), else the list of
  * text blocks, else the whole result.
  */
-function serializeResult(result: unknown): string | number | boolean {
+function serializeResult(result: unknown): string {
   const record = asRecord(result);
   if (record === undefined) return toAttributeValue(result);
   const structured = record.structured_content ?? record.structuredContent;

@@ -4,7 +4,7 @@ import {
   type ReadableSpan,
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTracer, type InitOptions, init, type RiusClient } from "../src/client.js";
 import { isContentKey, MaskingSpanExporter } from "../src/masking.js";
 
@@ -98,7 +98,8 @@ describe("MaskingSpanExporter", () => {
     expect(inner.seen[0].attributes["input.value"]).toBe("masked:input.value");
   });
 
-  it("replaces the value with a marker rather than propagating a throwing mask", () => {
+  it("drops the value rather than propagating a throwing mask", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const inner = new Capture();
     new MaskingSpanExporter(inner, {
       captureContent: true,
@@ -106,7 +107,9 @@ describe("MaskingSpanExporter", () => {
         throw new Error("bad mask");
       },
     }).export([span({ "input.value": "secret" })], () => {});
-    expect(inner.seen[0].attributes["input.value"]).toBe("[mask error]");
+    expect("input.value" in inner.seen[0].attributes).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("strips a suffix-matched key while its sibling metadata attribute survives", () => {

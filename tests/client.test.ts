@@ -503,12 +503,10 @@ describe("main-agent identity on the resource", () => {
     expect(attributes["rius.main_agent.name"]).toBe(attributes["gen_ai.agent.name"]);
   });
 
-  it("omits the main-agent name when the configured name is the placeholder", async () => {
-    // Nothing was named. gen_ai.agent.name keeps carrying the placeholder as
-    // it always has (the sink suppresses it on that leg); the new key simply
-    // never claims an identity the caller did not give.
+  it("omits every agent name when the configured name is the placeholder", async () => {
+    // Nothing was named, so no key claims an identity the caller did not give.
     const attributes = await resourceAttributes({});
-    expect(attributes["gen_ai.agent.name"]).toBe("unknown_service");
+    expect("gen_ai.agent.name" in attributes).toBe(false);
     expect("rius.main_agent.name" in attributes).toBe(false);
   });
 

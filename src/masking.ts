@@ -10,7 +10,7 @@ import {
   CONTENT_PREFIX_IDENTITY_ATTRIBUTES,
   EXCEPTION_EVENT,
 } from "./semconv.js";
-import { toAttributeValue } from "./serde.js";
+import { toAttributeValue, truncate } from "./serde.js";
 
 /** The namespace the OpenInference Vercel transform mirrors unknown attributes into. */
 const METADATA_PREFIX = "metadata.";
@@ -56,6 +56,24 @@ const EXCEPTION_CONTENT_KEYS: readonly string[] = ["exception.message", "excepti
  * mask sees for it (same name the Python SDK uses).
  */
 const STATUS_DESCRIPTION_KEY = "status.description";
+
+/** The warning for a mask that threw on `key`, whose value is then dropped. */
+function maskWarning(key: string, error: unknown): void {
+  console.warn(`[rius] mask threw for ${key}; value dropped.`, error);
+}
+
+/**
+ * What a mask returned, as the attribute value to write, or `undefined` to
+ * drop the attribute: the Python SDK's `_safe_value`. `null` / `undefined`
+ * mean "drop", a string, number or boolean is kept as it is (a string still
+ * bounded), and anything else is written as its JSON.
+ */
+function maskedValue(value: unknown): string | number | boolean | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") return truncate(value);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  return toAttributeValue(value);
+}
 
 /**
  * Strips or masks content attributes before spans leave the process. Covers our
@@ -115,14 +133,15 @@ export class MaskingSpanExporter implements SpanExporter {
       return;
     }
     if (this.opts.mask === undefined) return;
+    // Fail closed, as for an attribute: a mask that throws or returns
+    // nothing drops the description, never leaks it.
+    let masked: string | number | boolean | undefined;
     try {
-      const masked = toAttributeValue(
-        this.opts.mask(status.message, { key: STATUS_DESCRIPTION_KEY }),
-      );
-      status.message = typeof masked === "string" ? masked : String(masked);
-    } catch {
-      status.message = "[mask error]";
+      masked = maskedValue(this.opts.mask(status.message, { key: STATUS_DESCRIPTION_KEY }));
+    } catch (error) {
+      maskWarning(STATUS_DESCRIPTION_KEY, error);
     }
+    status.message = masked === undefined ? undefined : String(masked);
   }
 
   /** Strips or masks the content keys of one attribute bag, in place. */
@@ -135,11 +154,16 @@ export class MaskingSpanExporter implements SpanExporter {
         continue;
       }
       if (this.opts.mask === undefined) continue;
+      // Fail closed: a mask that throws or returns nothing drops the
+      // attribute, so it neither leaks the unmasked value nor stops the batch.
+      let masked: string | number | boolean | undefined;
       try {
-        attributes[key] = toAttributeValue(this.opts.mask(attributes[key], { key }));
-      } catch {
-        attributes[key] = "[mask error]";
+        masked = maskedValue(this.opts.mask(attributes[key], { key }));
+      } catch (error) {
+        maskWarning(key, error);
       }
+      if (masked === undefined) delete attributes[key];
+      else attributes[key] = masked;
     }
   }
 
