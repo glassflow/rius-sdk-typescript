@@ -55,6 +55,20 @@ function demote(attributes: Bag): void {
   }
 }
 
+/** The Anthropic SDK's own span for a call the OpenInference instrumentation records. */
+function isNativeChatSpan(
+  span: Pick<ReadableSpan, "instrumentationScope" | "attributes">,
+): boolean {
+  const scope = span.instrumentationScope?.name;
+  const operation = span.attributes[GEN_AI_OPERATION_NAME];
+  return (
+    typeof scope === "string" &&
+    scope.startsWith(ANTHROPIC_SDK_SCOPE_PREFIX) &&
+    typeof operation === "string" &&
+    kindForOperation(operation) === SpanKind.LLM
+  );
+}
+
 /**
  * Demotes the Anthropic SDK's chat spans while {@link enable}d. Must run ahead
  * of normalization at both hooks, so nothing downstream (the kind derived
@@ -62,6 +76,7 @@ function demote(attributes: Bag): void {
  */
 export class NativeProviderSpanDemoter implements SpanProcessor {
   private enabled = false;
+  /** Spans demoted at start, whose own operation is already gone at end. */
   private readonly demoted = new WeakSet<object>();
 
   /** Called once the OpenInference Anthropic instrumentation is registered. */
@@ -72,16 +87,7 @@ export class NativeProviderSpanDemoter implements SpanProcessor {
   onStart(span: Span, _parentContext: Context): void {
     if (!this.enabled) return;
     try {
-      const scope = span.instrumentationScope?.name;
-      const operation = span.attributes[GEN_AI_OPERATION_NAME];
-      if (
-        typeof scope !== "string" ||
-        !scope.startsWith(ANTHROPIC_SDK_SCOPE_PREFIX) ||
-        typeof operation !== "string" ||
-        kindForOperation(operation) !== SpanKind.LLM
-      ) {
-        return;
-      }
+      if (!isNativeChatSpan(span)) return;
       this.demoted.add(span);
       // A live span's bag is writable by reference, as normalization's is.
       demote(span.attributes as Bag);
@@ -90,9 +96,16 @@ export class NativeProviderSpanDemoter implements SpanProcessor {
     }
   }
 
+  /**
+   * Decided again from the span itself, not only from what onStart saw: a
+   * span bridged from another provider (bridgeForeignProvider) reaches the
+   * pipeline at start and at end as two different copies, and the copy at end
+   * carries every key the other SDK set, the operation included. That bag is
+   * the copy, so the other provider's span is never touched.
+   */
   onEnd(span: ReadableSpan): void {
-    if (!this.demoted.has(span)) return;
     try {
+      if (!this.demoted.has(span) && !(this.enabled && isNativeChatSpan(span))) return;
       // Again: usage, the response model and content arrive during the call.
       demote(span.attributes as Bag);
     } catch {

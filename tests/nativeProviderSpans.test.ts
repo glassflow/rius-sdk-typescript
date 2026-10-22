@@ -132,6 +132,30 @@ describe("the Anthropic SDK's chat span, with the OpenInference instrumentation 
   });
 });
 
+describe("a copy of the Anthropic SDK's chat span seen only at end", () => {
+  // As bridgeForeignProvider hands one over: the pipeline gets a fresh copy
+  // at end, with every key the other SDK set, and never saw it at start.
+  const copy = (attributes: Record<string, unknown>) =>
+    ({ instrumentationScope: { name: NATIVE_SCOPE }, attributes }) as unknown as ReadableSpan;
+
+  it("is demoted from its own scope and operation", () => {
+    const { demoter } = setup(true);
+    const span = copy({ ...CHAT, [GEN_AI_USAGE_INPUT_TOKENS]: 5 });
+    demoter.onEnd(span);
+    expect(span.attributes).toEqual({
+      [GEN_AI_PROVIDER_NAME]: "anthropic",
+      "http.route": "/v1/messages",
+    });
+  });
+
+  it("is left alone while the instrumentation is not enabled", () => {
+    const { demoter } = setup(false);
+    const span = copy({ ...CHAT });
+    demoter.onEnd(span);
+    expect(span.attributes).toEqual(CHAT);
+  });
+});
+
 describe("the Anthropic SDK's chat span, without the OpenInference instrumentation", () => {
   it("stays the call's LLM span", () => {
     const { finished, tracer } = setup(false);
