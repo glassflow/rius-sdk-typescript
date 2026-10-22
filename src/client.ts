@@ -688,7 +688,11 @@ export function init(options: InitOptions = {}): RiusClient {
         onEnabled: (name) => {
           // From here every Anthropic call has an OpenInference LLM span, so
           // the Anthropic SDK's own chat span would be a second one.
-          if (name === "anthropic") demoter.enable();
+          if (name !== "anthropic") return;
+          demoter.enable();
+          // Queued right after the instrumentation's own disable, so the
+          // demoter stops when the instrumentation is unbound, not later.
+          teardown.push(() => demoter.disable());
         },
       });
 

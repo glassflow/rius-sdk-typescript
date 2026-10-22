@@ -123,6 +123,31 @@ describe("the Anthropic SDK's chat span, with the OpenInference instrumentation 
     }
   });
 
+  it.each(["text_completion", "generate_content", "decide"])(
+    "leaves a span of the SDK's with the %s operation: only chat is demoted",
+    (operation) => {
+      const { finished, tracer } = setup(true);
+      tracer(NATIVE_SCOPE)
+        .startSpan("other", { attributes: { ...CHAT, [GEN_AI_OPERATION_NAME]: operation } })
+        .end();
+      expect(finished("other")?.attributes[GEN_AI_OPERATION_NAME]).toBe(operation);
+      expect(finished("other")?.attributes[GEN_AI_REQUEST_MODEL]).toBe("claude-test");
+    },
+  );
+
+  it("stops once disabled, as when the instrumentation is unbound at shutdown", () => {
+    const { demoter, finished, tracer } = setup(true);
+    demoter.disable();
+    nativeCall(tracer);
+    expect(finished("anthropic.messages.create")?.attributes).toMatchObject(CHAT);
+    const copy = {
+      instrumentationScope: { name: NATIVE_SCOPE },
+      attributes: { ...CHAT },
+    } as unknown as ReadableSpan;
+    demoter.onEnd(copy);
+    expect(copy.attributes).toEqual(CHAT);
+  });
+
   it("leaves chat spans from any other scope", () => {
     const { finished, tracer } = setup(true);
     tracer("@arizeai/openinference-instrumentation-anthropic")

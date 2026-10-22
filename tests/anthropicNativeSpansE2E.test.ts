@@ -78,3 +78,19 @@ describe("one Anthropic call", () => {
     },
   );
 });
+
+describe("after shutdown() and a fresh init()", () => {
+  it("still makes one Anthropic call one LLM call", async () => {
+    await rius.shutdown();
+    // shutdown() shut the old exporter down too, and it exports nothing more.
+    exporter = new InMemorySpanExporter();
+    rius = init({ spanExporter: exporter, heartbeatTransport: async () => {} });
+    expect(await rius.ready).toContain("anthropic");
+    // A client made after the new init(), as an application restarting its
+    // tracing would; one made before keeps the tracer it was built with.
+    const fresh = new Anthropic({ apiKey: "not-a-real-key", baseURL: server.url, maxRetries: 0 });
+    for (const [, call] of callsFor(() => fresh)) {
+      expectOneLlmCall(await spansOf(call));
+    }
+  });
+});

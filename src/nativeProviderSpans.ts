@@ -3,8 +3,8 @@ import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace
 import {
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
-  kindForOperation,
   OPENINFERENCE_SPAN_KIND,
+  operationForKind,
   SpanKind,
 } from "./semconv.js";
 
@@ -55,17 +55,23 @@ function demote(attributes: Bag): void {
   }
 }
 
+/**
+ * The operation of the Anthropic SDK's span for a Messages call. Only that
+ * one: it is the only operation the SDK gives a span the instrumentation also
+ * records, and the rule is the same in the Python SDK.
+ */
+const CHAT = operationForKind(SpanKind.LLM);
+
 /** The Anthropic SDK's own span for a call the OpenInference instrumentation records. */
 function isNativeChatSpan(
   span: Pick<ReadableSpan, "instrumentationScope" | "attributes">,
 ): boolean {
   const scope = span.instrumentationScope?.name;
-  const operation = span.attributes[GEN_AI_OPERATION_NAME];
   return (
     typeof scope === "string" &&
     scope.startsWith(ANTHROPIC_SDK_SCOPE_PREFIX) &&
-    typeof operation === "string" &&
-    kindForOperation(operation) === SpanKind.LLM
+    CHAT !== undefined &&
+    span.attributes[GEN_AI_OPERATION_NAME] === CHAT
   );
 }
 
@@ -79,9 +85,18 @@ export class NativeProviderSpanDemoter implements SpanProcessor {
   /** Spans demoted at start, whose own operation is already gone at end. */
   private readonly demoted = new WeakSet<object>();
 
-  /** Called once the OpenInference Anthropic instrumentation is registered. */
+  /**
+   * Called when the OpenInference Anthropic instrumentation is registered on
+   * this client's provider, and {@link disable}d when that registration is
+   * undone (shutdown() runs both teardowns together), so the demoter follows
+   * whether the instrumentation is bound right now.
+   */
   enable(): void {
     this.enabled = true;
+  }
+
+  disable(): void {
+    this.enabled = false;
   }
 
   onStart(span: Span, _parentContext: Context): void {
