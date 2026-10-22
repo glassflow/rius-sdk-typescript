@@ -221,3 +221,71 @@ describe("pending snapshots", () => {
     await client.flush();
   });
 });
+
+describe("key rotation", () => {
+  function recordingInit(shut: string[]): void {
+    defaultExporter = new InMemorySpanExporter();
+    perKey = {};
+    client = init({
+      spanExporter: defaultExporter,
+      workspaces: { acme: "key-old", globex: "key-shared", initech: "key-shared" },
+      workspaceExporterFactory: (apiKey: string) => {
+        const inner = new InMemorySpanExporter();
+        perKey[apiKey] = inner;
+        return {
+          export: (spans, cb) => inner.export(spans, cb),
+          forceFlush: async () => {},
+          shutdown: async () => {
+            shut.push(apiKey);
+          },
+        };
+      },
+      heartbeatTransport: async () => {},
+      serviceName: "test-svc",
+    });
+  }
+
+  it("shuts down the exporter of the replaced key", async () => {
+    const shut: string[] = [];
+    recordingInit(shut);
+    await withWorkspace("acme", async () => {
+      startSpan("before").end();
+    });
+    await client.flush();
+    registerWorkspace("acme", "key-new");
+    await withWorkspace("acme", async () => {
+      startSpan("after").end();
+    });
+    await client.flush();
+    expect(shut).toEqual(["key-old"]);
+    expect(perKey["key-old"].getFinishedSpans().map((s) => s.name)).toEqual(["before"]);
+    expect(perKey["key-new"].getFinishedSpans().map((s) => s.name)).toEqual(["after"]);
+  });
+
+  it("keeps an exporter another alias still uses", async () => {
+    const shut: string[] = [];
+    recordingInit(shut);
+    await withWorkspace("globex", async () => {
+      startSpan("g").end();
+    });
+    await client.flush();
+    registerWorkspace("initech", "key-initech");
+    await withWorkspace("globex", async () => {
+      startSpan("g2").end();
+    });
+    await client.flush();
+    expect(shut).toEqual([]);
+    expect(perKey["key-shared"].getFinishedSpans().map((s) => s.name)).toEqual(["g", "g2"]);
+  });
+
+  it("re-registering the same key keeps its exporter", async () => {
+    const shut: string[] = [];
+    recordingInit(shut);
+    await withWorkspace("acme", async () => {
+      startSpan("a").end();
+    });
+    await client.flush();
+    registerWorkspace("acme", "key-old");
+    expect(shut).toEqual([]);
+  });
+});

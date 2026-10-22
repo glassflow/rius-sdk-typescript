@@ -135,8 +135,26 @@ export class RoutingSpanExporter implements SpanExporter {
     if (!alias || !apiKey) {
       throw new Error("workspace alias and apiKey must be non-empty strings");
     }
+    const previous = this.routes.get(alias);
     this.routes.set(alias, apiKey);
     this.warnedAliases.delete(alias);
+    if (previous !== undefined && previous !== apiKey) this.retire(previous);
+  }
+
+  /**
+   * Shut down the exporter of a key no route uses any more. Exporters are
+   * keyed by API key, so after a rotation nothing would ever reach or close
+   * the old one: each rotation leaked an exporter and its connections. Not
+   * awaited: shutdown lets the exporter's in-flight sends finish first.
+   */
+  private retire(apiKey: string): void {
+    for (const key of this.routes.values()) if (key === apiKey) return;
+    const exporter = this.exporters.get(apiKey);
+    if (exporter === undefined) return;
+    this.exporters.delete(apiKey);
+    exporter.shutdown().catch((error: unknown) => {
+      console.warn(`[rius] shutting down a rotated workspace exporter failed: ${String(error)}`);
+    });
   }
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {

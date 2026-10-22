@@ -1,7 +1,12 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { errorType } from "../src/errorType.js";
-import { attributeValue, toAttributeValue } from "../src/serde.js";
+import {
+  attributeValue,
+  MAX_ATTR_CHARS,
+  TRUNCATION_MARKER,
+  toAttributeValue,
+} from "../src/serde.js";
 import { CONTRACT } from "./mediaContract.js";
 
 describe("toAttributeValue", () => {
@@ -284,5 +289,42 @@ describe("an array attribute value holding a byte object", () => {
 describe("a lone surrogate in a serialized value", () => {
   it("is written as its lower-case \\uXXXX escape, as the reference writes it", () => {
     expect(toAttributeValue({ s: "a\ud83db\udc00" })).toBe('{"s":"a\\ud83db\\udc00"}');
+  });
+});
+
+describe("a self-referential Map or Set", () => {
+  it("marks the cycle and keeps the rest of the payload", () => {
+    const map = new Map<string, unknown>([["name", "m"]]);
+    map.set("self", map);
+    expect(toAttributeValue({ keep: 1, map })).toBe(
+      '{"keep":1,"map":{"name":"m","self":"[Circular]"}}',
+    );
+  });
+
+  it("marks a Set that contains itself", () => {
+    const set = new Set<unknown>(["a"]);
+    set.add(set);
+    expect(toAttributeValue({ keep: 1, set })).toBe('{"keep":1,"set":["a","[Circular]"]}');
+  });
+
+  it("marks a Map reached again through a nested object", () => {
+    const map = new Map<string, unknown>();
+    map.set("inner", { back: map });
+    expect(toAttributeValue(map)).toBe('{"inner":{"back":"[Circular]"}}');
+  });
+});
+
+describe("a truncated value", () => {
+  it("never ends in half a surrogate pair", () => {
+    const value = `${"a".repeat(MAX_ATTR_CHARS - 1)}😀`;
+    const result = toAttributeValue(value) as string;
+    expect(result).toBe(`${"a".repeat(MAX_ATTR_CHARS - 1)}�${TRUNCATION_MARKER}`);
+  });
+
+  it("never ends in half a surrogate pair once JSON-encoded", () => {
+    // `{"s":"` is 6 characters, so the pair straddles the cut.
+    const value = { s: `${"a".repeat(MAX_ATTR_CHARS - 7)}😀` };
+    const result = toAttributeValue(value) as string;
+    expect(result.endsWith(`�${TRUNCATION_MARKER}`)).toBe(true);
   });
 });

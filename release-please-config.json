@@ -5,7 +5,7 @@
       "release-type": "node",
       "package-name": "@glassflow-ai/rius",
       "include-component-in-tag": false,
-      "extra-files": ["src/index.ts"]
+      "extra-files": ["src/version.ts"]
     }
   }
 }

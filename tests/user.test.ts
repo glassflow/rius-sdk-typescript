@@ -1,6 +1,7 @@
+import { context, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { init, type RiusClient } from "../src/client.js";
+import { getTracer, init, type RiusClient } from "../src/client.js";
 import { startAsCurrentGeneration, startGeneration } from "../src/generation.js";
 import {
   PENDING_IDENTITY_ATTRIBUTES,
@@ -182,5 +183,34 @@ describe("userId option sugar", () => {
     await client.flush();
     const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s]));
     expect(byName.get("after")?.attributes[USER_ID]).toBeUndefined();
+  });
+});
+
+describe("a child re-parented by hand", () => {
+  it("inherits the parent span's user id, as it does the session id", async () => {
+    testInit();
+    const parent = await withUser("u-1", async () =>
+      withSession("s-1", async () => getTracer().startSpan("parent")),
+    );
+    // A callback that lost the async context re-attaches to its parent by hand.
+    getTracer().startSpan("child", {}, trace.setSpan(ROOT_CONTEXT, parent)).end();
+    parent.end();
+    await client.flush();
+    const child = exporter.getFinishedSpans().find((s) => s.name === "child");
+    expect(child?.attributes[SESSION_ID]).toBe("s-1");
+    expect(child?.attributes[USER_ID]).toBe("u-1");
+  });
+
+  it("lets an active scope override the parent's stamp", async () => {
+    testInit();
+    const parent = await withUser("u-1", async () => getTracer().startSpan("parent"));
+    await withUser("u-2", async () => {
+      const ctx = trace.setSpan(context.active(), parent);
+      getTracer().startSpan("child", {}, ctx).end();
+    });
+    parent.end();
+    await client.flush();
+    const child = exporter.getFinishedSpans().find((s) => s.name === "child");
+    expect(child?.attributes[USER_ID]).toBe("u-2");
   });
 });
