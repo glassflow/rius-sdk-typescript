@@ -41,6 +41,20 @@ npm install @glassflow-ai/rius @opentelemetry/api
 `@opentelemetry/api` is a peer dependency and is never bundled. Install
 it alongside `@glassflow-ai/rius` at a version satisfying `^1.9.0`.
 
+### ESM and CommonJS in one process
+
+The package ships an ES module build and a CommonJS build. If one process
+loads both, say your code uses `import` while a dependency calls
+`require("@glassflow-ai/rius")`, Node loads two separate copies of the SDK
+with separate state. `init()` configures only the copy it was imported from:
+the other copy's spans reach Rius only through the OpenTelemetry global
+provider (so not at all when another SDK holds it), its AGENT and TOOL spans
+lack the agent name `init()` was given, and `registerWorkspace()` on it is
+skipped with a warning because it sees no client. Sessions and users
+(`withSession`, `withUser`) ride OpenTelemetry context and work across both.
+Load the SDK one way throughout, or call every Rius function through the copy
+you called `init()` on.
+
 ## Quickstart
 
 ```ts
@@ -689,8 +703,8 @@ Export is designed to never block or crash your application:
   failures with exponential backoff and jitter, up to 5 attempts, bounded
   by the export timeout.
 - **Graceful degradation.** If the backend stays unreachable, spans are
-  dropped and the failure is logged, it is never raised into application
-  code. Only the first export failure in a process is logged, naming
+  dropped and the failure is logged; an export failure is never raised into
+  application code. Only the first export failure in a process is logged, naming
   `RIUS_API_KEY`/`RIUS_ENDPOINT` as the likely cause; later failures stay
   silent so a persistent outage does not spam your logs. `client.flush()`
   returns `false` when the most recent export failed, so you can check
@@ -702,14 +716,19 @@ Export is designed to never block or crash your application:
   warning is logged once per process, so the same bad input in a loop does
   not flood your logs. A span processor
   that throws is isolated from the others and from `span.end()`.
+- **Your errors stay yours.** An error thrown by your own code inside
+  `observe`, `startAsCurrentSpan` or `startAsCurrentGeneration` is recorded on
+  the span and rethrown unchanged; the SDK never swallows or replaces it.
 - **Mask failures fail safe.** If a `mask` callback throws, the affected
   attribute (or status description) is dropped and a warning logged, rather
   than leaking the unmasked value, dropping the batch or letting the
   exception escape.
-- **No automatic flush on exit.** The SDK does not register a process-exit
-  hook. Call `client.flush()` to force a pending export, or
-  `client.shutdown()` to drain the queue and tear the client down, before
-  your process exits:
+- **No automatic flush on exit.** The only exit hook the SDK registers is
+  the heartbeat's: on Node's `beforeExit` it sends the final `stopped` ping.
+  Queued spans are not flushed there, and `beforeExit` does not fire on
+  `process.exit()` or a fatal signal. Call `client.flush()` to force a pending
+  export, or `client.shutdown()` to drain the queue and tear the client down,
+  before your process exits:
 
   ```ts
   await client.flush();
