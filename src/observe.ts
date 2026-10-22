@@ -69,6 +69,17 @@ export interface ObserveOptions {
  * `for await (const x of fn())` keep working, and a Promise of the original's
  * result for everything else.
  *
+ * A generator function annotated with the iteration interface it implements
+ * (`AsyncIterable<T>`, `AsyncIterableIterator<T>`, `Iterable<T>`,
+ * `IterableIterator<T>`) keeps that declared type, so `.then()` on its
+ * wrapper's result is a compile error. Only that exact interface counts: an
+ * array, a string, a Set, a Map or a Node stream is iterable too, but a plain
+ * function returning one is not a generator function at runtime and keeps its
+ * Promise. A type cannot see the function kind, so a plain function annotated
+ * as returning exactly one of those interfaces is typed as an iterator, while
+ * at runtime it returns a Promise; give such a function the concrete type it
+ * returns.
+ *
  * Non-distributive (the tuple wrapping) so a union return type is not split,
  * and `any` stays a Promise: `any` would otherwise satisfy the generator arm
  * and turn every untyped callback's wrapper into a generator.
@@ -79,7 +90,27 @@ export type ObservedReturn<R> = 0 extends 1 & R
     ? AsyncGenerator<T, TReturn, TNext>
     : [R] extends [Generator<infer T, infer TReturn, infer TNext>]
       ? Generator<T, TReturn, TNext>
-      : Promise<Awaited<R>>;
+      : IsIterationInterface<R> extends true
+        ? R
+        : Promise<Awaited<R>>;
+
+/**
+ * True when `R` is exactly one of the iteration interfaces a generator
+ * function may be annotated with, not merely assignable to it: mutual
+ * assignability tells the bare interface from a collection that has more
+ * members (an array's `length`, a Set's `has`).
+ */
+type IsIterationInterface<R> = [R] extends [AsyncIterableIterator<infer T>]
+  ? IsExactly<R, AsyncIterableIterator<T>>
+  : [R] extends [AsyncIterable<infer T>]
+    ? IsExactly<R, AsyncIterable<T>>
+    : [R] extends [IterableIterator<infer T>]
+      ? IsExactly<R, IterableIterator<T>>
+      : [R] extends [Iterable<infer T>]
+        ? IsExactly<R, Iterable<T>>
+        : false;
+
+type IsExactly<R, I> = [I] extends [R] ? true : false;
 
 const GENERATOR_FUNCTION_TAG = "[object GeneratorFunction]";
 const ASYNC_GENERATOR_FUNCTION_TAG = "[object AsyncGeneratorFunction]";

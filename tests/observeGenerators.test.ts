@@ -302,4 +302,79 @@ describe("observe's return type", () => {
     // biome-ignore lint/suspicious/noExplicitAny: the case under test.
     expectTypeOf(observe((x: any) => x)).returns.toEqualTypeOf<Promise<any>>();
   });
+
+  it("is the declared iteration type for a generator function annotated with one", () => {
+    // Annotating a generator with the iteration interface it implements is
+    // common; the wrapper still returns a generator, so it is not a Promise.
+    async function* asyncIterable(): AsyncIterable<string> {
+      yield "a";
+    }
+    async function* asyncIterableIterator(): AsyncIterableIterator<string> {
+      yield "a";
+    }
+    function* iterable(): Iterable<number> {
+      yield 1;
+    }
+    function* iterableIterator(): IterableIterator<number> {
+      yield 1;
+    }
+    expectTypeOf(observe(asyncIterable)).returns.toEqualTypeOf<AsyncIterable<string>>();
+    expectTypeOf(observe(asyncIterableIterator)).returns.toEqualTypeOf<
+      AsyncIterableIterator<string>
+    >();
+    expectTypeOf(observe(iterable)).returns.toEqualTypeOf<Iterable<number>>();
+    expectTypeOf(observe(iterableIterator)).returns.toEqualTypeOf<IterableIterator<number>>();
+  });
+
+  it("stays a Promise for a plain function returning an iterable collection", () => {
+    // Only a generator function is detected at runtime, so a function that
+    // returns an array, a string, a Set or a Map keeps its Promise.
+    expectTypeOf(observe(() => [1, 2])).returns.toEqualTypeOf<Promise<number[]>>();
+    expectTypeOf(observe((): readonly number[] => [1])).returns.toEqualTypeOf<
+      Promise<readonly number[]>
+    >();
+    expectTypeOf(observe(() => "text")).returns.toEqualTypeOf<Promise<string>>();
+    expectTypeOf(observe(() => new Set([1]))).returns.toEqualTypeOf<Promise<Set<number>>>();
+    expectTypeOf(observe(() => new Map([[1, "a"]]))).returns.toEqualTypeOf<
+      Promise<Map<number, string>>
+    >();
+  });
+});
+
+describe("observe on a generator function annotated with an iteration interface", () => {
+  it("returns a generator with no then(), for an async generator", async () => {
+    const observedStream = observe(async function* stream(): AsyncIterable<string> {
+      yield "a";
+      yield "b";
+    });
+    const iterator = observedStream();
+    // @ts-expect-error a generator is not a Promise, so then() is not there.
+    const then: unknown = iterator.then;
+    expect(then).toBeUndefined();
+    const chunks: string[] = [];
+    for await (const chunk of iterator) chunks.push(chunk);
+    expect(chunks).toEqual(["a", "b"]);
+    const spans = await finished();
+    expect(spans.map((s) => s.name)).toEqual(["stream"]);
+  });
+
+  it("returns a generator with no then(), for a generator", async () => {
+    const observedCount = observe(function* count(): IterableIterator<number> {
+      yield 1;
+      yield 2;
+    });
+    const iterator = observedCount();
+    // @ts-expect-error a generator is not a Promise, so then() is not there.
+    const then: unknown = iterator.then;
+    expect(then).toBeUndefined();
+    expect([...iterator]).toEqual([1, 2]);
+    expect((await finished()).map((s) => s.name)).toEqual(["count"]);
+  });
+
+  it("returns a Promise for a plain function returning an array", async () => {
+    const list = observe(() => [1, 2]);
+    const result = list();
+    expect(result).toBeInstanceOf(Promise);
+    expect(await result).toEqual([1, 2]);
+  });
 });
