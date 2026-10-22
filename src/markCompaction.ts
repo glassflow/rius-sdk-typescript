@@ -27,6 +27,7 @@ import {
   SpanKind,
 } from "./semconv.js";
 import { textValue } from "./serde.js";
+import { warnOnce } from "./warn.js";
 
 /**
  * How the context was shrunk: a summary replaces older turns (`summarize`),
@@ -143,7 +144,9 @@ export function markCompaction(options: MarkCompactionOptions = {}): void {
       error instanceof InvalidOption
         ? error.message
         : `the options could not be read (${errorType(error)})`;
-    console.warn(`[rius] markCompaction() skipped: ${why}; nothing was recorded.`);
+    // Once per message: a wrong option is deterministic, so it would
+    // otherwise warn on every turn of an agent loop.
+    warnOnce(`markCompaction() skipped: ${why}; nothing was recorded.`);
   }
 }
 

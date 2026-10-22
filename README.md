@@ -675,7 +675,9 @@ Export is designed to never block or crash your application:
 - **Bad input warns, never throws.** An SDK call given input it cannot use
   (an invalid `markCompaction` option, an empty `withWorkspace` alias, a
   message list whose getters throw) logs a warning and skips that one write;
-  the rest of your code runs as if the SDK were not there. A span processor
+  the rest of your code runs as if the SDK were not there. Each distinct
+  warning is logged once per process, so the same bad input in a loop does
+  not flood your logs. A span processor
   that throws is isolated from the others and from `span.end()`.
 - **Mask failures fail safe.** If a `mask` callback throws, the affected
   attribute (or status description) is dropped and a warning logged, rather

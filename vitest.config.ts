@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    setupFiles: ["tests/setup.ts"],
     // Several suites do real work rather than mock it: they lazily import `ai`
     // and `@ai-sdk/*` (which vitest must transform on first use), start stub
     // HTTP servers and patch instrumentation. On an idle machine each of those

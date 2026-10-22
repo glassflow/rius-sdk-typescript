@@ -36,6 +36,7 @@ import type {
 } from "@opentelemetry/sdk-trace-base";
 import { twinOf } from "./foreign.js";
 import { WORKSPACE_ROUTE } from "./semconv.js";
+import { warnOnce } from "./warn.js";
 
 const WORKSPACE_KEY = createContextKey("rius-workspace-alias");
 
@@ -50,8 +51,9 @@ export type WorkspaceExporterFactory = (apiKey: string) => SpanExporter;
  * all OTel context does, but a trace must stay inside one workspace: enter
  * the scope at a request boundary, before the root span starts.
  *
- * An empty (or non-string) alias logs a warning and runs `fn` without a
- * scope, so its spans go to the default destination; it never throws.
+ * An empty (or non-string) alias logs a warning (once per process) and runs
+ * `fn` outside any workspace scope, clearing an enclosing one, so its spans
+ * go to the default destination; it never throws.
  *
  * ```typescript
  * await withWorkspace("acme", async () => {
@@ -62,11 +64,12 @@ export type WorkspaceExporterFactory = (apiKey: string) => SpanExporter;
 export function withWorkspace<T>(alias: string, fn: (alias: string) => T): T {
   if (!usableString(alias)) {
     // Warn and run unscoped rather than throw: the caller's work must still
-    // happen, and its spans go to the default destination.
-    console.warn(
-      "[rius] withWorkspace() needs a non-empty string alias; running the callback without a workspace scope, so its spans go to the default destination.",
+    // happen, and its spans go to the default destination. Clearing the key,
+    // not just skipping the set, keeps that true inside an enclosing scope.
+    warnOnce(
+      "withWorkspace() needs a non-empty string alias; running the callback without a workspace scope, so its spans go to the default destination.",
     );
-    return fn(alias);
+    return apiContext.with(apiContext.active().deleteValue(WORKSPACE_KEY), () => fn(alias));
   }
   return apiContext.with(apiContext.active().setValue(WORKSPACE_KEY, alias), () => fn(alias));
 }
@@ -273,14 +276,14 @@ export function registerWorkspace(alias: string, apiKey: string): void {
   // call must work unchanged whether RIUS_DISABLED is set or not.
   if (routingDisabled) return;
   if (globalRouting === undefined) {
-    console.warn(
-      "[rius] registerWorkspace() skipped: workspace routing is not enabled. Pass workspaces (an empty object is fine) to init() to opt in before registering destinations.",
+    warnOnce(
+      "registerWorkspace() skipped: workspace routing is not enabled. Pass workspaces (an empty object is fine) to init() to opt in before registering destinations.",
     );
     return;
   }
   if (!usableString(alias) || !usableString(apiKey)) {
-    console.warn(
-      "[rius] registerWorkspace() skipped: the workspace alias and apiKey must be non-empty strings.",
+    warnOnce(
+      "registerWorkspace() skipped: the workspace alias and apiKey must be non-empty strings.",
     );
     return;
   }

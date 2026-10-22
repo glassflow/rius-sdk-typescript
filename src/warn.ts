@@ -9,3 +9,8 @@ export function warnOnce(message: string): void {
   warned.add(message);
   console.warn(`[rius] ${message}`);
 }
+
+/** Forget every message already warned about, so each test starts fresh. */
+export function resetWarnOnce(): void {
+  warned.clear();
+}

@@ -3,7 +3,7 @@
  * and skips. Each case here threw out of an SDK call (or replaced the caller's
  * own error) before it was fixed.
  */
-import type { Context } from "@opentelemetry/api";
+import { type Context, diag } from "@opentelemetry/api";
 import {
   InMemorySpanExporter,
   type ReadableSpan,
@@ -116,6 +116,17 @@ describe("Generation content setters", () => {
     });
   }
 
+  it("warns once per process, not on every skipped write", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    testInit();
+    for (let i = 0; i < 3; i++) {
+      const generation = startGeneration("llm");
+      generation.setInput(revokedProxy());
+      generation.end();
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("still records good content after a skipped write", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     testInit();
@@ -137,11 +148,13 @@ describe("registerWorkspace", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("warns and skips when routing was not enabled", () => {
+  it("warns once and skips when routing was not enabled", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     testInit();
     expect(() => registerWorkspace("acme", "key-acme")).not.toThrow();
-    expect(warn.mock.calls.some((c) => String(c[0]).includes("workspaces"))).toBe(true);
+    expect(() => registerWorkspace("globex", "key-globex")).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("workspaces");
   });
 
   it("warns and skips an empty alias or key", async () => {
@@ -157,7 +170,8 @@ describe("registerWorkspace", () => {
     expect(() => registerWorkspace("", "key")).not.toThrow();
     expect(() => registerWorkspace("acme", "")).not.toThrow();
     expect(() => registerWorkspace(undefined as never, undefined as never)).not.toThrow();
-    expect(warn).toHaveBeenCalledTimes(3);
+    // The same bad input warns once per process, not once per call.
+    expect(warn).toHaveBeenCalledTimes(1);
     // "acme" was never registered, so its spans fall to the default destination.
     await withWorkspace("acme", async () => startSpan("s").end());
     await finished();
@@ -179,6 +193,32 @@ describe("withWorkspace", () => {
     const [span] = await finished();
     expect(span.name).toBe("unscoped");
     expect(span.attributes[WORKSPACE_ROUTE]).toBeUndefined();
+  });
+
+  it("warns once per process for repeated empty aliases", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    testInit({ workspaces: {} });
+    for (let i = 0; i < 3; i++) withWorkspace("", () => undefined);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears an enclosing scope for an empty alias, so its spans go to the default destination", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const perKey: Record<string, InMemorySpanExporter> = {};
+    testInit({
+      workspaces: { acme: "key-acme" },
+      workspaceExporterFactory: (apiKey) => {
+        perKey[apiKey] ??= new InMemorySpanExporter();
+        return perKey[apiKey];
+      },
+    });
+    withWorkspace("acme", () => {
+      withWorkspace("", () => startSpan("inner").end());
+      startSpan("outer").end();
+    });
+    await finished();
+    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["inner"]);
+    expect(perKey["key-acme"].getFinishedSpans().map((s) => s.name)).toEqual(["outer"]);
   });
 });
 
@@ -231,8 +271,40 @@ describe("DelegatingSpanProcessor", () => {
     expect(() => processors.onEnd(span as unknown as ReadableSpan)).not.toThrow();
     expect(after.started).toEqual(["s"]);
     expect(after.ended).toEqual(["s"]);
-    expect(warn).toHaveBeenCalled();
+    // Throwing threw in both onStart and onEnd: one warning for the delegate.
+    expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it("logs the full error at debug level", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const debug = vi.spyOn(diag, "debug").mockImplementation(() => {});
+    const processors = new DelegatingSpanProcessor();
+    processors.add(new Throwing());
+    processors.onStart({ name: "s" } as unknown as Span, {} as Context);
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining("Throwing"),
+      expect.objectContaining({ message: "onStart boom" }),
+    );
+  });
+
+  for (const hook of ["forceFlush", "shutdown"] as const) {
+    it(`keeps ${hook}() from rejecting when a delegate throws synchronously, and still runs the others`, async () => {
+      const processors = new DelegatingSpanProcessor();
+      const calls: string[] = [];
+      const syncThrow = new Recording();
+      syncThrow[hook] = () => {
+        throw new Error(`${hook} boom`);
+      };
+      const after = new Recording();
+      after[hook] = async () => {
+        calls.push("after");
+      };
+      processors.add(syncThrow);
+      processors.add(after);
+      await expect(processors[hook]()).resolves.toBeUndefined();
+      expect(calls).toEqual(["after"]);
+    });
+  }
 
   it("keeps span.end() from throwing into the caller and still exports the span", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -277,6 +349,13 @@ describe("markCompaction", () => {
       },
     };
     expect(() => markCompaction(hostile)).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns once per process for the same bad option in a loop", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    testInit();
+    for (let i = 0; i < 3; i++) markCompaction({ kind: "nope" as never });
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });

@@ -36,6 +36,7 @@ import {
 } from "./semconv.js";
 import { attributeValue, toAttributeValue } from "./serde.js";
 import { Observation, runActive, splitScopedArgs } from "./spans.js";
+import { warnOnce } from "./warn.js";
 
 /**
  * Options for {@link startGeneration} and {@link startAsCurrentGeneration}:
@@ -157,9 +158,7 @@ function recordMessages(
     const splits = splitsFor(messages);
     return [messages, splits, recordSplits(splits, () => toAttributeValue(messages))];
   } catch (error) {
-    console.warn(
-      `[rius] Generation.${setter}() skipped: the value could not be read (${errorType(error)}).`,
-    );
+    warnOnce(`Generation.${setter}() skipped: the value could not be read (${errorType(error)}).`);
     return undefined;
   }
 }
