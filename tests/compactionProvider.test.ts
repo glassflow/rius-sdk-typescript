@@ -25,6 +25,7 @@ import {
   RIUS_COMPACTION_TOOL_RESULTS_CLEARED,
   RIUS_COMPACTION_TRIGGER,
 } from "../src/semconv.js";
+import { MAX_ATTR_CHARS, TRUNCATION_MARKER } from "../src/serde.js";
 
 interface FakeEvent {
   name: string;
@@ -84,7 +85,6 @@ describe("Anthropic context editing", () => {
     expect(events[0].attributes).toEqual({
       [RIUS_COMPACTION_KIND]: "clear_tool_results",
       [RIUS_COMPACTION_EXECUTOR]: "provider",
-      [RIUS_COMPACTION_TRIGGER]: "auto",
       [RIUS_COMPACTION_TOKENS_DROPPED]: 12000,
       [RIUS_COMPACTION_TOOL_RESULTS_CLEARED]: 3,
     });
@@ -97,7 +97,6 @@ describe("Anthropic context editing", () => {
     expect(compactionEvents(span)[0].attributes).toEqual({
       [RIUS_COMPACTION_KIND]: "clear_thinking",
       [RIUS_COMPACTION_EXECUTOR]: "provider",
-      [RIUS_COMPACTION_TRIGGER]: "auto",
       [RIUS_COMPACTION_TOKENS_DROPPED]: 800,
     });
   });
@@ -123,7 +122,6 @@ describe("Anthropic context editing", () => {
       expect(event.attributes, String(bad)).toEqual({
         [RIUS_COMPACTION_KIND]: "clear_tool_results",
         [RIUS_COMPACTION_EXECUTOR]: "provider",
-        [RIUS_COMPACTION_TRIGGER]: "auto",
       });
     }
   });
@@ -193,9 +191,9 @@ describe("Anthropic compaction block", () => {
     expect(events[0].attributes).toEqual({
       [RIUS_COMPACTION_KIND]: "summarize",
       [RIUS_COMPACTION_EXECUTOR]: "provider",
-      [RIUS_COMPACTION_TRIGGER]: "auto",
       [RIUS_COMPACTION_TOKENS_BEFORE]: 180000,
       [RIUS_COMPACTION_TOKENS_AFTER]: 23000,
+      [RIUS_COMPACTION_TOKENS_DROPPED]: 157000,
       [RIUS_COMPACTION_SUMMARY_BYTES]: Buffer.byteLength(summary, "utf8"),
       [RIUS_COMPACTION_SUMMARY_TEXT]: summary,
     });
@@ -203,22 +201,126 @@ describe("Anthropic compaction block", () => {
     expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
   });
 
-  it("gives the request's token sizes to the first compaction block only", () => {
+  it("gives each compaction block the size of the compaction iteration at its position", () => {
     const span = ended(
       respond({
-        content: [block, { type: "compaction", content: "second" }],
+        content: [
+          block,
+          { type: "compaction", content: "second" },
+          { type: "compaction", content: "third" },
+        ],
         usage: {
           iterations: [
             { type: "compaction", input_tokens: 180000 },
+            { type: "compaction", input_tokens: 90000 },
             { type: "message", input_tokens: 23000 },
           ],
         },
       }),
     );
-    const [first, second] = compactionEvents(span);
+    const [first, second, third] = compactionEvents(span);
     expect(first.attributes?.[RIUS_COMPACTION_TOKENS_BEFORE]).toBe(180000);
-    expect(second.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_BEFORE);
+    expect(second.attributes?.[RIUS_COMPACTION_TOKENS_BEFORE]).toBe(90000);
+    expect(third.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_BEFORE);
+    // Both compactions precede the one sampling iteration, which read what they left.
+    expect(first.attributes?.[RIUS_COMPACTION_TOKENS_AFTER]).toBe(23000);
+    expect(second.attributes?.[RIUS_COMPACTION_TOKENS_AFTER]).toBe(23000);
+    // A block with no compaction iteration of its own has no sizes to report.
+    expect(third.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_AFTER);
+    expect(first.attributes?.[RIUS_COMPACTION_TOKENS_DROPPED]).toBe(157000);
+    expect(second.attributes?.[RIUS_COMPACTION_TOKENS_DROPPED]).toBe(67000);
+    expect(third.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_DROPPED);
+  });
+
+  it("sizes what each compaction left from the sampling iteration that follows it", () => {
+    const span = ended(
+      respond({
+        content: [block, { type: "compaction", content: "second" }],
+        usage: {
+          iterations: [
+            { type: "message", input_tokens: 1000 },
+            { type: "compaction", input_tokens: 900 },
+            { type: "message", input_tokens: 300 },
+            { type: "compaction", input_tokens: 800 },
+          ],
+        },
+      }),
+    );
+    const [first, second] = compactionEvents(span);
+    expect(first.attributes?.[RIUS_COMPACTION_TOKENS_BEFORE]).toBe(900);
+    expect(first.attributes?.[RIUS_COMPACTION_TOKENS_AFTER]).toBe(300);
+    expect(second.attributes?.[RIUS_COMPACTION_TOKENS_BEFORE]).toBe(800);
+    // Nothing sampled after the last compaction, so no size is claimed for it.
     expect(second.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_AFTER);
+    expect(second.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_DROPPED);
+  });
+
+  it("keeps a block's position among the compaction iterations when one has no usable size", () => {
+    const span = ended(
+      respond({
+        content: [block, { type: "compaction", content: "second" }],
+        usage: {
+          iterations: [
+            { type: "compaction", input_tokens: "n/a" },
+            { type: "compaction", input_tokens: 500 },
+            { type: "message", input_tokens: 70 },
+          ],
+        },
+      }),
+    );
+    const [first, second] = compactionEvents(span);
+    expect(first.attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_BEFORE);
+    expect(second.attributes?.[RIUS_COMPACTION_TOKENS_BEFORE]).toBe(500);
+  });
+
+  it("derives tokens.dropped when before is not below after, and leaves it out when the context grew", () => {
+    const sized = (before: number, after: number) =>
+      compactionEvents(
+        ended(
+          respond({
+            content: [block],
+            usage: {
+              iterations: [
+                { type: "compaction", input_tokens: before },
+                { type: "message", input_tokens: after },
+              ],
+            },
+          }),
+        ),
+      )[0].attributes ?? {};
+    expect(sized(100, 30)[RIUS_COMPACTION_TOKENS_DROPPED]).toBe(70);
+    expect(sized(30, 30)[RIUS_COMPACTION_TOKENS_DROPPED]).toBe(0);
+    expect(Object.hasOwn(sized(30, 100), RIUS_COMPACTION_TOKENS_DROPPED)).toBe(false);
+  });
+
+  it("reads the compaction id from the block", () => {
+    const span = ended(respond({ content: [{ type: "compaction", id: "cmp_abc", content: "s" }] }));
+    expect(compactionEvents(span)[0].attributes?.[RIUS_COMPACTION_ID]).toBe("cmp_abc");
+    for (const id of [undefined, "", 7, null, {}]) {
+      const other = ended(respond({ content: [{ type: "compaction", id, content: "s" }] }));
+      expect(
+        Object.hasOwn(compactionEvents(other)[0].attributes ?? {}, RIUS_COMPACTION_ID),
+        JSON.stringify(id),
+      ).toBe(false);
+    }
+  });
+
+  it("caps the summary text like any attribute and keeps the size of the whole summary", () => {
+    const long = "x".repeat(MAX_ATTR_CHARS + 500);
+    const attributes =
+      compactionEvents(ended(respond({ content: [{ type: "compaction", content: long }] })))[0]
+        .attributes ?? {};
+    const text = attributes[RIUS_COMPACTION_SUMMARY_TEXT] as string;
+    expect(text).toBe("x".repeat(MAX_ATTR_CHARS) + TRUNCATION_MARKER);
+    expect(attributes[RIUS_COMPACTION_SUMMARY_BYTES]).toBe(long.length);
+  });
+
+  it("replaces a lone surrogate in the summary text, as the sink would", () => {
+    const attributes =
+      compactionEvents(
+        ended(respond({ content: [{ type: "compaction", content: "a\ud800b\udc00c😀" }] })),
+      )[0].attributes ?? {};
+    expect(attributes[RIUS_COMPACTION_SUMMARY_TEXT]).toBe("a\ufffdb\ufffdc😀");
   });
 
   it("measures the summary in UTF-8 bytes, not characters", () => {
@@ -267,7 +369,7 @@ describe("Anthropic compaction block", () => {
     expect(attributes[RIUS_COMPACTION_TOKENS_AFTER]).toBe(70);
   });
 
-  it("does not call the compaction iteration the after size when it is last", () => {
+  it("leaves the after size out when no sampling iteration follows the compaction", () => {
     const span = ended(
       respond({
         content: [block],
@@ -281,7 +383,7 @@ describe("Anthropic compaction block", () => {
     );
     const attributes = compactionEvents(span)[0].attributes ?? {};
     expect(attributes[RIUS_COMPACTION_TOKENS_BEFORE]).toBe(500);
-    expect(Object.hasOwn(attributes, RIUS_COMPACTION_TOKENS_AFTER)).toBe(false);
+    expect(attributes).not.toHaveProperty(RIUS_COMPACTION_TOKENS_AFTER);
   });
 
   it("skips odd iteration sizes", () => {
@@ -303,14 +405,26 @@ describe("Anthropic compaction block", () => {
     }
   });
 
-  it("omits the summary when the block carries no text", () => {
-    for (const content of [undefined, "", 12, null, ["x"], { text: "y" }]) {
+  it("skips a block whose content is not a string: that compaction failed", () => {
+    for (const content of [undefined, 12, null, ["x"], { text: "y" }, true]) {
       const span = ended(respond({ content: [{ type: "compaction", content }] }));
-      const attributes = compactionEvents(span)[0].attributes ?? {};
-      expect(attributes[RIUS_COMPACTION_KIND], JSON.stringify(content)).toBe("summarize");
-      expect(Object.hasOwn(attributes, RIUS_COMPACTION_SUMMARY_BYTES)).toBe(false);
-      expect(Object.hasOwn(attributes, RIUS_COMPACTION_SUMMARY_TEXT)).toBe(false);
+      expect(compactionEvents(span), JSON.stringify(content)).toEqual([]);
+      expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
     }
+  });
+
+  it("reports the blocks that succeeded beside one that failed", () => {
+    const span = ended(respond({ content: [{ type: "compaction", content: null }, block] }));
+    expect(compactionEvents(span)).toHaveLength(1);
+    expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+  });
+
+  it("reports an empty summary as an empty one", () => {
+    const attributes =
+      compactionEvents(ended(respond({ content: [{ type: "compaction", content: "" }] })))[0]
+        .attributes ?? {};
+    expect(attributes[RIUS_COMPACTION_SUMMARY_BYTES]).toBe(0);
+    expect(attributes[RIUS_COMPACTION_SUMMARY_TEXT]).toBe("");
   });
 
   it("is recorded beside context-editing events", () => {
@@ -340,7 +454,6 @@ describe("OpenAI compaction item", () => {
     expect(events[0].attributes).toEqual({
       [RIUS_COMPACTION_KIND]: "summarize",
       [RIUS_COMPACTION_EXECUTOR]: "provider",
-      [RIUS_COMPACTION_TRIGGER]: "auto",
       [RIUS_COMPACTION_ID]: "cmp_123",
     });
     expect(JSON.stringify(span.events)).not.toContain("ENCRYPTED-BLOB-XYZ");
@@ -362,6 +475,114 @@ describe("OpenAI compaction item", () => {
         output: [{ type: "compaction_summary", encrypted_content: "x" }, { type: "Compaction" }],
       }),
     );
+    expect(compactionEvents(span)).toEqual([]);
+    expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+  });
+});
+
+describe("no trigger on a provider event", () => {
+  // The provider decides when to compact and does not say why, so the SDK has
+  // nothing to put in rius.compaction.trigger.
+  it("sets none on an edit, a compaction block or a compaction item", () => {
+    const span = ended(
+      respond({
+        context_management: { applied_edits: [toolEdit, thinkingEdit] },
+        content: [{ type: "compaction", content: "s" }],
+        output: [{ type: "compaction", id: "cmp_1" }],
+      }),
+    );
+    const events = compactionEvents(span);
+    expect(events).toHaveLength(4);
+    for (const event of events) {
+      expect(Object.hasOwn(event.attributes ?? {}, RIUS_COMPACTION_TRIGGER)).toBe(false);
+    }
+  });
+});
+
+describe("the compact endpoint's own response", () => {
+  // POST /responses/compact answers with the compaction itself, not with a
+  // request that ran on a compacted context.
+  it("is not reported", () => {
+    const span = ended(
+      respond({
+        object: "response.compaction",
+        output: [{ type: "compaction", id: "cmp_1", encrypted_content: "x" }],
+      }),
+    );
+    expect(compactionEvents(span)).toEqual([]);
+    expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+  });
+});
+
+describe("the span's event limit", () => {
+  const edits = {
+    context_management: { applied_edits: [toolEdit, thinkingEdit, toolEdit] },
+  };
+
+  function withLimit<T>(value: string | undefined, run: () => T): T {
+    const before = process.env.OTEL_SPAN_EVENT_COUNT_LIMIT;
+    if (value === undefined) delete process.env.OTEL_SPAN_EVENT_COUNT_LIMIT;
+    else process.env.OTEL_SPAN_EVENT_COUNT_LIMIT = value;
+    try {
+      return run();
+    } finally {
+      if (before === undefined) delete process.env.OTEL_SPAN_EVENT_COUNT_LIMIT;
+      else process.env.OTEL_SPAN_EVENT_COUNT_LIMIT = before;
+    }
+  }
+
+  const other = (i: number): FakeEvent => ({ name: `other.${i}`, time: [1601, i] });
+
+  it("keeps the events that fit under the configured limit and counts the rest as dropped", () => {
+    const span = withLimit("4", () => {
+      const fake = {
+        attributes: respond(edits),
+        events: [other(1), other(2)] as FakeEvent[],
+        links: [],
+        status: { code: SpanStatusCode.UNSET },
+        startTime: [1600, 0],
+        endTime: END_TIME,
+        droppedEventsCount: 1,
+      };
+      new NormalizingSpanProcessor().onEnd(fake as unknown as ReadableSpan);
+      return fake;
+    });
+    expect(span.events).toHaveLength(4);
+    expect(compactionEvents(span)).toHaveLength(2);
+    expect(span.droppedEventsCount).toBe(2);
+    expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+  });
+
+  it("prefers the limit the processor was given over the environment", () => {
+    const span = withLimit("100", () => {
+      const fake = {
+        attributes: respond(edits),
+        events: [other(1)] as FakeEvent[],
+        links: [],
+        status: { code: SpanStatusCode.UNSET },
+        startTime: [1600, 0],
+        endTime: END_TIME,
+      };
+      new NormalizingSpanProcessor(undefined, 2).onEnd(fake as unknown as ReadableSpan);
+      return fake;
+    });
+    expect(span.events).toHaveLength(2);
+    expect(compactionEvents(span)).toHaveLength(1);
+  });
+
+  it("uses OpenTelemetry's default of 128 when none is configured", () => {
+    const span = withLimit(undefined, () =>
+      ended(
+        respond(edits),
+        Array.from({ length: 127 }, (_, i) => other(i)),
+      ),
+    );
+    expect(span.events).toHaveLength(128);
+    expect(compactionEvents(span)).toHaveLength(1);
+  });
+
+  it("adds nothing, and flags nothing, to a span that is already full", () => {
+    const span = withLimit("2", () => ended(respond(edits), [other(1), other(2)]));
     expect(compactionEvents(span)).toEqual([]);
     expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
   });

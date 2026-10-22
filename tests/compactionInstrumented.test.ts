@@ -19,8 +19,9 @@ import {
 // Compactions through the real auto-instrumented clients: the Anthropic and
 // OpenAI SDKs, instrumented by the OpenInference packages init() enables,
 // against a local server that answers with the provider's compaction data.
-// Pins that the span carries its LLM kind at start, which the marker flag
-// needs, and that the response body is what the instrumentors record.
+// Pins that the response body is what the instrumentors record as
+// output.value, and that the marker flag reaches a span whose LLM kind the
+// OpenInference tracer sets only after the span has started.
 //
 // A file of its own: the OpenInference packages keep module-level patch state,
 // and vitest's per-file module isolation keeps that state to this file.
@@ -29,6 +30,7 @@ const require = createRequire(import.meta.url);
 
 interface Sdk {
   messages?: { create(body: unknown): Promise<unknown> };
+  beta?: { messages?: { create(body: unknown): Promise<unknown> } };
   responses?: { create(body: unknown): Promise<unknown> };
 }
 
@@ -103,14 +105,31 @@ function plainReply(reply: typeof ANTHROPIC_REPLY | typeof OPENAI_REPLY): unknow
   return { ...reply, output: reply.output.filter((i) => i.type !== "compaction") };
 }
 
+/** The server-sent events of a streamed Responses call: its last event carries the whole response. */
+function responsesStream(reply: unknown): string {
+  const created = { type: "response.created", sequence_number: 0, response: { id: "resp_c" } };
+  const completed = { type: "response.completed", sequence_number: 1, response: reply };
+  return [created, completed]
+    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
+}
+
 /** Answers a Responses request with the OpenAI reply and any other with the Anthropic one. */
 async function provider(): Promise<{ url: string; close: () => void }> {
   const server = http.createServer((request, response) => {
-    request.resume();
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
-      const reply = request.url?.includes("/responses") ? OPENAI_REPLY : ANTHROPIC_REPLY;
+      const openai = request.url?.includes("/responses") === true;
+      const reply = openai ? OPENAI_REPLY : ANTHROPIC_REPLY;
+      const body = compacting ? reply : plainReply(reply);
+      if (openai && Buffer.concat(chunks).toString("utf8").includes('"stream":true')) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(responsesStream(body));
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(compacting ? reply : plainReply(reply)));
+      response.end(JSON.stringify(body));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -155,24 +174,34 @@ const ANTHROPIC_REQUEST = {
 };
 
 describe("provider compactions on an auto-instrumented call", () => {
-  it("records Anthropic context editing and a compaction block", async () => {
-    const span = await llmSpan(
-      () => anthropic.messages?.create(ANTHROPIC_REQUEST) as Promise<unknown>,
-    );
-    const events = (span?.events ?? []).filter((e) => e.name === RIUS_COMPACTION_EVENT);
-    expect(events.map((e) => e.attributes?.[RIUS_COMPACTION_KIND])).toEqual([
-      "clear_tool_results",
-      "summarize",
-    ]);
-    expect(events[0].attributes?.[RIUS_COMPACTION_TOKENS_DROPPED]).toBe(2000);
-    expect(events[1].attributes).toMatchObject({
-      [RIUS_COMPACTION_EXECUTOR]: "provider",
-      [RIUS_COMPACTION_TOKENS_BEFORE]: 9000,
-      [RIUS_COMPACTION_TOKENS_AFTER]: 10,
-      [RIUS_COMPACTION_SUMMARY_TEXT]: SUMMARY,
-    });
-    expect(span?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
-  });
+  const anthropicCalls: Array<[string, () => Promise<unknown>]> = [
+    ["messages.create", () => anthropic.messages?.create(ANTHROPIC_REQUEST) as Promise<unknown>],
+    [
+      "beta.messages.create",
+      () => anthropic.beta?.messages?.create(ANTHROPIC_REQUEST) as Promise<unknown>,
+    ],
+  ];
+
+  it.each(anthropicCalls)(
+    "records Anthropic context editing and a compaction block through %s",
+    async (_name, call) => {
+      const span = await llmSpan(call);
+      const events = (span?.events ?? []).filter((e) => e.name === RIUS_COMPACTION_EVENT);
+      expect(events.map((e) => e.attributes?.[RIUS_COMPACTION_KIND])).toEqual([
+        "clear_tool_results",
+        "summarize",
+      ]);
+      expect(events[0].attributes?.[RIUS_COMPACTION_TOKENS_DROPPED]).toBe(2000);
+      expect(events[1].attributes).toMatchObject({
+        [RIUS_COMPACTION_EXECUTOR]: "provider",
+        [RIUS_COMPACTION_TOKENS_BEFORE]: 9000,
+        [RIUS_COMPACTION_TOKENS_AFTER]: 10,
+        [RIUS_COMPACTION_TOKENS_DROPPED]: 8990,
+        [RIUS_COMPACTION_SUMMARY_TEXT]: SUMMARY,
+      });
+      expect(span?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+    },
+  );
 
   it("records an OpenAI Responses compaction item without its encrypted content", async () => {
     const span = await llmSpan(
@@ -186,6 +215,29 @@ describe("provider compactions on an auto-instrumented call", () => {
       [RIUS_COMPACTION_ID]: "cmp_1",
     });
     expect(JSON.stringify(events)).not.toContain("OPAQUE-BLOB");
+    expect(span?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+  });
+
+  it("records a compaction item in a streamed OpenAI Responses call", async () => {
+    const span = await llmSpan(async () => {
+      const stream = (await openai.responses?.create({
+        model: "gpt-test",
+        input: "hi",
+        stream: true,
+      })) as AsyncIterable<unknown>;
+      for await (const _event of stream) {
+        // Consumed, as a caller would: the instrumentation reads its own branch.
+      }
+    });
+    // The instrumentation records the response.completed payload as JSON, so
+    // a stream is read like any other response.
+    expect(span?.attributes["output.mime_type"]).toBe("application/json");
+    const events = (span?.events ?? []).filter((e) => e.name === RIUS_COMPACTION_EVENT);
+    expect(events).toHaveLength(1);
+    expect(events[0].attributes).toMatchObject({
+      [RIUS_COMPACTION_KIND]: "summarize",
+      [RIUS_COMPACTION_ID]: "cmp_1",
+    });
     expect(span?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
   });
 

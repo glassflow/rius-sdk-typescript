@@ -25,6 +25,24 @@ export function truncate(text: string): string {
     : stripped;
 }
 
+/** A UTF-16 surrogate with no partner. */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/** `text` with every unpaired surrogate replaced by U+FFFD, as Go's encoder does. */
+export function wellFormed(text: string): string {
+  return text.replace(LONE_SURROGATE, "\ufffd");
+}
+
+/**
+ * A string written as an attribute value: cut at the attribute cap, and with
+ * no unpaired surrogate, which the sink would replace with U+FFFD anyway and
+ * a strict UTF-8 encoder would refuse. After the cut, because the cut can
+ * itself split a pair. The Python SDK's `text_value` for a string.
+ */
+export function textValue(text: string): string {
+  return wellFormed(truncate(text));
+}
+
 /**
  * Values JSON.stringify cannot render as data, made renderable. Called from
  * the replacer with the HOLDER's original property, not the value the

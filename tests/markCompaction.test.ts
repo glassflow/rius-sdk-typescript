@@ -1,12 +1,13 @@
-import type { Attributes } from "@opentelemetry/api";
+import { type Attributes, ROOT_CONTEXT } from "@opentelemetry/api";
 import {
   InMemorySpanExporter,
   type ReadableSpan,
+  type Span,
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTracer, init, type RiusClient } from "../src/client.js";
-import { COMPACTION_OPERATION } from "../src/compaction.js";
+import { COMPACTION_OPERATION, CompactionFlagSpanProcessor } from "../src/compaction.js";
 import { startGeneration } from "../src/generation.js";
 import { markCompaction } from "../src/markCompaction.js";
 import {
@@ -16,6 +17,7 @@ import {
   OPENINFERENCE_SPAN_KIND,
   PENDING_IDENTITY_ATTRIBUTES,
   PENDING_IDENTITY_PREFIXES,
+  RIUS_COMPACTION_EVENT,
   RIUS_COMPACTION_EXECUTOR,
   RIUS_COMPACTION_KIND,
   RIUS_COMPACTION_MESSAGES_COMPACTED,
@@ -29,6 +31,7 @@ import {
   RIUS_SPAN_PENDING,
   SpanKind,
 } from "../src/semconv.js";
+import { MAX_ATTR_CHARS, TRUNCATION_MARKER } from "../src/serde.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 
 /**
@@ -246,6 +249,57 @@ describe("markCompaction span", () => {
   );
 });
 
+describe("the summary text", () => {
+  it(
+    "is set after the span starts, never in its creation attributes",
+    isolated(async () => {
+      testInit();
+      const tracer = getTracer();
+      const real = tracer.startSpan.bind(tracer);
+      const atStart: Array<Attributes | undefined> = [];
+      const spy = vi.spyOn(tracer, "startSpan").mockImplementation((name, options, context) => {
+        atStart.push({ ...options?.attributes });
+        return real(name, options, context);
+      });
+      try {
+        markCompaction({ summary: "SECRET", tokensBefore: 10 });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(atStart).toHaveLength(1);
+      expect(atStart[0]).not.toHaveProperty(RIUS_COMPACTION_SUMMARY_TEXT);
+      // The size is not content and may ride the start.
+      expect(atStart[0]?.[RIUS_COMPACTION_SUMMARY_BYTES]).toBe(6);
+      const [span] = await finished();
+      expect(span.attributes[RIUS_COMPACTION_SUMMARY_TEXT]).toBe("SECRET");
+    }),
+  );
+
+  it(
+    "is capped like any attribute, and its size is the whole summary's",
+    isolated(async () => {
+      testInit();
+      const long = "y".repeat(MAX_ATTR_CHARS + 10);
+      markCompaction({ summary: long });
+      const [span] = await finished();
+      expect(span.attributes[RIUS_COMPACTION_SUMMARY_TEXT]).toBe(
+        "y".repeat(MAX_ATTR_CHARS) + TRUNCATION_MARKER,
+      );
+      expect(span.attributes[RIUS_COMPACTION_SUMMARY_BYTES]).toBe(long.length);
+    }),
+  );
+
+  it(
+    "has a lone surrogate replaced",
+    isolated(async () => {
+      testInit();
+      markCompaction({ summary: "a\ud800b" });
+      const [span] = await finished();
+      expect(span.attributes[RIUS_COMPACTION_SUMMARY_TEXT]).toBe("a\ufffdb");
+    }),
+  );
+});
+
 describe("markCompaction validation", () => {
   const invalid: Array<[string, Parameters<typeof markCompaction>[0]]> = [
     ["an unknown kind", { kind: "shrink" as never }],
@@ -380,6 +434,23 @@ describe("the next LLM span", () => {
   );
 
   it(
+    "goes to the first of several late-kind LLM spans running at once to end",
+    isolated(async () => {
+      testInit();
+      markCompaction();
+      const outer = getTracer().startSpan("outer");
+      const inner = getTracer().startSpan("inner");
+      outer.setAttribute(OPENINFERENCE_SPAN_KIND, "LLM");
+      inner.setAttribute(OPENINFERENCE_SPAN_KIND, "LLM");
+      inner.end();
+      outer.end();
+      const spans = await byName();
+      expect(spans.get("inner")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+      expect(spans.get("outer")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+    }),
+  );
+
+  it(
     "does not flag a late-kind span started in another context",
     isolated(async () => {
       testInit();
@@ -496,12 +567,141 @@ describe("the next LLM span", () => {
   );
 
   it(
+    "is flagged in the flow that marked, and not in a sibling that was already running",
+    isolated(async () => {
+      testInit();
+      const convB = async () => {
+        await tick();
+        llmSpan("B2");
+      };
+      const convA = async () => {
+        markCompaction();
+        await tick();
+        await tick();
+        llmSpan("A2");
+      };
+      await Promise.all([convB(), convA()]);
+      const spans = await byName();
+      expect(spans.get("A2")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+      expect(spans.get("B2")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+    }),
+  );
+
+  it(
+    "is flagged in the flow that marked, and not in a sibling, when an earlier mark left a flag in the parent",
+    isolated(async () => {
+      testInit();
+      markCompaction();
+      llmSpan("earlier");
+      const convB = async () => {
+        await tick();
+        llmSpan("B2");
+      };
+      const convA = async () => {
+        markCompaction();
+        await tick();
+        await tick();
+        llmSpan("A2");
+      };
+      await Promise.all([convB(), convA()]);
+      const spans = await byName();
+      expect(spans.get("earlier")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+      expect(spans.get("A2")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+      expect(spans.get("B2")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+    }),
+  );
+
+  it(
+    "flags the next call of each concurrent flow that marked, when the parent holds a spent flag",
+    isolated(async () => {
+      testInit();
+      markCompaction();
+      llmSpan("earlier");
+      const conversation = async (name: string, ticks: number) => {
+        await tick();
+        markCompaction();
+        for (let i = 0; i < ticks; i++) await tick();
+        llmSpan(name);
+      };
+      await Promise.all([conversation("fast", 1), conversation("slow", 3)]);
+      const spans = await byName();
+      expect(spans.get("fast")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+      expect(spans.get("slow")?.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+    }),
+  );
+
+  it(
     "is not flagged with no mark",
     isolated(async () => {
       testInit();
       llmSpan("plain");
       const [span] = await finished();
       expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+    }),
+  );
+});
+
+describe("the span's event limit through init", () => {
+  it(
+    "is the one the provider enforces on the span, so provider events stop where it would",
+    isolated(async () => {
+      const before = process.env.OTEL_SPAN_EVENT_COUNT_LIMIT;
+      process.env.OTEL_SPAN_EVENT_COUNT_LIMIT = "2";
+      try {
+        testInit();
+      } finally {
+        if (before === undefined) delete process.env.OTEL_SPAN_EVENT_COUNT_LIMIT;
+        else process.env.OTEL_SPAN_EVENT_COUNT_LIMIT = before;
+      }
+      const edit = {
+        type: "clear_tool_uses_20250919",
+        cleared_input_tokens: 10,
+        cleared_tool_uses: 1,
+      };
+      const span = getTracer().startSpan("call", { attributes: LLM_ATTRIBUTES });
+      span.setAttribute(
+        "output.value",
+        JSON.stringify({ context_management: { applied_edits: [edit, edit, edit] } }),
+      );
+      span.end();
+      const [exported] = await finished();
+      expect(exported.events.filter((e) => e.name === RIUS_COMPACTION_EVENT)).toHaveLength(2);
+      expect(exported.droppedEventsCount).toBe(1);
+    }),
+  );
+});
+
+describe("the processor's memory of undecided spans", () => {
+  function fakeSpan(spanId: string, attributes: Attributes = {}): Span {
+    return {
+      attributes,
+      spanContext: () => ({ traceId: "t".repeat(32), spanId, traceFlags: 1 }),
+      setAttribute: () => undefined,
+    } as unknown as Span;
+  }
+
+  it(
+    "forgets a span when it ends, whether or not it was an LLM span",
+    isolated(async () => {
+      const processor = new CompactionFlagSpanProcessor();
+      const held = () => (processor as unknown as { undecided: Map<string, unknown> }).undecided;
+      markCompaction();
+      const bare = fakeSpan("a".repeat(16));
+      const other = fakeSpan("b".repeat(16));
+      processor.onStart(bare, ROOT_CONTEXT);
+      processor.onStart(other, ROOT_CONTEXT);
+      expect(held().size).toBe(2);
+      // The same span as seen at its end: another object, the same identity.
+      processor.onEnd({
+        ...bare,
+        attributes: { [OPENINFERENCE_SPAN_KIND]: "TOOL" },
+      } as unknown as ReadableSpan);
+      expect(held().size).toBe(1);
+      processor.onEnd({
+        ...other,
+        attributes: { [OPENINFERENCE_SPAN_KIND]: "LLM" },
+      } as unknown as ReadableSpan);
+      expect(held().size).toBe(0);
     }),
   );
 });

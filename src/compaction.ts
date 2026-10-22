@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Attributes, AttributeValue, Context } from "@opentelemetry/api";
+import { getNumberFromEnv } from "@opentelemetry/core";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
   GEN_AI_CONVERSATION_COMPACTED,
@@ -21,10 +22,9 @@ import {
   RIUS_COMPACTION_TOKENS_BEFORE,
   RIUS_COMPACTION_TOKENS_DROPPED,
   RIUS_COMPACTION_TOOL_RESULTS_CLEARED,
-  RIUS_COMPACTION_TRIGGER,
-  RIUS_COMPACTION_TRIGGER_AUTO,
   SpanKind,
 } from "./semconv.js";
+import { textValue } from "./serde.js";
 
 /**
  * Compactions, from the two places they are learned.
@@ -66,82 +66,123 @@ function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-function text(value: unknown): string | undefined {
+/** A non-empty string, or nothing. */
+function identifier(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/**
+ * What a compaction removed: `before` minus `after`, when both are known and
+ * the context did not grow. A larger `after` has dropped nothing to report,
+ * so it yields nothing rather than a negative count.
+ */
+export function droppedTokens(
+  before: number | undefined,
+  after: number | undefined,
+): number | undefined {
+  return before === undefined || after === undefined || after > before ? undefined : before - after;
+}
+
+/** The members of a list that are objects, in order; anything else in it is not a member. */
+function members(value: unknown): Bag[] {
+  if (!Array.isArray(value)) return [];
+  const found: Bag[] = [];
+  for (const raw of value) {
+    const bag = asBag(raw);
+    if (bag !== undefined) found.push(bag);
+  }
+  return found;
+}
+
+function set(event: EventAttributes, key: string, value: AttributeValue | undefined): void {
+  if (value !== undefined) event[key] = value;
+}
+
+/**
+ * No trigger: the provider decides when to compact and does not say why, so
+ * `rius.compaction.trigger` stays unset, as the Python SDK leaves it.
+ */
 function providerEvent(kind: string): EventAttributes {
   return {
     [RIUS_COMPACTION_KIND]: kind,
     [RIUS_COMPACTION_EXECUTOR]: RIUS_COMPACTION_EXECUTOR_PROVIDER,
-    [RIUS_COMPACTION_TRIGGER]: RIUS_COMPACTION_TRIGGER_AUTO,
   };
 }
 
+const COMPACTION_TYPE = "compaction";
+
+/**
+ * Anthropic names an edit by family and date (`clear_tool_uses_20250919`), so
+ * a newer date of a known family is still that family.
+ */
+const EDIT_KIND_BY_PREFIX: ReadonlyArray<readonly [string, string]> = [
+  ["clear_tool_uses", RIUS_COMPACTION_KIND_CLEAR_TOOL_RESULTS],
+  ["clear_thinking", RIUS_COMPACTION_KIND_CLEAR_THINKING],
+];
+
 /** Anthropic context editing: one event per applied edit that names a kind we know. */
 function contextEditingEvents(payload: Bag): EventAttributes[] {
-  const edits = member(asBag(member(payload, "context_management")), "applied_edits");
-  if (!Array.isArray(edits)) return [];
+  const edits = members(member(asBag(member(payload, "context_management")), "applied_edits"));
   const events: EventAttributes[] = [];
-  for (const raw of edits) {
-    const edit = asBag(raw);
+  for (const edit of edits) {
     const type = member(edit, "type");
-    if (typeof type !== "string") continue;
-    const toolUses = type.startsWith("clear_tool_uses");
-    if (!toolUses && !type.startsWith("clear_thinking")) continue;
-    const event = providerEvent(
-      toolUses ? RIUS_COMPACTION_KIND_CLEAR_TOOL_RESULTS : RIUS_COMPACTION_KIND_CLEAR_THINKING,
-    );
-    const dropped = count(member(edit, "cleared_input_tokens"));
-    if (dropped !== undefined) event[RIUS_COMPACTION_TOKENS_DROPPED] = dropped;
-    const cleared = count(member(edit, "cleared_tool_uses"));
-    if (toolUses && cleared !== undefined) event[RIUS_COMPACTION_TOOL_RESULTS_CLEARED] = cleared;
+    const kind =
+      typeof type === "string"
+        ? EDIT_KIND_BY_PREFIX.find(([prefix]) => type.startsWith(prefix))?.[1]
+        : undefined;
+    if (kind === undefined) continue;
+    const event = providerEvent(kind);
+    set(event, RIUS_COMPACTION_TOKENS_DROPPED, count(member(edit, "cleared_input_tokens")));
+    if (kind === RIUS_COMPACTION_KIND_CLEAR_TOOL_RESULTS) {
+      set(event, RIUS_COMPACTION_TOOL_RESULTS_CLEARED, count(member(edit, "cleared_tool_uses")));
+    }
     events.push(event);
   }
   return events;
 }
 
 /**
- * The context size before and after an Anthropic threshold compaction, from
- * the request's `usage.iterations`: the compaction iteration is what the
- * summary was made from, the last iteration is the call that ran on it.
+ * Anthropic threshold compaction: a `compaction` content block holding the
+ * summary, and the request's `usage.iterations` for the sizes.
+ *
+ * The compaction iteration is the one that read the context being compacted,
+ * and the Nth block takes the size of the Nth compaction iteration. What it
+ * left behind is what the first sampling iteration after it read, so a
+ * compaction nothing sampled after has no size left to report.
  */
-function iterationSizes(payload: Bag): { before?: number; after?: number } {
-  const iterations = member(asBag(member(payload, "usage")), "iterations");
-  if (!Array.isArray(iterations)) return {};
-  const at = iterations.findIndex((it) => member(asBag(it), "type") === "compaction");
-  if (at === -1) return {};
-  const sizes: { before?: number; after?: number } = {};
-  sizes.before = count(member(asBag(iterations[at]), "input_tokens"));
-  if (at < iterations.length - 1) {
-    sizes.after = count(member(asBag(iterations[iterations.length - 1]), "input_tokens"));
-  }
-  return sizes;
-}
-
-/** Anthropic threshold compaction: a `compaction` content block holding the summary. */
 function compactionBlockEvents(payload: Bag): EventAttributes[] {
-  const content = member(payload, "content");
-  if (!Array.isArray(content)) return [];
+  const iterations = members(member(asBag(member(payload, "usage")), "iterations"));
+  const compactions = iterations.flatMap((iteration, index) =>
+    member(iteration, "type") === COMPACTION_TYPE ? [index] : [],
+  );
+  const sizes = compactions.map((index) => ({
+    before: count(member(iterations[index], "input_tokens")),
+    after: count(
+      member(
+        iterations.slice(index + 1).find((later) => member(later, "type") !== COMPACTION_TYPE),
+        "input_tokens",
+      ),
+    ),
+  }));
+  const blocks = members(member(payload, "content")).filter(
+    (block) => member(block, "type") === COMPACTION_TYPE,
+  );
   const events: EventAttributes[] = [];
-  const sizes = iterationSizes(payload);
-  for (const raw of content) {
-    const block = asBag(raw);
-    if (member(block, "type") !== "compaction") continue;
+  blocks.forEach((block, position) => {
+    const summary = member(block, "content");
+    // No summary is a compaction that failed: the server treats the block as a
+    // no-op, so nothing was compacted and nothing is reported.
+    if (typeof summary !== "string") return;
+    const { before, after } = sizes[position] ?? {};
     const event = providerEvent(RIUS_COMPACTION_KIND_SUMMARIZE);
-    // The iterations describe the request's one compaction, so only the first
-    // block takes them.
-    if (events.length === 0) {
-      if (sizes.before !== undefined) event[RIUS_COMPACTION_TOKENS_BEFORE] = sizes.before;
-      if (sizes.after !== undefined) event[RIUS_COMPACTION_TOKENS_AFTER] = sizes.after;
-    }
-    const summary = text(member(block, "content"));
-    if (summary !== undefined) {
-      event[RIUS_COMPACTION_SUMMARY_BYTES] = Buffer.byteLength(summary, "utf8");
-      event[RIUS_COMPACTION_SUMMARY_TEXT] = summary;
-    }
+    set(event, RIUS_COMPACTION_TOKENS_BEFORE, before);
+    set(event, RIUS_COMPACTION_TOKENS_AFTER, after);
+    set(event, RIUS_COMPACTION_TOKENS_DROPPED, droppedTokens(before, after));
+    event[RIUS_COMPACTION_SUMMARY_BYTES] = Buffer.byteLength(summary, "utf8");
+    event[RIUS_COMPACTION_SUMMARY_TEXT] = textValue(summary);
+    set(event, RIUS_COMPACTION_ID, identifier(member(block, "id")));
     events.push(event);
-  }
+  });
   return events;
 }
 
@@ -150,19 +191,28 @@ function compactionBlockEvents(payload: Bag): EventAttributes[] {
  * opaque carry-over for the next request and is never read.
  */
 function compactionItemEvents(payload: Bag): EventAttributes[] {
-  const output = member(payload, "output");
-  if (!Array.isArray(output)) return [];
   const events: EventAttributes[] = [];
-  for (const raw of output) {
-    const item = asBag(raw);
-    if (member(item, "type") !== "compaction") continue;
+  for (const item of members(member(payload, "output"))) {
+    if (member(item, "type") !== COMPACTION_TYPE) continue;
     const event = providerEvent(RIUS_COMPACTION_KIND_SUMMARIZE);
-    const id = text(member(item, "id"));
-    if (id !== undefined) event[RIUS_COMPACTION_ID] = id;
+    set(event, RIUS_COMPACTION_ID, identifier(member(item, "id")));
     events.push(event);
   }
   return events;
 }
+
+/**
+ * Present in every response that reports a compaction, which a response that
+ * reports none almost never contains, so the common reply is never parsed. A
+ * reply that merely mentions one of them is parsed and finds nothing.
+ */
+const MARKERS = ['"compaction"', '"applied_edits"'];
+
+/**
+ * What `POST /responses/compact` answers with. That call is the compaction
+ * itself, not a request that ran on a compacted context.
+ */
+const COMPACT_ENDPOINT_OBJECT = "response.compaction";
 
 /**
  * The compactions an LLM span's provider response reports, as event
@@ -170,11 +220,13 @@ function compactionItemEvents(payload: Bag): EventAttributes[] {
  *
  * The payload is read like `responseIdFromOutput` reads it: an LLM span whose
  * `output.value`, undeclared or declared JSON, is a string starting with `{`.
- * A streamed response is recorded by the instrumentors as its accumulated
- * text (`text/plain`), which carries none of this, so a stream reports no
- * compaction. The payload is the provider's and untrusted: every member is
- * read as an own property, and a field of the wrong type is left out rather
- * than guessed.
+ * That is the whole response for a call that is not streamed, and for a
+ * streamed OpenAI Responses call too: the instrumentation records the
+ * `response.completed` event's response as JSON. A streamed Anthropic or
+ * OpenAI chat reply is recorded as its accumulated text (`text/plain`), which
+ * carries none of this, so those report no compaction. The payload is the
+ * provider's and untrusted: every member is read as an own property, and a
+ * field of the wrong type is left out rather than guessed.
  */
 export function providerCompactions(
   attributes: Readonly<Record<string, AttributeValue | undefined>>,
@@ -184,9 +236,8 @@ export function providerCompactions(
   if (mime !== undefined && mime !== "application/json") return [];
   const output = attributes[OUTPUT_VALUE];
   if (typeof output !== "string" || !output.startsWith("{")) return [];
-  // Most responses are no compaction, and the body can be large: do not parse
-  // what cannot hold one.
-  if (!output.includes("context_management") && !output.includes("compaction")) return [];
+  // The body can be large: do not parse what cannot hold a compaction.
+  if (!MARKERS.some((marker) => output.includes(marker))) return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(output);
@@ -194,13 +245,19 @@ export function providerCompactions(
     return [];
   }
   const payload = asBag(parsed);
-  if (payload === undefined) return [];
+  if (payload === undefined || member(payload, "object") === COMPACT_ENDPOINT_OBJECT) return [];
   return [
     ...contextEditingEvents(payload),
     ...compactionBlockEvents(payload),
     ...compactionItemEvents(payload),
   ];
 }
+
+/** The variable OpenTelemetry reads for the span event count limit. */
+export const EVENT_COUNT_LIMIT_ENV = "OTEL_SPAN_EVENT_COUNT_LIMIT";
+
+/** OpenTelemetry's default for events per span. */
+export const DEFAULT_SPAN_EVENT_COUNT_LIMIT = 128;
 
 /**
  * Add a `rius.compaction` event for each compaction the span's provider
@@ -212,18 +269,41 @@ export function providerCompactions(
  * is stamped with the span's end, the moment the response was complete.
  * Runs at `onEnd`, before masking, so the summary text is masked or stripped
  * like any other content.
+ *
+ * The events go straight onto the ended span's list, which the span's own
+ * `addEvent` would no longer take, so the span's event count limit is applied
+ * here: what does not fit is counted as dropped, as the span would count it.
+ * `eventCountLimit` is the limit the provider was built with; without one the
+ * environment and OpenTelemetry's default stand in for it.
+ * An event's attribute count is fixed and small, and its one large value, the
+ * summary text, is already capped, so those limits need no pass of their own.
  */
 export function addProviderCompactions(
   span: ReadableSpan,
   attributes: Record<string, AttributeValue | undefined>,
+  eventCountLimit?: number,
 ): void {
   const events = span.events;
   if (!Array.isArray(events)) return;
   if (events.some((event) => event.name === RIUS_COMPACTION_EVENT)) return;
   const found = providerCompactions(attributes);
   if (found.length === 0) return;
+  const limit =
+    eventCountLimit ?? getNumberFromEnv(EVENT_COUNT_LIMIT_ENV) ?? DEFAULT_SPAN_EVENT_COUNT_LIMIT;
+  const kept = found.slice(0, Math.max(0, limit - events.length));
+  if (kept.length < found.length) {
+    // A real span exposes the count through a getter only, which a plain
+    // assignment would throw on; an own property shadows it.
+    Object.defineProperty(span, "droppedEventsCount", {
+      value: (span.droppedEventsCount ?? 0) + found.length - kept.length,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  if (kept.length === 0) return;
   const time = span.endTime ?? span.startTime ?? [0, 0];
-  for (const event of found) {
+  for (const event of kept) {
     events.push({
       name: RIUS_COMPACTION_EVENT,
       attributes: event as Attributes,
@@ -273,14 +353,20 @@ const pendingFlag = new AsyncLocalStorage<PendingFlag>();
  * of its own flow and has no callback to wrap the calls that follow. The
  * consequence is that the mark lives in the context `markCompaction` ran in,
  * so it must run in the flow that makes the next call.
+ *
+ * A fresh holder on every mark, never the one an enclosing context already
+ * has: a holder is shared by every context that inherited it, so reusing it
+ * would let one conversation's mark flag a sibling's call, and let the first
+ * of two concurrent marks spend both.
  */
 export function markNextLlmSpanCompacted(): void {
-  let flag = pendingFlag.getStore();
-  if (flag === undefined) {
-    flag = { pending: false };
-    pendingFlag.enterWith(flag);
-  }
-  flag.pending = true;
+  pendingFlag.enterWith({ pending: true });
+}
+
+/** The key a span goes by from its start to its end, whichever object represents it at each. */
+function spanKey(span: { spanContext(): { traceId: string; spanId: string } }): string {
+  const { traceId, spanId } = span.spanContext();
+  return `${traceId}:${spanId}`;
 }
 
 /**
@@ -294,19 +380,23 @@ export function markNextLlmSpanCompacted(): void {
  * decided at end, when the kind is in. Among spans of that kind running at
  * once the first to end takes the flag.
  *
+ * The span is remembered by its trace and span id, not by the object: a span
+ * of another provider that Rius's bridge feeds is a twin at start and a copy
+ * at end. The entry is removed when the span ends.
+ *
  * Unlike the session and user ids it never reaches a pending snapshot: the key
  * is not on the identity allowlist, since it is learned from a call the
  * producer made, not from the request, and it is only ever set at start on a
  * span that is already an LLM span or at end.
  */
 export class CompactionFlagSpanProcessor implements SpanProcessor {
-  private readonly undecided = new WeakMap<object, PendingFlag>();
+  private readonly undecided = new Map<string, PendingFlag>();
 
   onStart(span: Span, _parentContext: Context): void {
     const flag = pendingFlag.getStore();
     if (flag === undefined || !flag.pending) return;
     if (!isKnown(span.attributes)) {
-      this.undecided.set(span, flag);
+      this.undecided.set(spanKey(span), flag);
       return;
     }
     if (!isLlmSpan(span.attributes)) return;
@@ -315,9 +405,10 @@ export class CompactionFlagSpanProcessor implements SpanProcessor {
   }
 
   onEnd(span: ReadableSpan): void {
-    const flag = this.undecided.get(span);
+    const key = spanKey(span);
+    const flag = this.undecided.get(key);
     if (flag === undefined) return;
-    this.undecided.delete(span);
+    this.undecided.delete(key);
     if (!flag.pending || !isLlmSpan(span.attributes)) return;
     flag.pending = false;
     // In place, as normalization writes: the span has ended, so setAttribute
