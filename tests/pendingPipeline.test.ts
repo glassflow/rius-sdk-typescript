@@ -435,6 +435,23 @@ describe("request parameters on a pending snapshot", () => {
     expect(pending.attributes["rius.request.my_custom_knob"]).toBe(3);
   });
 
+  it("leaves provider spellings of prompt-bearing parameters off the snapshot", async () => {
+    const exporter = new Capture();
+    client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
+    startGeneration("chat", {
+      modelParameters: {
+        contents: [{ role: "user", parts: [{ text: "SECRET" }] }],
+        system_instruction: "SECRET system prompt",
+        response_format: { type: "json_schema", json_schema: { name: "SECRET" } },
+        temperature: 0.7,
+      },
+    }).end();
+    await client.flush();
+    const { pending } = split(exporter.spans);
+    expect(JSON.stringify(pending.attributes)).not.toContain("SECRET");
+    expect(pending.attributes["gen_ai.request.temperature"]).toBe(0.7);
+  });
+
   it("strips prompt-bearing model parameters from pending and final under captureContent: false", async () => {
     const exporter = new Capture();
     client = init({
