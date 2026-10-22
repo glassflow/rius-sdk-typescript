@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.5.0...v1.6.0) (2026-10-22)
+
+
+### Features
+
+* report provider compactions and add markCompaction (RIUS-1545) ([#180](https://github.com/glassflow/rius-sdk-typescript/issues/180)) ([ba7842f](https://github.com/glassflow/rius-sdk-typescript/commit/ba7842f56b1442f0d7b9f7436f96a0a156e9cb1f))
+
+
+### Bug Fixes
+
+* strip percent-encoded and escaped-wrapped data URLs, and size a newline-terminated one ([#182](https://github.com/glassflow/rius-sdk-typescript/issues/182)) ([c048e3c](https://github.com/glassflow/rius-sdk-typescript/commit/c048e3c8ac106078dc5a85062738047f7a866c17))
+
 ## [1.5.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.4.1...v1.5.0) (2026-10-21)
 
 
