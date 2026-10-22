@@ -193,8 +193,9 @@ export class Observation {
   /**
    * Set an arbitrary attribute. Primitives and homogeneous primitive arrays
    * are passed through as the OTel values they are; objects, mixed arrays and
-   * arrays holding an array or an object are JSON-encoded once and bounded; `undefined` and `null` set nothing, since "no value" is not
-   * an empty string.
+   * arrays holding an array or an object are JSON-encoded once and bounded;
+   * `undefined` and `null` set nothing, since "no value" is not an empty
+   * string.
    */
   setAttribute(key: string, value: unknown): this {
     const coerced = setterAttributeValue(value);

@@ -398,3 +398,39 @@ describe("setAttribute with an array holding an array or a mapping", () => {
     });
   }
 });
+
+describe("setAttribute with an array that throws when read", () => {
+  function throwingGetter(): unknown[] {
+    const value: unknown[] = [1];
+    Object.defineProperty(value, 1, {
+      enumerable: true,
+      get() {
+        throw new Error("element getter");
+      },
+    });
+    return value;
+  }
+
+  function throwingProxy(): unknown[] {
+    return new Proxy([1, 2], {
+      get(target, key, receiver) {
+        if (key === "length" || typeof key === "symbol") return Reflect.get(target, key, receiver);
+        throw new Error("proxy trap");
+      },
+    });
+  }
+
+  for (const [label, make] of [
+    ["an element getter", throwingGetter],
+    ["a Proxy trap", throwingProxy],
+  ] as const) {
+    it(`never throws into the caller from ${label}, and records a string`, async () => {
+      const exporter = start();
+      const span = startSpan("s");
+      expect(() => span.setAttribute("k", make())).not.toThrow();
+      span.end();
+      const [finishedSpan] = await finished(exporter);
+      expect(typeof finishedSpan.attributes.k).toBe("string");
+    });
+  }
+});

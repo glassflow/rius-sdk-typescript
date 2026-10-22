@@ -208,13 +208,18 @@ export function attributeValue(value: unknown): AttributeValue | undefined {
  * `[[1, bytes]]` into an array of the inner array's JSON.
  */
 export function setterAttributeValue(value: unknown): AttributeValue | undefined {
-  if (
-    Array.isArray(value) &&
-    value.some((v) => Array.isArray(v) || (typeof v === "object" && v !== null && !isByteObject(v)))
-  ) {
+  if (!Array.isArray(value)) return attributeValue(value);
+  let structured: boolean;
+  try {
+    structured = value.some(
+      (v) => Array.isArray(v) || (typeof v === "object" && v !== null && !isByteObject(v)),
+    );
+  } catch {
+    // An element getter or a Proxy trap that throws: never into the caller.
+    // toAttributeValue never throws, and writes what it can read.
     return toAttributeValue(value);
   }
-  return attributeValue(value);
+  return structured ? toAttributeValue(value) : attributeValue(value);
 }
 
 /**
