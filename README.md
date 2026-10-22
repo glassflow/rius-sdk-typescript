@@ -208,7 +208,9 @@ await startAsCurrentSpan("fetch-documents", { input: query }, async (span) => {
 `startAsCurrentSpan` runs a callback with the span active, ending it
 automatically and recording any thrown exception. The options argument is
 optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
-works when you have nothing to configure.
+works when you have nothing to configure. `span.update({ input, output })`
+sets both in one call (on a generation, as messages); a field left out, or
+`null`, is not touched.
 
 **The name is optional too.** Omit it and the span is named the way the
 OpenTelemetry GenAI conventions say to, `{operation} {target}`, composed
@@ -622,6 +624,13 @@ attribute; the exception event and its `exception.type` are kept.
 optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
+
+Three `init()` options of the Python SDK have no TypeScript counterpart
+yet: `headers` (extra exporter headers; use `spanExporter` with your own
+`OTLPTraceExporter` meanwhile), `instruments` (choosing which bundled
+auto-instrumentations to enable; this SDK enables every one it finds) and
+`set_global` (keeping the provider out of the OpenTelemetry global; this SDK
+always registers it unless another SDK already has).
 
 ### Running next to another OpenTelemetry SDK
 

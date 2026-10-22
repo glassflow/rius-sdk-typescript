@@ -173,6 +173,18 @@ export class Observation {
   }
 
   /**
+   * Record input and output in one call, each through this handle's own
+   * setter, so a generation records them as messages. A field that is absent,
+   * `undefined` or `null` is left alone, as the Python SDK's `update` skips
+   * `None`; call `setOutput(null)` to record a null result explicitly.
+   */
+  update(values: { input?: unknown; output?: unknown }): this {
+    if (values.input !== undefined && values.input !== null) this.setInput(values.input);
+    if (values.output !== undefined && values.output !== null) this.setOutput(values.output);
+    return this;
+  }
+
+  /**
    * Record what a retrieval returned, as `gen_ai.retrieval.documents`.
    *
    * The conventions define this as an array of objects, each with an optional
