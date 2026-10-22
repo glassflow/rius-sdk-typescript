@@ -6,6 +6,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTracer, type InitOptions, init, type RiusClient } from "../src/client.js";
+import { startGeneration } from "../src/generation.js";
 import { isContentKey, MaskingSpanExporter } from "../src/masking.js";
 
 function span(attributes: Record<string, unknown>): ReadableSpan {
@@ -194,9 +195,9 @@ describe("MaskingSpanExporter events and links", () => {
     expect(events[0].attributes?.["exception.stacktrace"]).toBeUndefined();
   });
 
-  it("keeps exception message and stacktrace under the default captureContent", () => {
+  it("keeps exception message and stacktrace when content is captured and no mask is set", () => {
     const inner = new Capture();
-    new MaskingSpanExporter(inner, { captureContent: true, mask: () => "[REDACTED]" }).export(
+    new MaskingSpanExporter(inner, { captureContent: true }).export(
       [
         richSpan({
           events: [
@@ -227,6 +228,50 @@ describe("MaskingSpanExporter events and links", () => {
     );
     expect(inner.seen[0].events[0].attributes?.["gen_ai.output.messages"]).toBe("[REDACTED]");
     expect(inner.seen[0].links[0].attributes?.["output.value"]).toBe("[REDACTED]");
+  });
+
+  it("runs the mask over exception message and stacktrace and keeps the type", () => {
+    // A provider error echoes the rejected request, so with content captured
+    // and a mask set the mask must see these two as well.
+    const inner = new Capture();
+    const seenKeys: string[] = [];
+    new MaskingSpanExporter(inner, {
+      captureContent: true,
+      mask: (_value, options) => {
+        seenKeys.push(options?.key ?? "");
+        return "[REDACTED]";
+      },
+    }).export(
+      [
+        richSpan({
+          events: [
+            {
+              name: "exception",
+              attributes: {
+                "exception.type": "BadRequestError",
+                "exception.message": '400: {"messages":[{"content":"<PII>"}]}',
+                "exception.stacktrace": "at call (<PII>)",
+              },
+            },
+          ],
+        }),
+      ],
+      () => {},
+    );
+    const attributes = inner.seen[0].events[0].attributes;
+    expect(attributes?.["exception.type"]).toBe("BadRequestError");
+    expect(attributes?.["exception.message"]).toBe("[REDACTED]");
+    expect(attributes?.["exception.stacktrace"]).toBe("[REDACTED]");
+    expect(seenKeys.sort()).toEqual(["exception.message", "exception.stacktrace"]);
+  });
+
+  it("does not treat exception.message as content outside an exception event", () => {
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: true, mask: () => "[REDACTED]" }).export(
+      [richSpan({ events: [{ name: "log", attributes: { "exception.message": "kept" } }] })],
+      () => {},
+    );
+    expect(inner.seen[0].events[0].attributes?.["exception.message"]).toBe("kept");
   });
 
   it("leaves a span with no events or links alone", () => {
@@ -522,6 +567,81 @@ describe("request-parameter namespaces", () => {
     );
     expect(inner.seen[0].attributes["rius.request.tools"]).toBe("***");
     expect(inner.seen[0].attributes["gen_ai.request.temperature"]).toBe(0.7);
+  });
+});
+
+describe("model parameters that carry the prompt itself", () => {
+  const members = ["system", "messages", "prompt", "input", "instructions"];
+
+  it("are content under both request namespaces", () => {
+    for (const member of members) {
+      expect(isContentKey(`gen_ai.request.${member}`), member).toBe(true);
+      expect(isContentKey(`rius.request.${member}`), member).toBe(true);
+    }
+    expect(isContentKey("gen_ai.request.model")).toBe(false);
+    expect(isContentKey("rius.request.reasoning_effort")).toBe(false);
+  });
+
+  it("are stripped from a generation under captureContent: false", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = init({ spanExporter: exporter, captureContent: false, heartbeat: false });
+    startGeneration("chat", {
+      modelParameters: {
+        system: "SECRET system prompt",
+        messages: [{ role: "user", content: "SECRET" }],
+        prompt: "SECRET",
+        input: "SECRET",
+        instructions: "SECRET",
+        temperature: 0.7,
+        my_custom_knob: 3,
+      },
+    }).end();
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0].attributes;
+    expect(JSON.stringify(attributes)).not.toContain("SECRET");
+    expect(attributes["gen_ai.request.temperature"]).toBe(0.7);
+    expect(attributes["rius.request.my_custom_knob"]).toBe(3);
+  });
+
+  it("are masked with their key", () => {
+    const inner = new Capture();
+    const attributes: Record<string, unknown> = { "gen_ai.request.model": "gpt-4o" };
+    for (const member of members) {
+      attributes[`gen_ai.request.${member}`] = "SECRET";
+      attributes[`rius.request.${member}`] = "SECRET";
+    }
+    new MaskingSpanExporter(inner, { captureContent: true, mask: () => "***" }).export(
+      [span(attributes)],
+      () => {},
+    );
+    const out = inner.seen[0].attributes as Record<string, unknown>;
+    expect(JSON.stringify(out)).not.toContain("SECRET");
+    expect(out["gen_ai.request.model"]).toBe("gpt-4o");
+  });
+});
+
+describe("@ai-sdk/otel speech, decision and provider-metadata keys", () => {
+  it("never reach the exporter under captureContent: false", async () => {
+    // An e2e run with @ai-sdk/otel 1.0.141 exported all of these with
+    // content capture off: generateSpeech's text, the human-in-the-loop
+    // decision, and the provider's raw response metadata.
+    const exporter = new InMemorySpanExporter();
+    client = init({ spanExporter: exporter, captureContent: false, heartbeat: false });
+    const span = getTracer().startSpan("ai.generateSpeech");
+    span.setAttributes({
+      "ai.request.text": "SECRET spoken text",
+      "ai.decision.questions": '["SECRET?"]',
+      "ai.decision.state": '{"SECRET":1}',
+      "ai.decision.answers": '["SECRET"]',
+      "ai.response.providerMetadata": '{"SECRET":1}',
+      "ai.settings.context.customer.email": "SECRET@example.com",
+      "ai.settings.maxRetries": 2,
+    });
+    span.end();
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0].attributes;
+    expect(JSON.stringify(attributes)).not.toContain("SECRET");
+    expect(attributes["ai.settings.maxRetries"]).toBe(2);
   });
 });
 

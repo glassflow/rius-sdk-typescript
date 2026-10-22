@@ -409,6 +409,58 @@ describe("request parameters on a pending snapshot", () => {
     expect(pending.attributes["gen_ai.request.temperature"]).toBe(0.7);
   });
 
+  it("leaves content request keys off the snapshot even with content captured", async () => {
+    // The identity prefixes admit gen_ai.request.* and rius.request.*, but a
+    // key under them that is content (tool definitions, the system prompt,
+    // the messages) is content first. With content captured nothing strips it
+    // at export, so the snapshot itself must leave it out.
+    const exporter = new Capture();
+    client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
+    startGeneration("chat", {
+      modelParameters: {
+        tools: [{ description: "SECRET" }],
+        system: "SECRET system prompt",
+        messages: [{ role: "user", content: "SECRET" }],
+        temperature: 0.7,
+        my_custom_knob: 3,
+      },
+    }).end();
+    await client.flush();
+    const { pending } = split(exporter.spans);
+    for (const key of ["rius.request.tools", "rius.request.system", "rius.request.messages"]) {
+      expect(pending.attributes[key], key).toBeUndefined();
+    }
+    expect(JSON.stringify(pending.attributes)).not.toContain("SECRET");
+    expect(pending.attributes["gen_ai.request.temperature"]).toBe(0.7);
+    expect(pending.attributes["rius.request.my_custom_knob"]).toBe(3);
+  });
+
+  it("strips prompt-bearing model parameters from pending and final under captureContent: false", async () => {
+    const exporter = new Capture();
+    client = init({
+      spanExporter: exporter,
+      partialSpans: true,
+      captureContent: false,
+      heartbeat: false,
+    });
+    startGeneration("chat", {
+      modelParameters: {
+        system: "SECRET",
+        messages: [{ role: "user", content: "SECRET" }],
+        prompt: "SECRET",
+        input: "SECRET",
+        instructions: "SECRET",
+        temperature: 0.7,
+      },
+    }).end();
+    await client.flush();
+    const { pending, final } = split(exporter.spans);
+    for (const span of [pending, final]) {
+      expect(JSON.stringify(span.attributes)).not.toContain("SECRET");
+      expect(span.attributes["gen_ai.request.temperature"]).toBe(0.7);
+    }
+  });
+
   /**
    * THE INVERTED GUARD. The allowlist-coverage test walks what the creation
    * builders set and asserts each key is allowlisted, which catches a missing

@@ -772,7 +772,10 @@ export const PENDING_IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
 // is rius.request.* (the caller parameters the conventions do not define):
 // both are chosen before the call runs, so a live view of a still-running
 // generation must already show them. The two namespaces are deliberately
-// treated alike here as well as in CONTENT_ATTRIBUTES.
+// treated alike here as well as in CONTENT_ATTRIBUTES. A key under either
+// prefix that the content rules match (gen_ai.request.messages,
+// rius.request.tools, ...) is content first: a consumer must not let the
+// prefix admit it onto a pending snapshot.
 export const PENDING_IDENTITY_PREFIXES: readonly string[] = [
   GEN_AI_REQUEST_PREFIX,
   RIUS_REQUEST_PREFIX,
@@ -781,11 +784,30 @@ export const PENDING_IDENTITY_PREFIXES: readonly string[] = [
 // Parameter names that carry TOOL DEFINITIONS rather than a sampling knob.
 // Named once and consumed by every route to the same definitions, so the
 // routes cannot drift apart: as gen_ai.request.<member> and
-// rius.request.<member> (derived into CONTENT_ATTRIBUTES), and as JSON
+// rius.request.<member> (derived into CONTENT_ATTRIBUTES through
+// REQUEST_PARAMETERS_CONTENT_MEMBERS), and as JSON
 // members of llm.invocation_parameters. Tool definitions are content in the
 // same sense messages are, and which route they arrived by cannot be what
 // decides whether they are protected.
 export const INVOCATION_PARAMETERS_CONTENT_MEMBERS: readonly string[] = ["tools", "functions"];
+
+// Parameter names whose VALUE is content rather than a sampling knob, so
+// gen_ai.request.<member> and rius.request.<member> are content (derived
+// into CONTENT_ATTRIBUTES). A caller passing the system prompt, the
+// messages or the tool definitions through model parameters would
+// otherwise export them verbatim with content capture off, and on every
+// pending snapshot of a still-running generation. A superset of
+// INVOCATION_PARAMETERS_CONTENT_MEMBERS: the linter keeps every
+// tool-definition member here too.
+export const REQUEST_PARAMETERS_CONTENT_MEMBERS: readonly string[] = [
+  "system",
+  "messages",
+  "prompt",
+  "input",
+  "instructions",
+  "tools",
+  "functions",
+];
 
 // Content keys of other OTel-based SDKs a customer runs next to rius. Their
 // spans reach rius's exporter through the foreign-provider bridge, or
@@ -949,6 +971,19 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   "ai.documents",
   "ai.schema",
   "ai.schema.description",
+  // Added from @ai-sdk/otel 1.0.141 (2026-10-22), where an e2e run with
+  // content capture off exported all of these: the text generateSpeech
+  // speaks, the human-in-the-loop decision's questions, state and
+  // answers, and the provider's raw response metadata, which can echo
+  // the request. The runtime context is the caller's arbitrary payload,
+  // flattened one key per member like Langfuse's metadata (see the
+  // prefixes); the bare key is listed per the bare-key rule.
+  "ai.request.text",
+  "ai.decision.questions",
+  "ai.decision.state",
+  "ai.decision.answers",
+  "ai.response.providerMetadata",
+  "ai.settings.context",
   // The OpenInference request-parameters bag, whole. Its membership is
   // open and provider-defined (litellm and langchain put the request's
   // tools array in it, and providers are free to add anything else),
@@ -964,13 +999,13 @@ export const CONTENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   // survives masking.
   RIUS_COMPACTION_SUMMARY_TEXT,
   // The NAMED EXCEPTION to the rule that request parameters export in clear.
-  // That rule is right for scalar knobs, but a caller passing tools through
-  // model parameters would otherwise export proprietary prompt engineering
-  // verbatim with content capture off. Per KEY, not per namespace: both
+  // That rule is right for scalar knobs, but a caller passing the prompt or
+  // the tools through model parameters would otherwise export it verbatim
+  // with content capture off. Per KEY, not per namespace: both
   // namespaces stay non-content wholesale, which is what keeps their tie
   // intact.
   ...[GEN_AI_REQUEST_PREFIX, RIUS_REQUEST_PREFIX].flatMap((prefix) =>
-    INVOCATION_PARAMETERS_CONTENT_MEMBERS.map((member) => `${prefix}${member}`),
+    REQUEST_PARAMETERS_CONTENT_MEMBERS.map((member) => `${prefix}${member}`),
   ),
   ...THIRD_PARTY_CONTENT_ATTRIBUTES,
 ]);
@@ -986,6 +1021,7 @@ export const CONTENT_ATTRIBUTE_PREFIXES: readonly string[] = [
   "llm.prompt_template.",
   "llm.tools.",
   "ai.prompt.",
+  "ai.settings.context.",
   "langfuse.observation.metadata.",
   "langfuse.trace.metadata.",
   "traceloop.prompt.template_variables.",

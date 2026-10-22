@@ -1,6 +1,7 @@
 import type { Attributes, Context } from "@opentelemetry/api";
 import { SpanStatusCode } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { isContentKey } from "./masking.js";
 import {
   PENDING_IDENTITY_ATTRIBUTES,
   PENDING_IDENTITY_PREFIXES,
@@ -34,13 +35,20 @@ import {
  * delayed pending is byte-identical to an immediate one.
  */
 
+/**
+ * The request prefixes admit whole namespaces, and some keys under them are
+ * content (`rius.request.tools`, `gen_ai.request.messages`, ...). Those are
+ * content first: with content captured nothing strips them at export, so the
+ * snapshot itself leaves out every key the content rules match.
+ */
 function identityAttributes(attributes: Attributes | undefined): Attributes {
   if (!attributes) return {};
   const result: Attributes = {};
   for (const [key, value] of Object.entries(attributes)) {
     if (
-      PENDING_IDENTITY_ATTRIBUTES.has(key) ||
-      PENDING_IDENTITY_PREFIXES.some((p) => key.startsWith(p))
+      (PENDING_IDENTITY_ATTRIBUTES.has(key) ||
+        PENDING_IDENTITY_PREFIXES.some((p) => key.startsWith(p))) &&
+      !isContentKey(key)
     ) {
       result[key] = value;
     }
