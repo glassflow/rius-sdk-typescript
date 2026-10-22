@@ -343,6 +343,18 @@ describe("a data URL the regex stack cannot read", () => {
     ]);
   });
 
+  it("takes a percent-encoded data URL glued after it into its one token, to the next data:", () => {
+    const glued = `see ${url}data%3Aa%2Fb%3Bbase64%2CQkJD and so on\ndata:image/gif;base64,R0lGODlh, bye`;
+    const result = strip(glued);
+    expect(result.text).toBe(
+      "see [stripped image/png unknown bytes][stripped image/gif 6 bytes], bye",
+    );
+    expect(result.tokens).toEqual([
+      { rule: "b", mime: "image/png", byteSize: undefined },
+      { rule: "b", mime: "image/gif", byteSize: 6 },
+    ]);
+  });
+
   it("keeps no mime type that is no token/token", () => {
     expect(strip(url.replace("image/png", "image")).text).toBe("[stripped unknown unknown bytes]");
   });
@@ -424,9 +436,82 @@ describe("a data URL percent-encoded whole", () => {
     "data%253Aa%3Bbase64%2CQUFB",
     "data%3Aa%3BBASE64%2CQUFB",
     "data%3Aimage%2Fpng;base64,QUFB",
-    "data:xdata%3A;base64,QUFB",
   ])("%s is no token", (text) => {
     expect(strip(text)).toEqual({ text, tokens: [] });
+  });
+});
+
+describe("a plain data URL whose header holds data%3A", () => {
+  // Read raw, and escaped as in JSON that does not parse (after a `[`).
+  it.each([
+    // A plain header that holds data%3A, in either case, is one token.
+    ["data:image/png;name=metadata%3Av1.png;base64,QUFB", "[stripped image/png 3 bytes]"],
+    ["data:image/png;name=metadata%3av1.png;base64,QUFB", "[stripped image/png 3 bytes]"],
+    ["data:xdata%3A;base64,QUFB", "[stripped unknown 3 bytes]"],
+    ["data:xdata%3a;base64,QUFB", "[stripped unknown 3 bytes]"],
+    ["data:x;p=data%3Aa%2Fb%3Bbase64%2CQkJD;base64,QUFB", "[stripped unknown 3 bytes]"],
+    // A plain run stops before a data%3A glued to it, which is its own token.
+    [
+      "data:a/b;base64,QUFBdata%3Aa%2Fb%3Bbase64%2CQkJD",
+      "[stripped a/b 3 bytes][stripped a/b 3 bytes]",
+    ],
+    [
+      "data:a/b;base64,QUFB\ndata%3Aa%2Fb%3Bbase64%2CQkJD",
+      "[stripped a/b 3 bytes]\n[stripped a/b 3 bytes]",
+    ],
+    // A percent header that holds data%3A is still cut there.
+    ["data%3Aa%3Bx%3Ddata%3Ab%3Bbase64%2CQUFB", "data%3Aa%3Bx%3D[stripped unknown 3 bytes]"],
+    // A plain header that holds data%3A, then no ;base64,: the data%3A is tried.
+    ["data:x;n=data%3Aa%2Fb%3Bbase64%2CQUFB", "data:x;n=[stripped a/b 3 bytes]"],
+  ])("is cut only at the next data: %j", (text, out) => {
+    expect(strip(text).text).toBe(out);
+    expect(strip(`[${text}`).text).toBe(`[${out}`);
+  });
+
+  it.each([
+    ["data:image/png;name=metadata%3Av1.png;base64,iVBORw0KGgo=", true],
+    ["data:image/png;name=metadata%3Av1.png;base64,iVBORw0KGgo=\n", true],
+    ["data:a/b;base64,QUFBdata%3Aa%2Fb%3Bbase64%2CQkJD", false],
+    ["data%3Aa%3Bx%3Ddata%3Ab%3Bbase64%2CQUFB", false],
+    ["data%3Aa%3Bx%3Ddata%3Ab%3Bbase64%2CQUFB%0A", false],
+  ])("is a whole value as rule (b) cuts it: %j %s", (value, whole) => {
+    expect(
+      strip(JSON.stringify({ type: "image", image: value })).tokens.map((t) => t.rule),
+    ).toEqual([whole ? "b" : "e"]);
+  });
+
+  it.each([
+    [
+      { type: "uri", uri: "data:image/png;name=metadata%3Av1.png;base64,QUFB" },
+      blobPart("image", "image/png", 3, "not_captured"),
+    ],
+    // The strip sizes only the inner piece, so the whole value has no size.
+    [
+      { type: "uri", uri: "data%3Aimage%2Fpng%3Bx%3Ddata%3Ab%3Bbase64%2CQUFB" },
+      blobPart("image", "image/png", undefined, "not_captured"),
+    ],
+  ])("makes %j %j in the part rules", (part, made) => {
+    expect(nativeMediaPart(part)).toEqual([made]);
+  });
+
+  it.each([
+    ["plain header of percent schemes", `data:x${"data%3A".repeat(6_000)}`, false],
+    [
+      "plain headers holding percent tokens",
+      "data:x;n=data%3Aa%3Bbase64%2CQUFB;base64,QUFB".repeat(1_000),
+      true,
+    ],
+    [
+      "plain runs glued to percent tokens",
+      "data:a;base64,QUFBdata%3Aa%3Bbase64%2CQkJD".repeat(1_000),
+      true,
+    ],
+  ])("strips the %s in linear time", (_name, text, tokens) => {
+    const start = performance.now();
+    const stripped = stripRawPayload(text);
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(stripped === text).toBe(!tokens);
+    if (tokens) expect(stripped).not.toContain("base64");
   });
 });
 

@@ -140,6 +140,7 @@ const ESCAPED_DATA_URL = new RegExp(`^${ESCAPED_DATA_URL_PATTERN}`);
 const PERCENT_DATA_URL = new RegExp(`^${PERCENT_DATA_URL_PATTERN}`);
 /** Where a rule (b) token can start: data: or data%3A, in any ASCII case. */
 const DATA_SCHEME = /[dD][aA][tT][aA]:/g;
+const DATA_SCHEME_START = /^[dD][aA][tT][aA]:/;
 const PERCENT_SCHEME = new RegExp(PERCENT_DATA_URL_SCHEME, "g");
 const PERCENT_SCHEME_START = new RegExp(`^${PERCENT_DATA_URL_SCHEME}`);
 
@@ -276,47 +277,100 @@ function matchDataUrl(pattern: RegExp, piece: string): { match?: RegExpExecArray
   }
 }
 
-/** The starts of every data: and every data%3A in a string, in order. */
-function dataUrlStarts(text: string): number[] {
-  const starts = Array.from(text.matchAll(DATA_SCHEME), (m) => m.index ?? 0);
-  if (!text.includes("%")) return starts;
-  for (const m of text.matchAll(PERCENT_SCHEME)) starts.push(m.index ?? 0);
-  return starts.sort((a, b) => a - b);
+/** The starts of every data: and of every data%3A in a string, each in order. */
+function dataUrlStarts(text: string): { plains: number[]; percents: number[] } {
+  const plains = Array.from(text.matchAll(DATA_SCHEME), (m) => m.index ?? 0);
+  const percents = text.includes("%")
+    ? Array.from(text.matchAll(PERCENT_SCHEME), (m) => m.index ?? 0)
+    : [];
+  return { plains, percents };
+}
+
+/** The first of the sorted `starts` at or after `from`, else `end`. */
+function firstFrom(starts: readonly number[], from: number, end: number): number {
+  let lo = 0;
+  let hi = starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (starts[mid] < from) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < starts.length ? starts[lo] : end;
 }
 
 /**
- * Rule (b): every data URL token in a string, wherever it sits. The string is
- * cut before each data: and each data%3A (in any ASCII case), and the pattern
- * is tried at the start of each piece and never past its end, so a run that
- * goes on over a line break never takes the start of the next data URL: the
- * pattern at a data:, the percent pattern at a data%3A. A media type that is
- * not token/token is unknown. `escaped`, for the text of a JSON candidate that
- * does not parse, tries the escaped pattern instead of the pattern, whose run
- * also goes on over a line break written as a JSON escape. When the regex
- * stack runs out on a piece, all of the piece from its scheme on is the token,
- * its size unknown: the strip never throws and never keeps what it could not
- * read.
+ * Rule (b)'s pattern at a data: start, never past `end` (the next data:). Its
+ * run (group 3), but not its header, also stops before the first data%3A at
+ * or after the run's start, so a percent-encoded data URL glued after it is a
+ * token of its own: the pattern is tried again at the same start, never past
+ * that data%3A, through the same catch. `end` comes back as the end of the
+ * slice last tried, where a token the regex stack could not read ends.
+ */
+function plainMatch(
+  pattern: RegExp,
+  text: string,
+  start: number,
+  end: number,
+  percents: readonly number[],
+): { match?: RegExpExecArray; failed?: true; end: number } {
+  const first = matchDataUrl(pattern, text.slice(start, end));
+  if (first.match === undefined) return { ...first, end };
+  // The header and its parameters hold no comma: the first is ;base64,'s.
+  const runStart = start + first.match[0].indexOf(",") + 1;
+  const cut = firstFrom(percents, runStart, end);
+  if (cut >= start + first.match[0].length) return { ...first, end };
+  return { ...matchDataUrl(pattern, text.slice(start, cut)), end: cut };
+}
+
+/**
+ * Rule (b): every data URL token in a string, wherever it sits. The pattern
+ * is tried at each data: (in any ASCII case) and never past the next data:,
+ * so a run that goes on over a line break never takes the start of the next
+ * data URL; its run, but not its header, also stops before the next data%3A
+ * (see plainMatch). The percent pattern is tried at each data%3A and never
+ * past the next data: or data%3A, except at a data%3A inside a plain token,
+ * which can only be in its header: a plain data URL whose header holds
+ * data%3A is one token. A media type that is not token/token is unknown.
+ * `escaped`, for the text of a JSON candidate that does not parse, tries the
+ * escaped pattern instead of the pattern, whose run also goes on over a line
+ * break written as a JSON escape. When the regex stack runs out, all of the
+ * slice from its scheme on is the token, its size unknown, and no data%3A
+ * inside it is tried: the strip never throws, never keeps what it could not
+ * read, and its tokens never overlap.
  */
 function dataUrlSpans(text: string, escaped = false): DataUrlSpan[] {
-  const starts = dataUrlStarts(text);
+  const { plains, percents } = dataUrlStarts(text);
   const plain = escaped ? ESCAPED_DATA_URL : DATA_URL;
   const spans: DataUrlSpan[] = [];
-  for (let i = 0; i < starts.length; i++) {
-    const start = starts[i];
-    const end = i + 1 < starts.length ? starts[i + 1] : text.length;
-    const percent = text[start + 4] === "%";
-    const piece = text.slice(start, end);
-    const { match, failed } = matchDataUrl(percent ? PERCENT_DATA_URL : plain, piece);
-    if (failed) {
-      let mime: string | undefined;
-      if (percent) {
-        mime = percentMime(text, start + 7, end);
-      } else {
+  // The end of the last plain token: a data%3A before it is not tried.
+  let covered = 0;
+  let i = 0;
+  let j = 0;
+  while (i < plains.length || j < percents.length) {
+    if (j === percents.length || (i < plains.length && plains[i] < percents[j])) {
+      const start = plains[i++];
+      const next = i < plains.length ? plains[i] : text.length;
+      const { match, failed, end } = plainMatch(plain, text, start, next, percents);
+      if (failed) {
         DATA_URL_MIME.lastIndex = start + 5;
         const head = DATA_URL_MIME.exec(text)?.[0];
-        mime = isMime(head) ? head : undefined;
+        spans.push({ start, end, mime: isMime(head) ? head : undefined, byteSize: undefined });
+        covered = end;
+      } else if (match !== undefined) {
+        spans.push({ start, end: start + match[0].length, ...matchToken(match) });
+        covered = start + match[0].length;
       }
-      spans.push({ start, end, mime, byteSize: undefined });
+      continue;
+    }
+    const start = percents[j++];
+    if (start < covered) continue;
+    const end = Math.min(
+      i < plains.length ? plains[i] : text.length,
+      j < percents.length ? percents[j] : text.length,
+    );
+    const { match, failed } = matchDataUrl(PERCENT_DATA_URL, text.slice(start, end));
+    if (failed) {
+      spans.push({ start, end, mime: percentMime(text, start + 7, end), byteSize: undefined });
     } else if (match !== undefined) {
       spans.push({ start, end: start + match[0].length, ...matchToken(match) });
     }
@@ -330,18 +384,26 @@ const FINAL_LINE_BREAKS: readonly string[] = ["\n", "\r\n"];
 const PERCENT_FINAL_LINE_BREAKS: readonly string[] = ["%0A", "%0D%0A"];
 
 /**
- * Rule (b)'s match when it is the whole string: the pattern (the percent
- * pattern for a value that starts with data%3A) anchored at the start, its
- * match ending at the end. The same as `$` would say, since the run's greedy
- * match reaches furthest, but fast when a long value fails. With `lineBreak`,
- * as a key that keeps URLs and the part rules read it, the match may also end
- * one final line break before the end (a newline, or a carriage return and
- * newline), and a percent-encoded one also one final %0A or %0D%0A, its hex
- * digits in either case. A value the regex stack cannot read is no match.
+ * Rule (b)'s match when it is the whole string: the first token dataUrlSpans
+ * finds, when it starts at the start and ends at the end, so with the same
+ * cuts as everywhere rule (b) runs: a whole value is one rule (b) replaces
+ * whole. With `lineBreak`, as a key that keeps URLs and the part rules read
+ * it, the match may also end one final line break before the end (a newline,
+ * or a carriage return and newline), and a percent-encoded one also one final
+ * %0A or %0D%0A, its hex digits in either case. A value the regex stack
+ * cannot read is no match.
  */
 function wholeDataUrl(value: string, lineBreak = false): RegExpExecArray | undefined {
   const percent = PERCENT_SCHEME_START.test(value);
-  const { match } = matchDataUrl(percent ? PERCENT_DATA_URL : DATA_URL, value);
+  if (!percent && !DATA_SCHEME_START.test(value)) return undefined;
+  const { plains, percents } = dataUrlStarts(value);
+  let match: RegExpExecArray | undefined;
+  if (percent) {
+    const end = Math.min(plains[0] ?? value.length, percents[1] ?? value.length);
+    match = matchDataUrl(PERCENT_DATA_URL, value.slice(0, end)).match;
+  } else {
+    match = plainMatch(DATA_URL, value, 0, plains[1] ?? value.length, percents).match;
+  }
   if (match === undefined) return undefined;
   const rest = value.slice(match[0].length);
   if (rest === "") return match;
