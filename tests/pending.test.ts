@@ -103,6 +103,26 @@ describe("PendingSpanProcessor", () => {
     });
   });
 
+  it("snapshot leaves out a content key under an identity prefix", () => {
+    const delegate = stubDelegate();
+    const processor = new PendingSpanProcessor(delegate);
+    const span = fakeSpan({
+      attributes: {
+        "gen_ai.request.tools": '[{"description":"SECRET"}]',
+        "rius.request.functions": '[{"description":"SECRET"}]',
+        "gen_ai.request.model": "gpt-4o",
+      },
+    });
+
+    processor.onStart(span, {} as Context);
+
+    const snapshot = delegate.onEnd.mock.calls[0][0] as ReadableSpan;
+    expect(snapshot.attributes).toEqual({
+      "gen_ai.request.model": "gpt-4o",
+      [RIUS_SPAN_PENDING]: true,
+    });
+  });
+
   // The MCP marker is identity, not content: a still-running MCP call must be
   // distinguishable from a local tool in the live view, which is the one place
   // setting it at creation pays off. Read the EXPORTED snapshot, not the raw

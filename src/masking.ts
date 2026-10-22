@@ -44,8 +44,9 @@ export function isContentKey(key: string): boolean {
  * The exception-event attributes that can carry user content. A provider error
  * routinely echoes the offending request back in its message, and a stacktrace
  * can carry it in a frame argument, so both are stripped under
- * `captureContent: false`. `exception.type` is a class name, never content, and
- * survives together with the event itself so a failure is still visible.
+ * `captureContent: false` and run through the mask otherwise.
+ * `exception.type` is a class name, never content, and survives together with
+ * the event itself so a failure is still visible.
  */
 const EXCEPTION_CONTENT_KEYS: readonly string[] = ["exception.message", "exception.stacktrace"];
 
@@ -103,11 +104,10 @@ export class MaskingSpanExporter implements SpanExporter {
     this.sanitizeAttributes(span.attributes as Record<string, unknown> | undefined);
 
     for (const event of span.events ?? []) {
-      const attributes = event.attributes as Record<string, unknown> | undefined;
-      this.sanitizeAttributes(attributes);
-      if (this.opts.captureContent || attributes === undefined) continue;
-      if (event.name !== EXCEPTION_EVENT) continue;
-      for (const key of EXCEPTION_CONTENT_KEYS) delete attributes[key];
+      // On an exception event the message and stacktrace are content too, so
+      // they are stripped or masked by the same rule as every content key.
+      const extra = event.name === EXCEPTION_EVENT ? EXCEPTION_CONTENT_KEYS : undefined;
+      this.sanitizeAttributes(event.attributes as Record<string, unknown> | undefined, extra);
     }
 
     for (const link of span.links ?? []) {
@@ -145,10 +145,13 @@ export class MaskingSpanExporter implements SpanExporter {
   }
 
   /** Strips or masks the content keys of one attribute bag, in place. */
-  private sanitizeAttributes(attributes: Record<string, unknown> | undefined): void {
+  private sanitizeAttributes(
+    attributes: Record<string, unknown> | undefined,
+    extraContentKeys: readonly string[] = [],
+  ): void {
     if (attributes === undefined) return;
     for (const key of Object.keys(attributes)) {
-      if (!isContentKey(key)) continue;
+      if (!isContentKey(key) && !extraContentKeys.includes(key)) continue;
       if (!this.opts.captureContent) {
         delete attributes[key];
         continue;

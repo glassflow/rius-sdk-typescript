@@ -223,9 +223,26 @@ describe("init", () => {
     expect(span.status.message).toBeUndefined();
   });
 
-  it("keeps the exception message when captureContent is left at its default", async () => {
+  it("runs the mask over the exception message, as it does over the status", async () => {
     const exporter = new InMemorySpanExporter();
     client = testInit({ mask: () => "[redacted]", spanExporter: exporter });
+
+    await expect(
+      startAsCurrentSpan("s", () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    await client.flush();
+
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.events[0].attributes?.["exception.message"]).toBe("[redacted]");
+    expect(span.events[0].attributes?.["exception.stacktrace"]).toBe("[redacted]");
+    expect(span.status.message).toBe("[redacted]");
+  });
+
+  it("keeps the exception message when captureContent is left at its default", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = testInit({ spanExporter: exporter });
 
     await expect(
       startAsCurrentSpan("s", () => {

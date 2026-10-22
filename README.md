@@ -574,12 +574,12 @@ since provider errors routinely echo the request back; the exception
 event and its `exception.type` are kept, so failures stay visible.
 The span's ERROR status message carries the same string, so it is
 blanked too; the status code stays. A `mask` function scrubs content
-attributes on spans, events and links, and runs over the status message
-as well (its `key` is `status.description`). It does not reach the
-exception event: with `captureContent: true`, exception messages and
-stacktraces pass through unmasked, so a raw provider error can still
-reach your backend that way. Disable `captureContent` if you need those
-scrubbed too.
+attributes on spans, events and links, including the message and
+stacktrace of a recorded exception (its `key` is `exception.message` or
+`exception.stacktrace`), and runs over the status message as well (its
+`key` is `status.description`). `exception.type` is never passed to it.
+A mask that returns `null` or `undefined`, or throws, drops that
+attribute; the exception event and its `exception.type` are kept.
 
 `disabled` turns the SDK off completely: nothing is exported, and no
 optional integration is loaded, so no third-party module is patched in your
