@@ -143,6 +143,19 @@ export interface SpanOptions {
 // agreeing; on newer Node it is already defined and this is a no-op.
 (Symbol as { dispose?: symbol }).dispose ??= Symbol.for("Symbol.dispose");
 
+/**
+ * `String(value)` for a non-Error throwable, or a placeholder when it cannot be
+ * stringified: `String(Object.create(null))` throws, and that TypeError would
+ * replace the caller's own error on its way out of a span.
+ */
+function describeThrown(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return "[unstringifiable thrown value]";
+  }
+}
+
 /** A handle over a span. Chainable setters; `end()` is idempotent. */
 export class Observation {
   protected ended = false;
@@ -205,7 +218,7 @@ export class Observation {
    * throwable is wrapped so `recordException` still gets a real Error.
    */
   recordException(error: unknown): this {
-    const wrapped = error instanceof Error ? error : new Error(String(error));
+    const wrapped = error instanceof Error ? error : new Error(describeThrown(error));
     // Typed by class, so the event's exception.type and error.type agree.
     this.span.recordException(exceptionForRecording(wrapped));
     this.span.setStatus({ code: SpanStatusCode.ERROR, message: wrapped.message });

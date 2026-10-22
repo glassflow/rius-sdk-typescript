@@ -318,15 +318,50 @@ describe("the bridge", () => {
     expect(names(riusExporter)).toEqual(["still-alive"]);
   });
 
+  it("leaves the other SDK's globals working after shutdown", async () => {
+    const theirs = installForeign();
+    initBridged();
+    await rius().shutdown();
+    client = undefined;
+
+    // Through the API globals, the way the other SDK's own instrumentation
+    // reaches its provider: the tracer, the context manager that parents
+    // spans, and the propagator must all still be the ones it registered.
+    const tracer = trace.getTracer("customer.jobs");
+    const parent = tracer.startSpan("parent");
+    context.with(trace.setSpan(context.active(), parent), () => {
+      tracer.startSpan("child").end();
+    });
+    parent.end();
+
+    const spans = byName(theirs);
+    expect(Object.keys(spans).sort()).toEqual(["child", "parent"]);
+    expect(spans.child.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
+    expect(propagation.fields()).toContain("traceparent");
+  });
+
+  it("still releases every global its own registration won", async () => {
+    initRius();
+    await rius().shutdown();
+    client = undefined;
+
+    expect(foreignGlobalProviderName()).toBeUndefined();
+    expect(trace.getTracerProvider().getTracer("x").startSpan("s").isRecording()).toBe(false);
+    expect(propagation.fields()).toEqual([]);
+    const key = Symbol("probe");
+    const seen = context.with(ROOT_CONTEXT.setValue(key, 1), () => context.active().getValue(key));
+    expect(seen).toBeUndefined();
+  });
+
   it("re-targets its one forwarder on re-init instead of stacking another", async () => {
     installForeign();
     initBridged();
     await rius().shutdown();
     const attachedAfterFirst = other().attached.length;
 
-    // The second init() finds the SAME foreign provider still registered: only
-    // the client's own global registration was released.
-    other().register();
+    // The second init() finds the SAME foreign provider still registered:
+    // shutdown() releases only what Rius's own registration won, never the
+    // other SDK's globals.
     const riusExporter = initBridged();
     jobWithLlmChild(other());
     await rius().flush();

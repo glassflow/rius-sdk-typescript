@@ -1,6 +1,7 @@
 import type { AttributeValue } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import { contextSizes, textContents } from "./contextSizes.js";
+import { errorType } from "./errorType.js";
 import { recordSplits, type TextSplit } from "./mediaParts.js";
 import { type Message, normalizeMessages } from "./messages.js";
 import { REQUEST_PARAMETER_GUARDS } from "./normalize.js";
@@ -35,6 +36,7 @@ import {
 } from "./semconv.js";
 import { attributeValue, toAttributeValue } from "./serde.js";
 import { Observation, runActive, splitScopedArgs } from "./spans.js";
+import { warnOnce } from "./warn.js";
 
 /**
  * Options for {@link startGeneration} and {@link startAsCurrentGeneration}:
@@ -135,6 +137,32 @@ function splitsFor(messages: Message[]): Map<string, TextSplit | undefined> {
   return new Map(textContents(messages).map((text) => [text, undefined]));
 }
 
+/**
+ * Normalize `value` into messages, their text splits and the content
+ * attribute, or warn and return undefined when the caller's value cannot be
+ * read: a throwing getter or a revoked Proxy must not throw out of a setter
+ * into the app.
+ *
+ * Normalized once: the content attribute is the (truncated) serialization of
+ * this list, and the sizes are measured on the same list, untruncated. Nothing
+ * is committed until all three are built, so a skipped write leaves the
+ * generation as it was.
+ */
+function recordMessages(
+  value: unknown,
+  defaultRole: "user" | "assistant",
+  setter: string,
+): [Message[], Map<string, TextSplit | undefined>, AttributeValue] | undefined {
+  try {
+    const messages = normalizeMessages(value, defaultRole);
+    const splits = splitsFor(messages);
+    return [messages, splits, recordSplits(splits, () => toAttributeValue(messages))];
+  } catch (error) {
+    warnOnce(`Generation.${setter}() skipped: the value could not be read (${errorType(error)}).`);
+    return undefined;
+  }
+}
+
 /** An LLM call. Content uses gen_ai message keys, never input.value. */
 export class Generation extends Observation {
   private firstTokenRecorded = false;
@@ -205,25 +233,21 @@ export class Generation extends Observation {
    * lists are all accepted. Bare strings default to the `user` role.
    */
   setInput(value: unknown): this {
-    // Normalize once: the content attribute is the (truncated) serialization
-    // of this list, and the sizes are measured on the same list, untruncated.
-    this.inputMessages = normalizeMessages(value, "user");
-    this.inputSplits = splitsFor(this.inputMessages);
-    this.span.setAttribute(
-      GEN_AI_INPUT_MESSAGES,
-      recordSplits(this.inputSplits, () => toAttributeValue(this.inputMessages)),
-    );
+    const recorded = recordMessages(value, "user", "setInput");
+    if (recorded !== undefined) {
+      [this.inputMessages, this.inputSplits] = recorded;
+      this.span.setAttribute(GEN_AI_INPUT_MESSAGES, recorded[2]);
+    }
     return this;
   }
 
   /** Record the response messages (`gen_ai.output.messages`); bare strings default to `assistant`. */
   setOutput(value: unknown): this {
-    this.outputMessages = normalizeMessages(value, "assistant");
-    this.outputSplits = splitsFor(this.outputMessages);
-    this.span.setAttribute(
-      GEN_AI_OUTPUT_MESSAGES,
-      recordSplits(this.outputSplits, () => toAttributeValue(this.outputMessages)),
-    );
+    const recorded = recordMessages(value, "assistant", "setOutput");
+    if (recorded !== undefined) {
+      [this.outputMessages, this.outputSplits] = recorded;
+      this.span.setAttribute(GEN_AI_OUTPUT_MESSAGES, recorded[2]);
+    }
     return this;
   }
 

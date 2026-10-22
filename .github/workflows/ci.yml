@@ -426,6 +426,25 @@ jobs:
             if (!p.peerDependencies?.['@opentelemetry/api']) throw new Error('must be a peerDependency');
             if (p.dependencies?.['@opentelemetry/api']) throw new Error('must not be a dependency');
           "
-          if grep -rq "AsyncLocalStorageContextManager" dist/*.js dist/*.cjs; then
-            echo "::error::@opentelemetry/api appears bundled into dist"; exit 1
-          fi
+          # Naming an API export proves nothing: dist legitimately imports
+          # them. A bundled copy shows up as the package's own internals: the
+          # Symbol.for key it registers its globals under, and the class bodies
+          # it defines. Each format must also still load the peer at runtime.
+          node -e "
+            const fs = require('fs');
+            const files = { 'dist/index.js': /from\s+[\"']@opentelemetry\/api[\"']/, 'dist/index.cjs': /require\([\"']@opentelemetry\/api[\"']\)/ };
+            const inlined = {
+              '@opentelemetry/api global key': /opentelemetry\.js\.api\./,
+              '@opentelemetry/api ProxyTracerProvider': /class\s+ProxyTracerProvider\b|\bProxyTracerProvider\s*=\s*class\b/,
+              '@opentelemetry/context-async-hooks AsyncLocalStorageContextManager': /class\s+(AsyncLocalStorage|AbstractAsyncHooks)ContextManager\b|\b(AsyncLocalStorage|AbstractAsyncHooks)ContextManager\s*=\s*class\b/,
+            };
+            let failed = false;
+            for (const [file, loads] of Object.entries(files)) {
+              const src = fs.readFileSync(file, 'utf8');
+              if (!loads.test(src)) { console.log('::error::' + file + ' does not load @opentelemetry/api at runtime'); failed = true; }
+              for (const [what, re] of Object.entries(inlined)) {
+                if (re.test(src)) { console.log('::error::' + file + ' contains a bundled copy of ' + what); failed = true; }
+              }
+            }
+            if (failed) process.exit(1);
+          "

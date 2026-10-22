@@ -144,14 +144,16 @@ describe("registerWorkspace", () => {
     expect(perKey["key-initech"].getFinishedSpans().map((s) => s.name)).toEqual(["late"]);
   });
 
-  it("throws when routing was not enabled at init", async () => {
+  it("warns and skips when routing was not enabled at init", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     defaultExporter = new InMemorySpanExporter();
     client = init({
       spanExporter: defaultExporter,
       heartbeatTransport: async () => {},
       serviceName: "test-svc",
     });
-    expect(() => registerWorkspace("acme", "key-acme")).toThrow(/workspaces/);
+    expect(() => registerWorkspace("acme", "key-acme")).not.toThrow();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("workspaces"))).toBe(true);
   });
 
   it("an empty workspaces map opts into pure-dynamic routing", async () => {

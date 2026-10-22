@@ -284,8 +284,10 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
         // a remote tool call is CLIENT under both the MCP and the GenAI
         // execute-tool conventions.
         otelKind: OtelSpanKind.CLIENT,
-        toolName: params.name,
-        input: params.arguments,
+        // Optional chaining: a call without params must reach the MCP SDK,
+        // which rejects it, rather than throw here synchronously.
+        toolName: params?.name,
+        input: params?.arguments,
         attributes: callAttributes(negotiatedProtocolVersion(this)),
       },
       async (observation) => {
