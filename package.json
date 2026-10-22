@@ -93,7 +93,7 @@
   "devDependencies": {
     "@ai-sdk/openai": "^4.0.94",
     "@ai-sdk/otel": "^1.0.141",
-    "@anthropic-ai/sdk": "^0.133.0",
+    "@anthropic-ai/sdk": "^0.135.0",
     "@arizeai/openinference-instrumentation-anthropic": "0.2.11",
     "@arizeai/openinference-instrumentation-langchain": "4.1.4",
     "@arizeai/openinference-instrumentation-openai": "^4.4.1",
