@@ -131,3 +131,52 @@ describe("pending spans", () => {
     expect(pending[0].attributes[SESSION_ID]).toBe("sess-p");
   });
 });
+
+describe("an empty session id", () => {
+  it("is treated as unset: warned about once per process, never stamped", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      testInit();
+      await withSession("", async () => {
+        startSpan("s").end();
+      });
+      await withSession("", async () => {});
+      await client.flush();
+      expect(exporter.getFinishedSpans()[0].attributes[SESSION_ID]).toBeUndefined();
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("falls through to the outer scope and the init default", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      testInit({ sessionId: "proc-wide" });
+      await withSession("", async () => {
+        startSpan("default").end();
+      });
+      await withSession("outer", async () =>
+        withSession("", async () => {
+          startSpan("outer").end();
+        }),
+      );
+      await client.flush();
+      const byName = new Map(exporter.getFinishedSpans().map((s) => [s.name, s]));
+      expect(byName.get("default")?.attributes[SESSION_ID]).toBe("proc-wide");
+      expect(byName.get("outer")?.attributes[SESSION_ID]).toBe("outer");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still runs the callback and returns its value", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      testInit();
+      expect(await withSession("", async () => 7)).toBe(7);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

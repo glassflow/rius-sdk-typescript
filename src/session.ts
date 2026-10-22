@@ -24,6 +24,7 @@ import { context as apiContext, type Context, createContextKey, trace } from "@o
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { twinOf } from "./foreign.js";
 import { SESSION_ID } from "./semconv.js";
+import { warnOnce } from "./warn.js";
 
 const SESSION_KEY = createContextKey("rius-session-id");
 
@@ -58,6 +59,14 @@ export function withSession<T>(
     typeof sessionIdOrFn === "function"
       ? [randomUUID(), sessionIdOrFn]
       : [sessionIdOrFn, maybeFn as (sessionId: string) => T];
+  if (sessionId === "") {
+    // Blank means unset, as it does for init({ sessionId }) and
+    // RIUS_SESSION_ID: the enclosing scope or the default still applies.
+    warnOnce(
+      "withSession was given an empty session id; it is ignored and the spans keep the enclosing session. Omit the id to mint one.",
+    );
+    return fn(sessionId);
+  }
   return apiContext.with(apiContext.active().setValue(SESSION_KEY, sessionId), () => fn(sessionId));
 }
 

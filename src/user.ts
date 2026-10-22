@@ -24,8 +24,9 @@
  * on a throw, and follow async continuations the same way the active span
  * does.
  */
-import { context as apiContext, type Context, createContextKey } from "@opentelemetry/api";
+import { context as apiContext, type Context, createContextKey, trace } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { twinOf } from "./foreign.js";
 import { USER_ID } from "./semconv.js";
 
 const USER_KEY = createContextKey("rius-user-id");
@@ -51,14 +52,21 @@ export function withUser<T>(userId: string, fn: (userId: string) => T): T {
 }
 
 /**
- * Stamps `user.id` on every span started inside a `withUser` scope. Outside
- * any scope the attribute is not set; there is no default to fall back to,
+ * Stamps `user.id` on every span started inside a `withUser` scope, or under
+ * a parent span that carries one. Otherwise the attribute is not set; there is no default to fall back to,
  * by design (see the module comment).
  */
 export class UserSpanProcessor implements SpanProcessor {
   onStart(span: Span, parentContext: Context): void {
     const value = parentContext.getValue(USER_KEY);
-    if (typeof value === "string") span.setAttribute(USER_ID, value);
+    // The scope, then the parent span's own stamp: a callback that lost the
+    // async context and re-parented by hand keeps its parent's user, as it
+    // keeps its session. Through twinOf, for the bridge's twins (foreign.ts).
+    const parent = twinOf(trace.getSpan(parentContext)) as unknown as ReadableSpan | undefined;
+    const inherited = parent?.attributes?.[USER_ID];
+    const userId =
+      typeof value === "string" ? value : typeof inherited === "string" ? inherited : undefined;
+    if (userId !== undefined) span.setAttribute(USER_ID, userId);
   }
 
   onEnd(_span: ReadableSpan): void {}

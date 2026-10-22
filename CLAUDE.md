@@ -91,8 +91,9 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
 
 ## Versioning & releases
 
-- The version lives in `src/index.ts` (`VERSION`, annotated
-  `// x-release-please-version`) and `package.json`. **Do not** edit it by hand or
+- The version lives in `src/version.ts` (`SDK_VERSION`, annotated
+  `// x-release-please-version`, re-exported as `VERSION`) and `package.json`.
+  Never read `package.json` at runtime: in a bundled app it is the app's. **Do not** edit it by hand or
   hand-write `CHANGELOG.md`.
 - Releases are automated by **release-please**: merging its Release PR bumps the
   version, tags, and publishes.

@@ -1,20 +1,10 @@
-import { createRequire } from "node:module";
-
 /**
  * The SDK's own version, for the tracer scope, the `telemetry.distro.version`
- * resource attribute and the heartbeat payload.
+ * resource attribute and the heartbeat payload, and exported as `VERSION`.
  *
- * Resolved once at module load, the same way the OTLP exporter's user-agent
- * reads its own version: `package.json` is one directory up from both
- * `src/*.ts` (during tests) and the bundled `dist/*.js` (at runtime). Not the
- * `VERSION` constant in index.ts: importing that here would make every module
- * depend on the package entry point.
+ * A literal bumped by release-please (an `extra-files` entry), never read
+ * from `package.json` at runtime: once an application bundles the SDK, a
+ * path relative to this module resolves to the APPLICATION's package.json,
+ * and every span would report the app's version as the SDK's.
  */
-export const SDK_VERSION: string = (() => {
-  try {
-    const pkg = createRequire(import.meta.url)("../package.json") as { version?: string };
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
+export const SDK_VERSION: string = "1.6.0"; // x-release-please-version

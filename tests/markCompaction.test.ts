@@ -704,6 +704,32 @@ describe("the processor's memory of undecided spans", () => {
       expect(held().size).toBe(0);
     }),
   );
+
+  it(
+    "is bounded when spans never end, forgetting the oldest first",
+    isolated(async () => {
+      const processor = new CompactionFlagSpanProcessor(2);
+      const held = () => (processor as unknown as { undecided: Map<string, unknown> }).undecided;
+      markCompaction();
+      const spans = ["a", "b", "c", "d"].map((c) => fakeSpan(c.repeat(16)));
+      for (const span of spans) processor.onStart(span, ROOT_CONTEXT);
+      expect(held().size).toBe(2);
+      // The oldest were forgotten: ending one as an LLM span claims nothing.
+      const ended = (span: Span) =>
+        ({ ...span, attributes: { [OPENINFERENCE_SPAN_KIND]: "LLM" } }) as unknown as ReadableSpan;
+      const first = ended(spans[0]);
+      processor.onEnd(first);
+      expect(first.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+      const last = ended(spans[3]);
+      processor.onEnd(last);
+      expect(last.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+    }),
+  );
+
+  it("has a default bound", () => {
+    const processor = new CompactionFlagSpanProcessor();
+    expect((processor as unknown as { maxUndecided: number }).maxUndecided).toBeGreaterThan(0);
+  });
 });
 
 describe("pending snapshots", () => {

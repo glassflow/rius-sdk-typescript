@@ -392,10 +392,23 @@ function spanKey(span: { spanContext(): { traceId: string; spanId: string } }): 
 export class CompactionFlagSpanProcessor implements SpanProcessor {
   private readonly undecided = new Map<string, PendingFlag>();
 
+  /**
+   * @param maxUndecided How many undecided spans are remembered at once. A
+   *   span that never ends is never removed, so without a bound each one
+   *   would be held for the life of the process. Past it the oldest is
+   *   forgotten, which only costs it the chance to take a flag.
+   */
+  constructor(private readonly maxUndecided = 10_000) {}
+
   onStart(span: Span, _parentContext: Context): void {
     const flag = pendingFlag.getStore();
     if (flag === undefined || !flag.pending) return;
     if (!isKnown(span.attributes)) {
+      if (this.undecided.size >= this.maxUndecided) {
+        // A Map iterates in insertion order: the first key is the oldest.
+        const [oldest] = this.undecided.keys();
+        if (oldest !== undefined) this.undecided.delete(oldest);
+      }
       this.undecided.set(spanKey(span), flag);
       return;
     }

@@ -1,5 +1,3 @@
-export const VERSION = "1.6.0"; // x-release-please-version
-
 export type { InitOptions } from "./client.js";
 export { getTracer, init, RiusClient } from "./client.js";
 export type { Mask, RiusOptions } from "./config.js";
@@ -19,5 +17,6 @@ export { withSession } from "./session.js";
 export type { SpanBody, SpanOptions } from "./spans.js";
 export { Observation, startAsCurrentSpan, startSpan } from "./spans.js";
 export { withUser } from "./user.js";
+export { SDK_VERSION as VERSION } from "./version.js";
 export type { WorkspaceExporterFactory } from "./workspace.js";
 export { registerWorkspace, withWorkspace } from "./workspace.js";

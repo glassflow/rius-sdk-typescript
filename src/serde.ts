@@ -106,18 +106,25 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 /**
  * Coerce an arbitrary value into something an OTel attribute accepts, bounded
- * by {@link MAX_ATTR_CHARS}. Must never throw: this runs on the user's data on
+ * by {@link MAX_ATTR_CHARS} and well formed (see {@link textValue}: the cut
+ * can split a surrogate pair). Must never throw: this runs on the user's data on
  * the hot path.
  */
 export function toAttributeValue(value: unknown): string | number | boolean {
-  if (typeof value === "string") return truncate(value);
+  if (typeof value === "string") return textValue(value);
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (value === null || value === undefined) return "";
   if (typeof value === "bigint") return String(value);
   // Track the ANCESTOR chain, not every object seen. A global seen-set would
   // report a shared sibling reference ({ a: x, b: x }) as circular and drop
   // real data, which is a plausible shape in LLM message payloads.
+  // Each ancestor is kept twice: as rendered, which is the holder JSON.stringify
+  // passes as `this` to its children, and as it came. A Map or Set renders to
+  // a NEW object on every visit, so only the original can recognize a cycle
+  // through one; checked against the rendered object, a self-referential Map
+  // recursed until the stack ran out and the whole payload was lost.
   const ancestors: unknown[] = [];
+  const originals: unknown[] = [];
   try {
     const text =
       JSON.stringify({ "": value }[""], function (this: unknown, key: string, v: unknown) {
@@ -128,13 +135,16 @@ export function toAttributeValue(value: unknown): string | number | boolean {
           // reflects the path from the root rather than traversal order.
           while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
             ancestors.pop();
+            originals.pop();
           }
-          if (ancestors.includes(rendered)) return "[Circular]";
+          const original = typeof raw === "object" && raw !== null ? raw : rendered;
+          if (originals.includes(original) || ancestors.includes(rendered)) return "[Circular]";
           ancestors.push(rendered);
+          originals.push(original);
         }
         return rendered;
       }) ?? String(value);
-    return truncate(text);
+    return textValue(text);
   } catch {
     return "[unserializable]";
   }
