@@ -1,0 +1,618 @@
+{
+  "match": [
+    "token",
+    "usage",
+    "cost",
+    "price"
+  ],
+  "normalizers": [
+    "python",
+    "typescript",
+    "sink"
+  ],
+  "producers": {
+    "openinference": {
+      "name": "OpenInference",
+      "prefixes": [
+        "llm.token_count.",
+        "llm.cost.",
+        "metadata.ai."
+      ]
+    },
+    "openllmetry": {
+      "name": "OpenLLMetry",
+      "prefixes": [
+        "llm.usage."
+      ]
+    },
+    "vercel": {
+      "name": "the Vercel AI SDK",
+      "prefixes": [
+        "ai."
+      ]
+    },
+    "pydantic_ai": {
+      "name": "pydantic-ai",
+      "prefixes": [
+        "operation.cost",
+        "pydantic_ai."
+      ]
+    }
+  },
+  "keys": [
+    {
+      "key": "gen_ai.usage.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.output_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.cache_read.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.cache_write.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.reasoning.output_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.text.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.text.output_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.text.cache_read.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.image.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.image.output_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.image.cache_read.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.audio.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.audio.output_tokens",
+      "decision": "canonical"
+    },
+    {
+      "key": "gen_ai.usage.audio.cache_read.input_tokens",
+      "decision": "canonical"
+    },
+    {
+      "prefix": "rius.aggregated_usage.",
+      "decision": "canonical",
+      "reason": "A whole agent run's usage, moved off gen_ai.usage.* by the TypeScript\nSDK on producers known to repeat it on each call's span. Never read as\nusage, so the run is not counted twice.\n"
+    },
+    {
+      "key": "llm.token_count.prompt",
+      "decision": "mapped",
+      "target": "gen_ai.usage.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "LLMTokenCountPrompt",
+      "reason": "Copied, never summed with the cache counts: every bundled instrumentor\nalready reports it inclusive of them.\n"
+    },
+    {
+      "key": "llm.token_count.completion",
+      "decision": "mapped",
+      "target": "gen_ai.usage.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "LLMTokenCountCompletion"
+    },
+    {
+      "key": "llm.token_count.prompt_details.cache_read",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_read.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "LLMTokenCountPromptCacheRead"
+    },
+    {
+      "key": "llm.token_count.prompt_details.cache_write",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_write.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "LLMTokenCountPromptCacheWrite"
+    },
+    {
+      "key": "llm.token_count.completion_details.reasoning",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "LLMTokenCountCompletionReasoning"
+    },
+    {
+      "key": "llm.token_count.total",
+      "decision": "ignored",
+      "go": "LLMTokenCountTotal",
+      "reason": "The conventions define no total: they record input and output and leave\nthe sum to the reader. The sink reads it for validation only.\n"
+    },
+    {
+      "key": "llm.token_count.prompt_details.audio",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "A subset of the input count, never added to it."
+    },
+    {
+      "key": "llm.token_count.completion_details.audio",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "A subset of the output count, never added to it."
+    },
+    {
+      "key": "llm.cost.total",
+      "type": "double",
+      "decision": "ignored",
+      "reason": "Cost stays off the wire on purpose: the backend prices from the token\ncounts with its own table, so a producer's figure is never trusted.\n"
+    },
+    {
+      "key": "gen_ai.usage.cache_creation.input_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_write.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "GenAIUsageCacheCreationInputTokens",
+      "reason": "The cache-write count's name before the conventions renamed it.\nCurrent releases still send it (pydantic-ai, @ai-sdk/otel), and the\nbackend prices cache writes from the canonical key alone.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.reasoning_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "GenAIUsageDetailsReasoningTokens",
+      "reason": "pydantic-ai's OpenAI reasoning split."
+    },
+    {
+      "key": "gen_ai.usage.details.thinking_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "GenAIUsageDetailsThinkingTokens",
+      "reason": "pydantic-ai's Anthropic reasoning split."
+    },
+    {
+      "key": "gen_ai.usage.details.thoughts_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "go": "GenAIUsageDetailsThoughtsTokens",
+      "reason": "pydantic-ai's Google reasoning split."
+    },
+    {
+      "key": "gen_ai.usage.details.cache_read_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_read.input_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "go": "GenAIUsageDetailsCacheReadTokens",
+      "reason": "pydantic-ai's backwards-compatible copy of the cache-read count, which\nit also writes under the canonical key. The sink maps it only as a\nfallback; the SDKs leave it, since the canonical key is always there.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.cache_write_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_write.input_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "go": "GenAIUsageDetailsCacheWriteTokens",
+      "reason": "As cache_read_tokens, for cache writes."
+    },
+    {
+      "key": "gen_ai.usage.details.audio_tokens",
+      "decision": "ignored",
+      "reason": "pydantic-ai's OpenAI output audio count: its chat adapter copies\ncompletion_tokens_details whole, and its realtime adapter writes the\noutput audio under this name. The name carries no direction, and\npydantic-ai writes the same count as details.output_audio_tokens,\nwhich is mapped, so this copy stays.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.input_audio_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's audio input count. A subset of the input count, never\nadded to it. On Gemini it is the audio prompt split plus the audio\ntool-use prompt split, so it wins over details.audio_prompt_tokens.\nOpenInference's and @ai-sdk/otel's audio input keys win over it.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.cache_audio_read_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.cache_read.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's cached audio input count. A subset of the cache-read\ncount, never added to it. Wins over details.audio_cache_tokens, which\ncarries the same count on Gemini.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.output_audio_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's audio output count. A subset of the output count, never\nadded to it. Wins over details.audio_candidates_tokens and\ndetails.audio_response_tokens, which carry the same count on Gemini.\nOpenInference's audio output key wins over it.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.image_prompt_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.image.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google image input split (promptTokensDetails, modality\nIMAGE). A subset of the input count, never added to it.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.image_cache_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.image.cache_read.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google cached image split (cacheTokensDetails, modality\nIMAGE). A subset of the cache-read count, never added to it.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.image_candidates_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.image.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google image output split (candidatesTokensDetails,\nmodality IMAGE). A subset of the output count, never added to it.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.audio_prompt_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google audio input split (promptTokensDetails, modality\nAUDIO). A subset of the input count, never added to it. A fallback for\ndetails.input_audio_tokens, which wins.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.audio_cache_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.cache_read.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google cached audio split (cacheTokensDetails, modality\nAUDIO). A subset of the cache-read count, never added to it. A fallback\nfor details.cache_audio_read_tokens, which wins.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.audio_candidates_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google audio output split (candidatesTokensDetails,\nmodality AUDIO). A subset of the output count, never added to it. A\nfallback for details.output_audio_tokens, which wins.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.image_tool_use_prompt_tokens",
+      "decision": "ignored",
+      "reason": "The image part of Google's tool-use prompt, a second image input split\nbeside image_prompt_tokens. The image input key would be their sum, and\na normalizer renames a count, never adds two, so it stays.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.image_response_tokens",
+      "decision": "ignored",
+      "reason": "The image output split on pydantic-ai's realtime path (the Gemini Live\nAPI's responseTokensDetails). Live output is text or audio, so no image\ncount is expected there, and nothing reads one.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.audio_response_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.output_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "pydantic-ai's Google audio output split on its realtime path (the\nGemini Live API's responseTokensDetails, modality AUDIO). A subset of\nthe output count, never added to it. A fallback for\ndetails.output_audio_tokens, which wins.\n"
+    },
+    {
+      "key": "gen_ai.usage.details.audio_tool_use_prompt_tokens",
+      "decision": "ignored",
+      "reason": "The audio part of Google's tool-use prompt, a second audio input split\nbeside audio_prompt_tokens. genai-prices already adds it into the\ndetails.input_audio_tokens count that pydantic-ai writes, which is\nmapped, and a normalizer renames a count, never adds two, so it stays.\n"
+    },
+    {
+      "key": "gen_ai.usage.input_token_details.audio_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.audio.input_tokens",
+      "mapped_by": [
+        "python",
+        "typescript",
+        "sink"
+      ],
+      "reason": "@ai-sdk/otel's flattening of a provider's input_token_details on a\ntranscription span (OpenAI's gpt-4o-transcribe). A subset of the input\ncount, never added to it.\n"
+    },
+    {
+      "key": "gen_ai.usage.input_token_details.text_tokens",
+      "decision": "gap",
+      "reason": "The text subset of a transcription span's input, beside\ninput_token_details.audio_tokens. It belongs in\ngen_ai.usage.text.input_tokens, but no normalizer maps it yet, so the\ntext split of the input is not attributed.\n"
+    },
+    {
+      "prefix": "gen_ai.aggregated_usage.",
+      "decision": "ignored",
+      "reason": "pydantic-ai's whole-run total on its agent span, next to each call's\nusage on the call's own span. Reading it as usage would count the run\ntwice; it stays under its own name, which nothing reads.\n"
+    },
+    {
+      "key": "operation.cost",
+      "type": "double",
+      "decision": "ignored",
+      "reason": "pydantic-ai's own price for the call. Cost stays off the wire on\npurpose, as with llm.cost.total.\n"
+    },
+    {
+      "prefix": "pydantic_ai.cache.",
+      "decision": "not_usage",
+      "reason": "pydantic-ai's prompt-cache health diagnostics (the cached prefix a\nconversation established, hit ratio, misses), not provider usage.\n"
+    },
+    {
+      "key": "gen_ai.usage.prompt_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.input_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "reason": "OpenLLMetry's input count before the GenAI rename (0.47 and earlier)."
+    },
+    {
+      "key": "gen_ai.usage.completion_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.output_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "reason": "OpenLLMetry's output count before the GenAI rename (0.47 and earlier)."
+    },
+    {
+      "key": "gen_ai.usage.cache_read_input_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_read.input_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "reason": "OpenLLMetry's and Laminar's cache-read count (Anthropic's field name)."
+    },
+    {
+      "key": "gen_ai.usage.cache_creation_input_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_write.input_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "reason": "OpenLLMetry's and Laminar's cache-write count (Anthropic's field name)."
+    },
+    {
+      "key": "gen_ai.usage.reasoning_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "reason": "OpenLLMetry's reasoning count."
+    },
+    {
+      "key": "llm.usage.reasoning_tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "sink"
+      ],
+      "reason": "OpenLLMetry's reasoning count in older releases."
+    },
+    {
+      "key": "gen_ai.usage.total_tokens",
+      "decision": "ignored",
+      "reason": "Not a convention key: OpenLLMetry's total. No canonical key holds a\ntotal, so it stays on the span as an extra.\n"
+    },
+    {
+      "key": "llm.usage.total_tokens",
+      "decision": "ignored",
+      "reason": "OpenLLMetry's and Laminar's total, as gen_ai.usage.total_tokens."
+    },
+    {
+      "key": "ai.usage.inputTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.input_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ],
+      "reason": "Inclusive of the cached tokens, as the canonical key is."
+    },
+    {
+      "key": "ai.usage.promptTokens",
+      "decision": "ignored",
+      "reason": "v5's input count on generateText and generateObject, left unread on\npurpose. On a model call the AI SDK writes the same value to\ngen_ai.usage.input_tokens itself. On the generateText wrapper v5 takes\nit from the LAST step's response, not the run's total (v5's streams and\nv6 report the total under ai.usage.inputTokens), so mapping it to\nrius.aggregated_usage.* would put a short total under a key that\npromises the whole run.\n"
+    },
+    {
+      "key": "ai.usage.tokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.input_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ],
+      "reason": "An embedding call's input count (ai.embed, ai.embedMany and their doEmbed)."
+    },
+    {
+      "key": "ai.usage.outputTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.output_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ]
+    },
+    {
+      "key": "ai.usage.completionTokens",
+      "decision": "ignored",
+      "reason": "v5's output count on generateText and generateObject; as ai.usage.promptTokens."
+    },
+    {
+      "key": "ai.usage.inputTokenDetails.cacheReadTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_read.input_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ]
+    },
+    {
+      "key": "ai.usage.cachedInputTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_read.input_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ],
+      "reason": "v5's cache-read count, still written beside the detailed spelling by\nv6. Without it cached input was priced as uncached.\n"
+    },
+    {
+      "key": "ai.usage.inputTokenDetails.cacheWriteTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.cache_write.input_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ]
+    },
+    {
+      "key": "ai.usage.outputTokenDetails.reasoningTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ]
+    },
+    {
+      "key": "ai.usage.reasoningTokens",
+      "decision": "mapped",
+      "target": "gen_ai.usage.reasoning.output_tokens",
+      "mapped_by": [
+        "typescript",
+        "sink"
+      ],
+      "reason": "v5's reasoning count, still written beside the detailed spelling by v6."
+    },
+    {
+      "key": "ai.usage.inputTokenDetails.noCacheTokens",
+      "decision": "ignored",
+      "reason": "The uncached remainder of ai.usage.inputTokens. The conventions record\nthe inclusive input count and the cached part; this is their difference.\n"
+    },
+    {
+      "key": "ai.usage.outputTokenDetails.textTokens",
+      "decision": "ignored",
+      "reason": "The non-reasoning remainder of ai.usage.outputTokens; the conventions\nrecord the inclusive output count and the reasoning part.\n"
+    },
+    {
+      "key": "ai.usage.totalTokens",
+      "decision": "ignored",
+      "reason": "A total; the conventions define none."
+    },
+    {
+      "key": "ai.settings.maxOutputTokens",
+      "decision": "not_usage",
+      "reason": "A request parameter, mapped to gen_ai.request.max_tokens (which the AI\nSDK also writes itself on a model call).\n"
+    },
+    {
+      "key": "ai.response.usage",
+      "type": "string",
+      "decision": "ignored",
+      "reason": "@ai-sdk/otel's speech and transcription spans, with its usage option:\nthe provider's usage object whole, as a JSON string, in whatever units\nthe provider bills (tokens, seconds, characters). The integration also\nwrites its numeric leaves on the same span as gen_ai.usage.<key>, which\nis what is read (input_tokens, output_tokens) or decided above, so\nparsing this would count the same usage twice.\n"
+    },
+    {
+      "key": "ai.response.avgOutputTokensPerSecond",
+      "type": "double",
+      "decision": "not_usage",
+      "reason": "A throughput figure, not a count."
+    },
+    {
+      "key": "metadata.ai.response.avgOutputTokensPerSecond",
+      "type": "double",
+      "decision": "not_usage",
+      "reason": "@arizeai/openinference-vercel's metadata.* mirror of\nai.response.avgOutputTokensPerSecond. No recording carries it: the\nTypeScript SDK no longer runs that transform. An app can still run the\npackage's span processor itself on a provider the SDK bridges onto, and\nits spans then carry the mirror, so the entry stays.\n"
+    },
+    {
+      "key": "gen_ai.request.max_tokens",
+      "decision": "not_usage",
+      "reason": "A request parameter (registry/model_parameters.yaml), not usage."
+    }
+  ]
+}
