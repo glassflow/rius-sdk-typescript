@@ -75,24 +75,35 @@ export interface ObserveOptions {
  * wrapper's result is a compile error. Only that exact interface counts: an
  * array, a string, a Set, a Map or a Node stream is iterable too, but a plain
  * function returning one is not a generator function at runtime and keeps its
- * Promise. A type cannot see the function kind, so a plain function annotated
- * as returning exactly one of those interfaces is typed as an iterator, while
- * at runtime it returns a Promise; give such a function the concrete type it
- * returns.
+ * Promise. A type cannot see the function kind, which leaves these cases
+ * typed differently from what the wrapper returns at runtime:
+ *
+ * - A plain function annotated as returning exactly one of those interfaces
+ *   is typed as an iterator but returns a Promise; give it the concrete type
+ *   it returns.
+ * - A plain function returning a built-in iterator (`arr.values()`,
+ *   `map.entries()`, `set.values()`, `str.matchAll(re)`), which the type
+ *   system sees as exactly `IterableIterator<T>`, is typed as that iterator
+ *   but returns a Promise.
+ * - A generator function annotated with a union such as
+ *   `Iterable<T> | undefined` is typed as a Promise but returns a generator.
  *
  * Non-distributive (the tuple wrapping) so a union return type is not split,
  * and `any` stays a Promise: `any` would otherwise satisfy the generator arm
- * and turn every untyped callback's wrapper into a generator.
+ * and turn every untyped callback's wrapper into a generator. `never` (a
+ * function that only throws) is a Promise for the same reason.
  */
 export type ObservedReturn<R> = 0 extends 1 & R
   ? Promise<R>
-  : [R] extends [AsyncGenerator<infer T, infer TReturn, infer TNext>]
-    ? AsyncGenerator<T, TReturn, TNext>
-    : [R] extends [Generator<infer T, infer TReturn, infer TNext>]
-      ? Generator<T, TReturn, TNext>
-      : IsIterationInterface<R> extends true
-        ? R
-        : Promise<Awaited<R>>;
+  : [R] extends [never]
+    ? Promise<never>
+    : [R] extends [AsyncGenerator<infer T, infer TReturn, infer TNext>]
+      ? AsyncGenerator<T, TReturn, TNext>
+      : [R] extends [Generator<infer T, infer TReturn, infer TNext>]
+        ? Generator<T, TReturn, TNext>
+        : IsIterationInterface<R> extends true
+          ? R
+          : Promise<Awaited<R>>;
 
 /**
  * True when `R` is exactly one of the iteration interfaces a generator

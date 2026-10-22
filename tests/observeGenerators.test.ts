@@ -408,6 +408,36 @@ describe("observe's return type", () => {
       Promise<Map<number, string>>
     >();
   });
+
+  it("is a Promise of never for a function that only throws", () => {
+    // `never` would otherwise satisfy the generator arm and type the wrapper
+    // of a function that always throws as an async generator.
+    const fail = (): never => {
+      throw new Error("always");
+    };
+    expectTypeOf(observe(fail)).returns.toEqualTypeOf<Promise<never>>();
+  });
+
+  it("pins the documented caveats a type cannot see past", () => {
+    // A built-in iterator is exactly an iteration interface to the type
+    // system, so a plain function returning one is typed as that iterator,
+    // although its wrapper returns a Promise at runtime.
+    expectTypeOf(observe(() => [1].values())).returns.toEqualTypeOf<ArrayIterator<number>>();
+    expectTypeOf(observe(() => new Map([[1, "a"]]).entries())).returns.toEqualTypeOf<
+      MapIterator<[number, string]>
+    >();
+    expectTypeOf(observe(() => new Set([1]).values())).returns.toEqualTypeOf<SetIterator<number>>();
+    expectTypeOf(observe((s: string) => s.matchAll(/a/g))).returns.toEqualTypeOf<
+      RegExpStringIterator<RegExpExecArray>
+    >();
+    // A union is not split, so a generator function annotated with an
+    // iteration interface or undefined is typed as a Promise, although its
+    // wrapper returns a generator at runtime.
+    function* maybe(): Iterable<number> | undefined {
+      yield 1;
+    }
+    expectTypeOf(observe(maybe)).returns.toEqualTypeOf<Promise<Iterable<number> | undefined>>();
+  });
 });
 
 describe("observe on a generator function annotated with an iteration interface", () => {

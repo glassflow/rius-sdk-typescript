@@ -178,12 +178,20 @@ span open.
 The wrapper's type follows the generator's: `Generator`/`AsyncGenerator`
 when inferred, or the declared type when the generator function is annotated
 with exactly `Iterable<T>`, `IterableIterator<T>`, `AsyncIterable<T>` or
-`AsyncIterableIterator<T>`, so `.then()` on it does not compile. A type cannot
-see the function kind, so a plain function annotated as returning exactly one
-of those interfaces is typed as an iterator although its wrapper returns a
-promise; annotate it with the concrete type it returns instead. A function
+`AsyncIterableIterator<T>`, so `.then()` on it does not compile. A function
 returning an array, a string, a `Set` or a `Map` is typed as a promise, as it
-runs.
+runs. A type cannot see the function kind, so a few cases are typed
+differently from what the wrapper returns:
+
+- A plain function annotated as returning exactly one of those interfaces is
+  typed as an iterator although its wrapper returns a promise; annotate it
+  with the concrete type it returns instead.
+- A plain function returning a built-in iterator, such as `arr.values()`,
+  `map.entries()`, `set.values()` or `str.matchAll(re)`, is typed as that
+  iterator although its wrapper returns a promise.
+- A generator function annotated with a union such as
+  `Iterable<T> | undefined` is typed as a promise although its wrapper
+  returns a generator; annotate it with the iteration interface alone.
 
 An AGENT span (from `observe`, `startSpan` or `startAsCurrentSpan`) can also
 carry `agentId` and `agentVersion`, which describe the agent it *invoked*, as
