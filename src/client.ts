@@ -36,6 +36,7 @@ import {
   EVENT_COUNT_LIMIT_ENV,
 } from "./compaction.js";
 import { namedAgent, type OperatorMainAgent, type RiusOptions, resolveConfig } from "./config.js";
+import { CredentialHeaderDroppingExporter } from "./credentialHeaders.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
 import {
@@ -597,14 +598,16 @@ export function init(options: InitOptions = {}): RiusClient {
     }
     health = new ExportOutcomeExporter(base);
     // Masking is outermost so spans are sanitised before the health wrapper
-    // hands them to OTLP.
+    // hands them to OTLP. Credential headers are dropped whatever the
+    // content settings say, so that wrapper is always there.
+    const credentials = new CredentialHeaderDroppingExporter(health);
     const exporter =
       !config.captureContent || config.mask !== undefined
-        ? new MaskingSpanExporter(health, {
+        ? new MaskingSpanExporter(credentials, {
             captureContent: config.captureContent,
             mask: config.mask,
           })
-        : health;
+        : credentials;
     // Outermost: a bridged span arrives carrying the OTHER provider's resource,
     // from which the sink can derive neither the agent name nor the instance
     // id. Rius's own spans already hold `resource` and pass through untouched.
