@@ -376,3 +376,25 @@ describe("OTEL_RESOURCE_ATTRIBUTES prototype keys", () => {
     });
   });
 });
+
+describe("setAttribute with an array holding an array or a mapping", () => {
+  const m = (n: number) => `[stripped unknown ${n} bytes]`;
+
+  for (const [label, value, written] of [
+    ["a nested array beside a number", [[1, new Uint8Array(1)]], `[[1,"${m(1)}"]]`],
+    ["a nested array of a byte object", [[new Uint8Array(1)]], `[["${m(1)}"]]`],
+    ["a nested array beside null", [null, [1, new Uint8Array(1)]], `[null,[1,"${m(1)}"]]`],
+    ["a nested array beside a string", ["x", [1, new Uint8Array(1)]], `["x",[1,"${m(1)}"]]`],
+    ["a mapping holding a byte object", [{ k: new Uint8Array(2) }], `[{"k":"${m(2)}"}]`],
+    ["nested strings", [["x"], ["y"]], '[["x"],["y"]]'],
+  ] as const) {
+    it(`writes ${label} as one JSON string, as Python does`, async () => {
+      const exporter = start();
+      startSpan("s")
+        .setAttribute("k", value as unknown)
+        .end();
+      const [span] = await finished(exporter);
+      expect(span.attributes.k).toBe(written);
+    });
+  }
+});
