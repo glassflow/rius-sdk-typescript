@@ -8,9 +8,11 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type InitOptions, init, type RiusClient } from "../src/client.js";
-import { resolveConfig } from "../src/config.js";
+import { otelResourceAttributes, resolveConfig } from "../src/config.js";
+import { contextSizes } from "../src/contextSizes.js";
 import { MaskingSpanExporter } from "../src/masking.js";
 import { normalizeMessages, serializeMessages } from "../src/messages.js";
+import { toInt } from "../src/normalize.js";
 import { observe } from "../src/observe.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 
@@ -273,5 +275,104 @@ describe("sampleRate option", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(resolveConfig({}, { RIUS_SAMPLE_RATE: "5" }).sampleRate).toBe(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("RIUS_SAMPLE_RATE"));
+  });
+});
+
+describe("a null role in rius.context.sizes", () => {
+  it("is reported as user, whose bytes it already counts as", () => {
+    const sizes = JSON.parse(
+      contextSizes(
+        undefined,
+        [{ role: null, parts: [{ type: "text", content: "hi" }] }],
+        undefined,
+      ),
+    );
+    expect(sizes.input_messages).toEqual([{ role: "user", parts: [{ type: "text", bytes: 2 }] }]);
+  });
+
+  it("does the same for a message with no role to read", () => {
+    const sizes = JSON.parse(contextSizes(undefined, ["hi"], undefined));
+    expect(sizes.input_messages[0].role).toBe("user");
+  });
+
+  it("leaves the null role on the message itself", () => {
+    expect(serializeMessages([{ role: null, content: "hi" }], "user")).toBe(
+      '[{"role":null,"parts":[{"type":"text","content":"hi"}]}]',
+    );
+  });
+});
+
+describe("toInt, as Python's to_int reads a token count", () => {
+  // Python's _count: a non-negative whole number, never a boolean. A string
+  // goes through int() first, so only the integer it spells is read.
+  for (const value of [
+    true,
+    false,
+    12.9,
+    -5,
+    "-5",
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.NaN,
+    "12.9",
+    "12.0",
+    "1e3",
+    "0x10",
+    "",
+    " ",
+    "1__0",
+    "_1",
+    "1_",
+    "12abc",
+    "inf",
+    "nan",
+  ]) {
+    it(`skips ${JSON.stringify(value) ?? String(value)}`, () => {
+      expect(toInt([value])).toBeUndefined();
+    });
+  }
+
+  for (const [value, expected] of [
+    [12, 12],
+    [12.0, 12],
+    [0, 0],
+    [-0, 0],
+    ["12", 12],
+    [" 12\n", 12],
+    ["+12", 12],
+    ["012", 12],
+    ["1_000", 1000],
+    ["-0", 0],
+  ] as const) {
+    const label = Object.is(value, -0) ? "-0" : JSON.stringify(value);
+    it(`reads ${label} as ${expected}`, () => {
+      expect(Object.is(toInt([value]), expected)).toBe(true);
+    });
+  }
+});
+
+describe("OTEL_RESOURCE_ATTRIBUTES prototype keys", () => {
+  it("become own keys and pollute no prototype", () => {
+    const attributes = otelResourceAttributes("__proto__=pp,constructor=cc,toString=ts");
+    expect(Object.getPrototypeOf(attributes)).toBe(Object.prototype);
+    expect(Object.hasOwn(attributes, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(attributes, "__proto__")?.value).toBe("pp");
+    expect(attributes.constructor).toBe("cc");
+    expect(attributes.toString).toBe("ts");
+    const plain: Record<string, unknown> = {};
+    expect(plain.pp).toBeUndefined();
+    expect(Object.prototype.constructor).toBe(Object);
+    expect(Object.prototype.toString).not.toBe("ts");
+  });
+
+  it("do not stand in for a key the variable did not set", () => {
+    vi.stubEnv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=prod");
+    const config = resolveConfig({});
+    expect(config.serviceVersion).toBeUndefined();
+    expect(config.operatorMainAgent).toEqual({
+      id: undefined,
+      name: undefined,
+      description: undefined,
+    });
   });
 });

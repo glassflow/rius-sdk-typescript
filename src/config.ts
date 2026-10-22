@@ -1,3 +1,10 @@
+import {
+  GEN_AI_MAIN_AGENT_DESCRIPTION,
+  GEN_AI_MAIN_AGENT_ID,
+  GEN_AI_MAIN_AGENT_NAME,
+  SERVICE_VERSION,
+} from "./semconv.js";
+
 export const DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com";
 /**
  * What `service.name` AND `agentName` both resolve to when nothing was
@@ -359,7 +366,7 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     serviceVersion:
       options.serviceVersion ||
       env.RIUS_SERVICE_VERSION ||
-      otelResourceAttribute(otelResource, "service.version") ||
+      otelResourceAttribute(otelResource, SERVICE_VERSION) ||
       undefined,
     disabled: options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false),
     sampleRate,
@@ -384,9 +391,9 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
       options.mainAgentDescription || env.RIUS_MAIN_AGENT_DESCRIPTION || undefined,
     mainAgentVersion: options.mainAgentVersion || env.RIUS_MAIN_AGENT_VERSION || undefined,
     operatorMainAgent: {
-      id: otelResourceAttribute(otelResource, "gen_ai.main_agent.id"),
-      name: otelResourceAttribute(otelResource, "gen_ai.main_agent.name"),
-      description: otelResourceAttribute(otelResource, "gen_ai.main_agent.description"),
+      id: otelResourceAttribute(otelResource, GEN_AI_MAIN_AGENT_ID),
+      name: otelResourceAttribute(otelResource, GEN_AI_MAIN_AGENT_NAME),
+      description: otelResourceAttribute(otelResource, GEN_AI_MAIN_AGENT_DESCRIPTION),
     },
     otelResourceAttributes: otelResource,
     partialSpans: options.partialSpans ?? bool("RIUS_PARTIAL_SPANS", env.RIUS_PARTIAL_SPANS, false),

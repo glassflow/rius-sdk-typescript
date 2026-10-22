@@ -537,8 +537,9 @@ allow the entity without an identifier. The deprecated `rius.main_agent.name`,
 window (`rius.main_agent.id` only ever carries a configured `mainAgentId`),
 and `rius.main_agent.version`, which has no upstream twin, carries the
 optional agent version. `gen_ai.agent.name` is still stamped alongside them
-(and, like them, left off for the `unknown_service` placeholder): the keys are additive so that no deployment loses its agent
-identity between an SDK upgrade and a backend one. The main-agent keys exist
+(and, like them, left off for the `unknown_service` placeholder): the keys are
+additive so that no deployment loses its agent identity between an SDK upgrade
+and a backend one. The main-agent keys exist
 because `gen_ai.agent.name` has no resource-level meaning in the conventions
 and on a span means the agent being *invoked*, so one key was answering two
 questions.
