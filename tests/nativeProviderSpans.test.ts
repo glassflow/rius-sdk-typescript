@@ -1,97 +1,118 @@
-import { context, ROOT_CONTEXT, type Span, SpanKind, trace } from "@opentelemetry/api";
+import { ROOT_CONTEXT, SpanKind, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
-  ParentBasedSampler,
-  SamplingDecision,
+  type ReadableSpan,
   SimpleSpanProcessor,
+  type Span,
 } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
-import { DuplicateProviderSpanSampler } from "../src/nativeProviderSpans.js";
-import { GEN_AI_PROVIDER_NAME } from "../src/semconv.js";
+import { NativeProviderSpanDemoter } from "../src/nativeProviderSpans.js";
+import {
+  GEN_AI_OPERATION_NAME,
+  GEN_AI_PROVIDER_NAME,
+  GEN_AI_REQUEST_MODEL,
+  GEN_AI_USAGE_INPUT_TOKENS,
+} from "../src/semconv.js";
 
-// The Anthropic SDK (0.134 and later) starts a CLIENT span of its own for each
-// API call; under the OpenInference Anthropic instrumentation that span is a
-// second LLM span for the same call. These pin which spans the sampler drops.
+// The Anthropic SDK (0.134 and later) traces each API call itself. With the
+// OpenInference Anthropic instrumentation enabled, its chat span repeats the
+// instrumentation's LLM span; these pin what the demoter takes off it and
+// which spans it leaves alone.
 
-const OI_SCOPE = "@arizeai/openinference-instrumentation-anthropic";
 const NATIVE_SCOPE = "com.anthropic.sdk.typescript";
-const PROVIDER = { [GEN_AI_PROVIDER_NAME]: "anthropic" };
-
-function setup() {
-  const exporter = new InMemorySpanExporter();
-  const provider = new BasicTracerProvider({
-    sampler: new DuplicateProviderSpanSampler(new ParentBasedSampler({ root: alwaysOn })),
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
-  });
-  return { exporter, tracer: (scope: string) => provider.getTracer(scope) };
-}
-
-const alwaysOn = {
-  shouldSample: () => ({ decision: SamplingDecision.RECORD_AND_SAMPLED }),
-  toString: () => "on",
+const CHAT = {
+  [GEN_AI_OPERATION_NAME]: "chat",
+  [GEN_AI_PROVIDER_NAME]: "anthropic",
+  [GEN_AI_REQUEST_MODEL]: "claude-test",
+  "http.route": "/v1/messages",
 };
 
-/** OpenInference puts its span in the context wrapped, as `OISpan` does. */
-function oiContext(span: Span) {
-  const wrapped = { span, config: {}, spanContext: () => span.spanContext() };
-  return trace.setSpan(ROOT_CONTEXT, wrapped as unknown as Span);
+function setup(enabled: boolean) {
+  const demoter = new NativeProviderSpanDemoter();
+  if (enabled) demoter.enable();
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({
+    spanProcessors: [demoter, new SimpleSpanProcessor(exporter)],
+  });
+  const finished = (name: string): ReadableSpan | undefined =>
+    exporter.getFinishedSpans().find((s) => s.name === name);
+  return { demoter, finished, tracer: (scope: string) => provider.getTracer(scope) };
 }
 
-describe("the provider SDK's own span under an OpenInference Anthropic span", () => {
-  it("is dropped, with its descendants, and the OpenInference span is kept", () => {
-    const { exporter, tracer } = setup();
-    const oi = tracer(OI_SCOPE).startSpan("Anthropic Messages");
-    for (const ctx of [oiContext(oi), trace.setSpan(ROOT_CONTEXT, oi)]) {
-      const native = tracer(NATIVE_SCOPE).startSpan(
-        "anthropic.messages.create",
-        { kind: SpanKind.CLIENT, attributes: PROVIDER },
-        ctx,
-      );
-      expect(native.isRecording()).toBe(false);
-      // An HTTP attempt span under it follows it out, rather than losing its parent.
-      const attempt = tracer("http").startSpan(
-        "POST",
-        { kind: SpanKind.CLIENT },
-        trace.setSpan(ctx, native),
-      );
-      expect(attempt.isRecording()).toBe(false);
-      attempt.end();
-      native.end();
-    }
-    oi.end();
-    expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["Anthropic Messages"]);
+/** A chat span as the SDK makes one: model and route at start, usage once the reply is read. */
+function nativeCall(tracer: ReturnType<typeof setup>["tracer"]) {
+  const span = tracer(NATIVE_SCOPE).startSpan("anthropic.messages.create", {
+    kind: SpanKind.CLIENT,
+    attributes: CHAT,
   });
+  const attributesAtStart = { ...(span as unknown as ReadableSpan).attributes };
+  // The application's HTTP instrumentation, under the call span.
+  tracer("http")
+    .startSpan("POST", { kind: SpanKind.CLIENT }, trace.setSpan(ROOT_CONTEXT, span))
+    .end();
+  span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, 5);
+  span.setAttribute("http.response.status_code", 200);
+  span.end();
+  return { span, attributesAtStart };
+}
 
-  it("is kept when no OpenInference Anthropic span records the call", () => {
-    const { exporter, tracer } = setup();
-    const parent = tracer("rius").startSpan("agent");
-    context.with(trace.setSpan(ROOT_CONTEXT, parent), () => {
-      tracer(NATIVE_SCOPE)
-        .startSpan("anthropic.messages.create", { kind: SpanKind.CLIENT, attributes: PROVIDER })
-        .end();
+describe("the Anthropic SDK's chat span, with the OpenInference instrumentation enabled", () => {
+  it("is demoted from its start: no LLM operation, model or usage, but still a CLIENT span", () => {
+    const { finished, tracer } = setup(true);
+    const { attributesAtStart } = nativeCall(tracer);
+    expect(attributesAtStart).toEqual({
+      [GEN_AI_PROVIDER_NAME]: "anthropic",
+      "http.route": "/v1/messages",
     });
-    tracer(NATIVE_SCOPE)
-      .startSpan("anthropic.messages.create", { kind: SpanKind.CLIENT, attributes: PROVIDER })
+    const span = finished("anthropic.messages.create");
+    expect(span?.kind).toBe(SpanKind.CLIENT);
+    expect(span?.attributes).toEqual({
+      [GEN_AI_PROVIDER_NAME]: "anthropic",
+      "http.route": "/v1/messages",
+      "http.response.status_code": 200,
+    });
+  });
+
+  it("keeps the HTTP span under it, parented to it", () => {
+    const { finished, tracer } = setup(true);
+    const { span } = nativeCall(tracer);
+    expect(finished("POST")?.parentSpanContext?.spanId).toBe(span.spanContext().spanId);
+  });
+
+  it("leaves the SDK's tool runner spans, which have no OpenInference counterpart", () => {
+    const { finished, tracer } = setup(true);
+    for (const operation of ["execute_tool", "invoke_agent"]) {
+      tracer(NATIVE_SCOPE)
+        .startSpan(operation, { attributes: { [GEN_AI_OPERATION_NAME]: operation } })
+        .end();
+      expect(finished(operation)?.attributes[GEN_AI_OPERATION_NAME]).toBe(operation);
+    }
+  });
+
+  it("leaves chat spans from any other scope", () => {
+    const { finished, tracer } = setup(true);
+    tracer("@arizeai/openinference-instrumentation-anthropic")
+      .startSpan("Anthropic Messages", { attributes: CHAT })
       .end();
-    parent.end();
-    expect(exporter.getFinishedSpans()).toHaveLength(3);
+    expect(finished("Anthropic Messages")?.attributes).toEqual(CHAT);
   });
+});
 
-  it("keeps other spans under an OpenInference Anthropic span", () => {
-    const { exporter, tracer } = setup();
-    const oi = tracer(OI_SCOPE).startSpan("Anthropic Messages");
-    const ctx = oiContext(oi);
-    // An HTTP span with no provider name (an SDK without native tracing).
-    tracer("http").startSpan("POST", { kind: SpanKind.CLIENT }, ctx).end();
-    // A provider-named span that is not a CLIENT call.
-    tracer("x").startSpan("inner", { attributes: PROVIDER }, ctx).end();
-    oi.end();
-    expect(exporter.getFinishedSpans()).toHaveLength(3);
+describe("the Anthropic SDK's chat span, without the OpenInference instrumentation", () => {
+  it("stays the call's LLM span", () => {
+    const { finished, tracer } = setup(false);
+    nativeCall(tracer);
+    expect(finished("anthropic.messages.create")?.attributes).toMatchObject({
+      ...CHAT,
+      [GEN_AI_USAGE_INPUT_TOKENS]: 5,
+    });
   });
+});
 
-  it("never throws into startSpan, whatever sits in the context", () => {
-    const { tracer } = setup();
+describe("a span the demoter cannot read", () => {
+  it("never throws into span creation", () => {
+    const { demoter } = setup(true);
     const hostile = new Proxy(
       {},
       {
@@ -99,16 +120,24 @@ describe("the provider SDK's own span under an OpenInference Anthropic span", ()
           throw new Error("boom");
         },
       },
+    ) as Span;
+    expect(() => demoter.onStart(hostile, ROOT_CONTEXT)).not.toThrow();
+  });
+
+  it("never throws into span end, for a span it took at start", () => {
+    const { demoter } = setup(true);
+    // A chat span whose attribute bag cannot be listed: taken at start, then
+    // unreadable at both hooks.
+    const attributes = new Proxy(
+      { [GEN_AI_OPERATION_NAME]: "chat" },
+      {
+        ownKeys() {
+          throw new Error("boom");
+        },
+      },
     );
-    const ctx = trace.setSpan(ROOT_CONTEXT, hostile as unknown as Span);
-    const sampler = new DuplicateProviderSpanSampler({
-      shouldSample: () => ({ decision: SamplingDecision.RECORD_AND_SAMPLED }),
-    });
-    expect(
-      sampler.shouldSample(ctx, `${"0".repeat(31)}1`, "x", SpanKind.CLIENT, PROVIDER, []).decision,
-    ).toBe(SamplingDecision.RECORD_AND_SAMPLED);
-    expect(() =>
-      tracer(NATIVE_SCOPE).startSpan("y", { kind: SpanKind.CLIENT }, ROOT_CONTEXT),
-    ).not.toThrow();
+    const span = { instrumentationScope: { name: NATIVE_SCOPE }, attributes } as unknown as Span;
+    expect(() => demoter.onStart(span, ROOT_CONTEXT)).not.toThrow();
+    expect(() => demoter.onEnd(span)).not.toThrow();
   });
 });

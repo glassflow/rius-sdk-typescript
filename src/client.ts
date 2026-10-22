@@ -52,7 +52,7 @@ import {
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
 import { enableInstrumentations, type InstrumentModules } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
-import { DuplicateProviderSpanSampler } from "./nativeProviderSpans.js";
+import { NativeProviderSpanDemoter } from "./nativeProviderSpans.js";
 import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
 import {
@@ -577,6 +577,8 @@ export function init(options: InitOptions = {}): RiusClient {
   let health: ExportOutcomeExporter | undefined;
   let routing: RoutingSpanExporter | undefined;
   let detector: ForeignParentDetector | undefined;
+  // Enabled with the OpenInference Anthropic instrumentation, below.
+  const demoter = new NativeProviderSpanDemoter();
   if (!config.disabled) {
     let base =
       options.spanExporter ??
@@ -630,6 +632,9 @@ export function init(options: InitOptions = {}): RiusClient {
     // the queue) decides what is content. At onStart it must run before the
     // pending processor snapshots the span, so the snapshot's canonical
     // identity allowlist matches. Always on; there is no opt-out.
+    // Ahead of normalization at both hooks: a demoted span must not have its
+    // LLM kind derived from the operation it is about to lose.
+    processors.add(demoter);
     processors.add(new NormalizingSpanProcessor(undefined, spanLimits.eventCountLimit));
     processors.add(new SessionSpanProcessor(config.sessionId));
     processors.add(new UserSpanProcessor());
@@ -658,10 +663,7 @@ export function init(options: InitOptions = {}): RiusClient {
     // Wrapped because ParentBased follows the PARENT's sampled flag, and a
     // bridged parent's flag is the other SDK's decision (usually always-on),
     // which would ship every trace it touches whatever sampleRate says.
-    // Outermost: the Anthropic SDK's own span for a call the OpenInference
-    // instrumentation already records is a duplicate LLM span, dropped at
-    // creation whatever the rate (see nativeProviderSpans.ts).
-    sampler: new DuplicateProviderSpanSampler(sampler),
+    sampler,
     // Already resolved against the environment; see resolveSpanLimits().
     spanLimits,
     spanProcessors: [processors],
@@ -681,6 +683,11 @@ export function init(options: InitOptions = {}): RiusClient {
     ? Promise.resolve<string[]>([])
     : enableInstrumentations(provider, undefined, teardown, {
         instrumentModules: options.instrumentModules,
+        onEnabled: (name) => {
+          // From here every Anthropic call has an OpenInference LLM span, so
+          // the Anthropic SDK's own chat span would be a second one.
+          if (name === "anthropic") demoter.enable();
+        },
       });
 
   // Registered even when disabled: a provider whose only processor has no

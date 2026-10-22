@@ -93,6 +93,11 @@ export interface EnableOptions {
    * `package.json` in `process.cwd()`; a test passes its own.
    */
   declaredDependencies?: () => ReadonlySet<string>;
+  /**
+   * Called with each integration's name as soon as it is enabled, before the
+   * next one loads. A throw is caught and the integration stays enabled.
+   */
+  onEnabled?: (name: string) => void;
 }
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
@@ -724,6 +729,11 @@ export async function enableInstrumentations(
       // "self-applying" entries already took effect inside load(); there is
       // nothing further to attach.
       enabled.push(entry.name);
+      try {
+        options?.onEnabled?.(entry.name);
+      } catch {
+        // The integration is attached either way; the callback is the caller's.
+      }
     } catch (error) {
       // Only reached when load() THREW, which means the package was reachable
       // but enabling it failed: a constructor rejecting its input, or a patch
