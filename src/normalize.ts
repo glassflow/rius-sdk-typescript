@@ -14,7 +14,6 @@ import {
   isDataUrl,
   NOT_CAPTURED,
   rebuildNativeMediaParts,
-  stripRawPayload,
   uriModality,
   urlPart,
 } from "./mediaParts.js";
@@ -83,7 +82,7 @@ import {
   RIUS_REQUEST_TOOL_CHOICE,
   SpanKind,
 } from "./semconv.js";
-import { toAttributeValue, wellFormed } from "./serde.js";
+import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -2318,12 +2317,10 @@ function stripBag(attributes: Record<string, AttributeValue | undefined> | undef
   if (attributes === undefined) return;
   for (const [key, value] of Object.entries(attributes)) {
     if (typeof value === "string") {
-      const stripped = stripRawPayload(value);
+      const stripped = stripMedia(value);
       if (stripped !== value) attributes[key] = stripped;
     } else if (Array.isArray(value) && value.some((item) => typeof item === "string")) {
-      const stripped = value.map((item) =>
-        typeof item === "string" ? stripRawPayload(item) : item,
-      );
+      const stripped = value.map((item) => (typeof item === "string" ? stripMedia(item) : item));
       if (stripped.some((item, i) => item !== value[i])) {
         attributes[key] = stripped as AttributeValue;
       }
