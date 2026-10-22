@@ -133,13 +133,14 @@ describe("pending spans", () => {
 });
 
 describe("an empty session id", () => {
-  it("is treated as unset: warned about, never stamped", async () => {
+  it("is treated as unset: warned about once per process, never stamped", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       testInit();
       await withSession("", async () => {
         startSpan("s").end();
       });
+      await withSession("", async () => {});
       await client.flush();
       expect(exporter.getFinishedSpans()[0].attributes[SESSION_ID]).toBeUndefined();
       expect(warn).toHaveBeenCalledOnce();

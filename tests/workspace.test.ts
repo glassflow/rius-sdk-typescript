@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
 import { PENDING_IDENTITY_ATTRIBUTES, RIUS_SPAN_PENDING, WORKSPACE_ROUTE } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
-import { registerWorkspace, withWorkspace } from "../src/workspace.js";
+import { RoutingSpanExporter, registerWorkspace, withWorkspace } from "../src/workspace.js";
 
 let client: RiusClient;
 let defaultExporter: InMemorySpanExporter;
@@ -287,5 +287,98 @@ describe("key rotation", () => {
     await client.flush();
     registerWorkspace("acme", "key-old");
     expect(shut).toEqual([]);
+  });
+
+  function factoryInit(shutdown: () => unknown): void {
+    defaultExporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: defaultExporter,
+      workspaces: { acme: "key-old" },
+      workspaceExporterFactory: (apiKey: string) => {
+        if (apiKey !== "key-old") return new InMemorySpanExporter();
+        return {
+          export: (_spans, cb) => cb({ code: ExportResultCode.SUCCESS }),
+          forceFlush: async () => {},
+          shutdown: shutdown as () => Promise<void>,
+        };
+      },
+      heartbeatTransport: async () => {},
+      serviceName: "test-svc",
+    });
+  }
+
+  async function touchOldKey(): Promise<void> {
+    await withWorkspace("acme", async () => {
+      startSpan("s").end();
+    });
+    await client.flush();
+  }
+
+  it("shutdown waits for a rotated-out exporter to finish draining", async () => {
+    let release = (): void => {};
+    factoryInit(() => new Promise<void>((resolve) => (release = resolve)));
+    await touchOldKey();
+    registerWorkspace("acme", "key-new");
+    let done = false;
+    const shutting = client.shutdown().then(() => {
+      done = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(done).toBe(false);
+    release();
+    await shutting;
+    expect(done).toBe(true);
+  });
+
+  it.each(["forceFlush", "shutdown"] as const)(
+    "%s waits for a rotated-out exporter to finish draining",
+    async (method) => {
+      // Direct, so each method is checked on its own: the SDK's batch
+      // processor does not forward forceFlush to its exporter, so
+      // client.flush() cannot reach that path.
+      routedInit(); // only so afterEach has a client to shut down
+      let release = (): void => {};
+      const routing = new RoutingSpanExporter(
+        new InMemorySpanExporter(),
+        (apiKey) =>
+          apiKey === "key-old"
+            ? {
+                export: (_spans, cb) => cb({ code: ExportResultCode.SUCCESS }),
+                shutdown: () => new Promise<void>((resolve) => (release = resolve)),
+              }
+            : new InMemorySpanExporter(),
+        { acme: "key-old" },
+      );
+      const span = { attributes: { [WORKSPACE_ROUTE]: "acme" } } as unknown as ReadableSpan;
+      await new Promise((r) => routing.export([span], r));
+      routing.register("acme", "key-new");
+      let done = false;
+      const settling = routing[method]().then(() => {
+        done = true;
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(done).toBe(false);
+      release();
+      await settling;
+      expect(done).toBe(true);
+    },
+  );
+
+  it("a factory exporter whose shutdown throws never throws out of registerWorkspace", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    factoryInit(() => {
+      throw new Error("boom");
+    });
+    await touchOldKey();
+    expect(() => registerWorkspace("acme", "key-new")).not.toThrow();
+    await client.flush();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
+  });
+
+  it("a factory exporter whose shutdown returns no promise never throws out of registerWorkspace", async () => {
+    factoryInit(() => undefined);
+    await touchOldKey();
+    expect(() => registerWorkspace("acme", "key-new")).not.toThrow();
+    await client.flush();
   });
 });

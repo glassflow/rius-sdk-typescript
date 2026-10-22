@@ -27,6 +27,7 @@ import {
 } from "./semconv.js";
 import { attributeValue, toAttributeValue } from "./serde.js";
 import { withUser } from "./user.js";
+import { warnOnce } from "./warn.js";
 
 /** Options for {@link startSpan} and {@link startAsCurrentSpan}. */
 export interface SpanOptions {
@@ -259,14 +260,6 @@ function resolveToolName(options: SpanOptions, name: string | undefined): string
     );
   }
   return name;
-}
-
-/** One warning per distinct message; a per-span warning would flood a loop. */
-const warned = new Set<string>();
-function warnOnce(message: string): void {
-  if (warned.has(message)) return;
-  warned.add(message);
-  console.warn(`[rius] ${message}`);
 }
 
 /**

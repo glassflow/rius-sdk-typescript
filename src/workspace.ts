@@ -121,6 +121,8 @@ export class RoutingSpanExporter implements SpanExporter {
   private readonly routes: Map<string, string>;
   private readonly exporters = new Map<string, SpanExporter>();
   private readonly warnedAliases = new Set<string>();
+  /** Shutdowns of rotated-out exporters, awaited by flush and shutdown. */
+  private readonly retiring = new Set<Promise<void>>();
 
   constructor(
     private readonly defaultExporter: SpanExporter,
@@ -145,16 +147,24 @@ export class RoutingSpanExporter implements SpanExporter {
    * Shut down the exporter of a key no route uses any more. Exporters are
    * keyed by API key, so after a rotation nothing would ever reach or close
    * the old one: each rotation leaked an exporter and its connections. Not
-   * awaited: shutdown lets the exporter's in-flight sends finish first.
+   * awaited here: shutdown lets the exporter's in-flight sends finish first,
+   * and forceFlush and shutdown await it so a rotation followed by a process
+   * exit does not lose the old key's last batch. Started inside a promise so
+   * a factory exporter whose shutdown throws or returns no promise warns
+   * instead of throwing into registerWorkspace.
    */
   private retire(apiKey: string): void {
     for (const key of this.routes.values()) if (key === apiKey) return;
     const exporter = this.exporters.get(apiKey);
     if (exporter === undefined) return;
     this.exporters.delete(apiKey);
-    exporter.shutdown().catch((error: unknown) => {
-      console.warn(`[rius] shutting down a rotated workspace exporter failed: ${String(error)}`);
-    });
+    const done: Promise<void> = Promise.resolve()
+      .then(() => exporter.shutdown())
+      .catch((error: unknown) => {
+        console.warn(`[rius] shutting down a rotated workspace exporter failed: ${String(error)}`);
+      })
+      .finally(() => this.retiring.delete(done));
+    this.retiring.add(done);
   }
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
@@ -212,11 +222,13 @@ export class RoutingSpanExporter implements SpanExporter {
   async forceFlush(): Promise<void> {
     await this.defaultExporter.forceFlush?.();
     await Promise.all([...this.exporters.values()].map((e) => e.forceFlush?.()));
+    await Promise.all(this.retiring);
   }
 
   async shutdown(): Promise<void> {
     await this.defaultExporter.shutdown();
     await Promise.all([...this.exporters.values()].map((e) => e.shutdown()));
+    await Promise.all(this.retiring);
   }
 }
 
