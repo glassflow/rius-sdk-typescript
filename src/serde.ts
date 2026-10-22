@@ -38,8 +38,15 @@ const BASE64_RUN =
 /** The shortest run the fallback takes for media rather than a word. */
 const MIN_MEDIA_RUN = 64;
 
-/** A JSON string, or one bracket outside any. */
-const STRING_OR_BRACKET = /"(?:[^"\\]|\\.)*"|[[\]{}]/gs;
+/**
+ * A JSON string, or one bracket outside any. A string the text ends inside
+ * (a cut payload, possibly cut after a backslash) runs to the end of the text
+ * rather than failing: a failed match would restart at the next quote, which
+ * in double-encoded JSON is the next escaped quote, and rescan to the end
+ * each time. Its brackets then count as a string's, on top of the depth it
+ * sits at, as the scan's upper bound already assumes.
+ */
+const STRING_OR_BRACKET = /"(?:[^"\\]|\\.)*(?:"|\\?$)|[[\]{}]/gs;
 
 /**
  * The media strip, plus a fallback for a text nested deeper than its parser

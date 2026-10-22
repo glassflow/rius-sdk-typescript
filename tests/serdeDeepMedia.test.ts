@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
 import { stripSpanPayloads } from "../src/normalize.js";
-import { textValue, toAttributeValue } from "../src/serde.js";
+import { stripMedia, textValue, toAttributeValue } from "../src/serde.js";
 
 // The media strip's parser gives up past its depth limit, so a text nested
 // deeper is not JSON to it and only its data URLs are found: a keyed image's
@@ -72,5 +72,59 @@ describe("text within the parser's depth", () => {
     const text = toAttributeValue(shallow);
     expect(text).not.toContain(head);
     expect(text).toContain('"media_type":"image/png"');
+  });
+});
+
+describe("a string cut before its closing quote", () => {
+  // JSON text inside a JSON string (a tool that returns JSON, serialised
+  // again), cut by a length limit, leaves a string that never closes and is
+  // full of escaped quotes. The depth scan must read it once, not restart at
+  // every escaped quote: that took seconds at 128 KB.
+  const rows = Array.from({ length: 5000 }, (_, i) => ({
+    id: i,
+    name: `row ${i}`,
+    tags: ["a", "b"],
+  }));
+  const doubleEncoded = JSON.stringify({ result: JSON.stringify(rows) });
+  // A generous bound: the linear scan takes a few milliseconds, the quadratic
+  // one seconds, so a slow CI runner cannot turn one into the other.
+  const BOUND_MS = 500;
+
+  function timed(text: string): number {
+    const start = performance.now();
+    stripMedia(text);
+    return performance.now() - start;
+  }
+
+  it("is scanned in linear time when double-encoded JSON is cut", () => {
+    const cut = doubleEncoded.slice(0, 150 * 1024);
+    expect(cut.length).toBe(150 * 1024);
+    expect(timed(cut)).toBeLessThan(BOUND_MS);
+  });
+
+  it("is scanned in linear time when made of escaped quotes", () => {
+    expect(timed(`"${'\\"'.repeat(40_000)}${"[".repeat(70)}`)).toBeLessThan(BOUND_MS);
+  });
+
+  it("is scanned in linear time when cut after a backslash", () => {
+    expect(timed(`"${'\\"'.repeat(40_000)}${"[".repeat(70)}\\`)).toBeLessThan(BOUND_MS);
+  });
+
+  it.each([
+    ["mid-string", (text: string) => text.slice(0, text.length - 200)],
+    ["after a backslash", (text: string) => `${text.slice(0, text.lastIndexOf("\\"))}\\`],
+  ])("still has deep keyed base64 stripped when cut %s", (_, cut) => {
+    // The image sits past the parser's depth inside a stringified JSON, and
+    // the string is cut before it closes, so no parser reads the text.
+    const text = JSON.stringify({ s: JSON.stringify(nested(image(data), 70)) });
+    const truncated = cut(text);
+    expect(truncated).toContain(head);
+    expect(stripMedia(truncated)).not.toContain(head);
+  });
+
+  it("keeps a long word in a short unterminated string", () => {
+    const word = "a".repeat(200);
+    const text = `{"s": "${word} \\"x\\": ${"[".repeat(10)}`;
+    expect(stripMedia(text)).toBe(text);
   });
 });
