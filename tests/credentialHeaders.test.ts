@@ -33,6 +33,12 @@ describe("isCredentialHeaderKey", () => {
     "ai.request.headers.x-goog-api-key",
     "ai.request.headers.x-auth-token",
     "ai.request.headers.X-Client-Secret",
+    // Gateways' own key headers: Portkey, LiteLLM, Kong, Azure APIM, Helicone.
+    "ai.request.headers.x-portkey-api-key",
+    "ai.request.headers.x-litellm-api-key",
+    "ai.request.headers.x-apikey",
+    "http.request.header.ocp_apim_subscription_key",
+    "ai.request.headers.helicone-auth",
     "http.request.header.authorization",
     "http.response.header.set-cookie",
     // OpenTelemetry Python's HTTP instrumentations spell the header with "_".
@@ -57,6 +63,9 @@ describe("isCredentialHeaderKey", () => {
     // Only a whole hyphen-separated word: "token" alone is not "-token".
     "ai.request.headers.token",
     "ai.request.headers.x-tokens",
+    "ai.request.headers.x-ratelimit-remaining-tokens",
+    // -api-key, not a bare -key.
+    "ai.request.headers.idempotency-key",
   ])("keeps %s", (key) => {
     expect(isCredentialHeaderKey(key)).toBe(false);
   });

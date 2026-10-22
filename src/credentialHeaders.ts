@@ -39,6 +39,12 @@ export class CredentialHeaderDroppingExporter implements SpanExporter {
   constructor(private readonly inner: SpanExporter) {}
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
+    // In place is safe here, though the Python SDK copies. Rius's own spans
+    // are already rewritten in place by MaskingSpanExporter in this same
+    // chain. A span bridged from another provider never arrives as itself:
+    // foreign.ts stamped() hands this pipeline a copy with its attributes,
+    // event attributes and link attributes spread into new objects, so the
+    // span the other vendor is exporting is left untouched.
     for (const span of spans) {
       dropCredentialHeaders(span.attributes as Record<string, unknown> | undefined);
       for (const event of span.events ?? []) {
