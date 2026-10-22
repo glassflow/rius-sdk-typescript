@@ -214,12 +214,17 @@ export function observe<F extends (...args: never[]) => unknown>(
     // called: a generator that is never iterated runs none of its code and
     // should leave no span behind, pending or otherwise.
     const step = openIterationSpan(name, spanOptionsFor(args), options.agentName);
-    const inner = step.run(() => fn.apply(this, args as never[]) as Generator);
+    // Calling the generator function runs its parameter destructuring and
+    // default values, which may throw, so it is inside the try that records
+    // the error and ends the span.
+    let inner: Generator | undefined;
     let resume: Resume = { throwing: false, value: undefined };
     try {
+      const generator = step.run(() => fn.apply(this, args as never[]) as Generator);
+      inner = generator;
       while (true) {
         const result = step.run(() =>
-          resume.throwing ? inner.throw(resume.value) : inner.next(resume.value),
+          resume.throwing ? generator.throw(resume.value) : generator.next(resume.value),
         );
         if (result.done) return result.value;
         try {
@@ -236,7 +241,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       // Reached on completion, on a throw, and on the caller's return()
       // (a `break` out of for-of). Closing an already finished generator is a
       // no-op; closing a suspended one runs its finally blocks now.
-      closeIteration(step, () => inner.return(undefined));
+      closeIteration(step, () => inner?.return(undefined));
     }
   };
 
@@ -246,14 +251,16 @@ export function observe<F extends (...args: never[]) => unknown>(
   ): AsyncGenerator<unknown, unknown, unknown> {
     // See the synchronous wrapper; this is the same loop with awaits.
     const step = openIterationSpan(name, spanOptionsFor(args), options.agentName);
-    const inner = step.run(() => fn.apply(this, args as never[]) as AsyncGenerator);
+    let inner: AsyncGenerator | undefined;
     let resume: Resume = { throwing: false, value: undefined };
     try {
+      const generator = step.run(() => fn.apply(this, args as never[]) as AsyncGenerator);
+      inner = generator;
       while (true) {
         // Calling next() inside the step's context is enough for the body's
         // own awaits: async continuations keep the context they started in.
         const result = await step.run(() =>
-          resume.throwing ? inner.throw(resume.value) : inner.next(resume.value),
+          resume.throwing ? generator.throw(resume.value) : generator.next(resume.value),
         );
         if (result.done) return result.value;
         try {
@@ -266,7 +273,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       step.observation.recordException(error);
       throw error;
     } finally {
-      await closeAsyncIteration(step, () => inner.return(undefined));
+      await closeAsyncIteration(step, () => inner?.return(undefined));
     }
   };
 
@@ -342,7 +349,7 @@ function closeIteration(step: IterationStep, close: () => unknown): void {
 /** {@link closeIteration} for an async generator. */
 async function closeAsyncIteration(
   step: IterationStep,
-  close: () => Promise<unknown>,
+  close: () => Promise<unknown> | undefined,
 ): Promise<void> {
   try {
     await step.run(close);

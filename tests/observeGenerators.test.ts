@@ -191,6 +191,20 @@ describe("observe on a generator function", () => {
     };
     expect([...holder.list()]).toEqual([7, 8]);
   });
+
+  it("records and ends the span when the generator's parameters throw", async () => {
+    // Destructuring and default values run when the generator function is
+    // called, before its body, so they fail on the wrapper's first step.
+    const observedGen = observe(function* gen({ n }: { n: number }) {
+      yield n;
+    });
+    expect(() => observedGen(undefined as never).next()).toThrow(TypeError);
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(2);
+    expect(spans[0].attributes["error.type"]).toBe("TypeError");
+    expect(spans[0].events.filter((e) => e.name === "exception")).toHaveLength(1);
+  });
 });
 
 describe("observe on an async generator function", () => {
@@ -321,6 +335,21 @@ describe("observe on an async generator function", () => {
     });
     const byName = Object.fromEntries((await finished()).map((s) => [s.name, s]));
     expect(byName.stream.parentSpanContext?.spanId).toBe(outerId);
+  });
+
+  it("records and ends the span when the generator's default value throws", async () => {
+    const fail = (): number => {
+      throw new RangeError("bad default");
+    };
+    const observedGen = observe(async function* gen(n: number = fail()) {
+      yield n;
+    });
+    await expect(observedGen().next()).rejects.toThrow("bad default");
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(2);
+    expect(spans[0].attributes["error.type"]).toBe("RangeError");
+    expect(spans[0].events.filter((e) => e.name === "exception")).toHaveLength(1);
   });
 });
 
