@@ -33,3 +33,10 @@ updates:
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # TypeScript and tsup majors change the toolchain (tsup 9 drops Node 18,
+      # TypeScript 7 breaks the build and lint tooling), so they are planned by
+      # hand rather than taken as routine bumps.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "tsup"
+        update-types: ["version-update:semver-major"]
