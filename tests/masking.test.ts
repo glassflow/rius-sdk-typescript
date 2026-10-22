@@ -265,6 +265,40 @@ describe("MaskingSpanExporter events and links", () => {
     expect(seenKeys.sort()).toEqual(["exception.message", "exception.stacktrace"]);
   });
 
+  it.each([
+    [
+      "throws",
+      () => {
+        throw new Error("mask failed");
+      },
+    ],
+    ["returns null", () => null],
+    ["returns undefined", () => undefined],
+  ])("drops exception message and stacktrace when the mask %s", (_label, mask) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const inner = new Capture();
+    new MaskingSpanExporter(inner, { captureContent: true, mask }).export(
+      [
+        richSpan({
+          events: [
+            {
+              name: "exception",
+              attributes: {
+                "exception.type": "BadRequestError",
+                "exception.message": "SECRET",
+                "exception.stacktrace": "at call (SECRET)",
+              },
+            },
+          ],
+        }),
+      ],
+      () => {},
+    );
+    const event = inner.seen[0].events[0];
+    expect(event.name).toBe("exception");
+    expect(event.attributes).toEqual({ "exception.type": "BadRequestError" });
+  });
+
   it("does not treat exception.message as content outside an exception event", () => {
     const inner = new Capture();
     new MaskingSpanExporter(inner, { captureContent: true, mask: () => "[REDACTED]" }).export(
@@ -617,6 +651,28 @@ describe("model parameters that carry the prompt itself", () => {
     const out = inner.seen[0].attributes as Record<string, unknown>;
     expect(JSON.stringify(out)).not.toContain("SECRET");
     expect(out["gen_ai.request.model"]).toBe("gpt-4o");
+  });
+});
+
+describe("provider spellings of prompt-bearing model parameters", () => {
+  // rius.request.<key> keeps the caller's spelling, so Gemini's contents and
+  // system_instruction and a structured-output response_format are content
+  // just like messages and system.
+  it("are stripped from a generation under captureContent: false", async () => {
+    const exporter = new InMemorySpanExporter();
+    client = init({ spanExporter: exporter, captureContent: false, heartbeat: false });
+    startGeneration("chat", {
+      modelParameters: {
+        contents: [{ role: "user", parts: [{ text: "SECRET" }] }],
+        system_instruction: "SECRET system prompt",
+        response_format: { type: "json_schema", json_schema: { name: "SECRET" } },
+        temperature: 0.7,
+      },
+    }).end();
+    await client.flush();
+    const attributes = exporter.getFinishedSpans()[0].attributes;
+    expect(JSON.stringify(attributes)).not.toContain("SECRET");
+    expect(attributes["gen_ai.request.temperature"]).toBe(0.7);
   });
 });
 
