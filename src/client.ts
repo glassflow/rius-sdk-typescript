@@ -52,6 +52,7 @@ import {
 import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
 import { enableInstrumentations, type InstrumentModules } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
+import { DuplicateProviderSpanSampler } from "./nativeProviderSpans.js";
 import { NormalizingSpanProcessor } from "./normalize.js";
 import { PendingSpanProcessor } from "./pending.js";
 import {
@@ -657,7 +658,10 @@ export function init(options: InitOptions = {}): RiusClient {
     // Wrapped because ParentBased follows the PARENT's sampled flag, and a
     // bridged parent's flag is the other SDK's decision (usually always-on),
     // which would ship every trace it touches whatever sampleRate says.
-    sampler,
+    // Outermost: the Anthropic SDK's own span for a call the OpenInference
+    // instrumentation already records is a duplicate LLM span, dropped at
+    // creation whatever the rate (see nativeProviderSpans.ts).
+    sampler: new DuplicateProviderSpanSampler(sampler),
     // Already resolved against the environment; see resolveSpanLimits().
     spanLimits,
     spanProcessors: [processors],
