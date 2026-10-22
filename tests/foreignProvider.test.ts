@@ -1,5 +1,5 @@
 /**
- * Another SDK's tracer provider holding the OpenTelemetry global (RIUS-1097).
+ * Another SDK's tracer provider holding the OpenTelemetry global.
  *
  * The OpenTelemetry global is write-once per process, so each test installs a
  * real second SDK through `register()` — the same call a Langfuse, Traceloop or
@@ -126,7 +126,7 @@ function initBridged(options: InitOptions = {}): InMemorySpanExporter {
   return initRius({ bridgeForeignProvider: true, ...options });
 }
 
-/** The RIUS-1070 shape: an LLM span on Rius's provider inside another SDK's job span. */
+/** The reported shape: an LLM span on Rius's provider inside another SDK's job span. */
 function jobWithLlmChild(provider: TracerProvider, jobName = "job"): void {
   const job = provider.getTracer("customer.jobs").startSpan(jobName);
   context.with(trace.setSpan(context.active(), job), () => {
@@ -615,7 +615,7 @@ describe("detection", () => {
 
 // --- content capture on bridged spans -----------------------------------------
 
-/** What Langfuse 3.15 wrote on the bridged job span of the RIUS-1070 e2e. */
+/** What Langfuse 3.15 wrote on the bridged job span in an end-to-end run. */
 const LANGFUSE_JOB: Record<string, string | string[]> = {
   "langfuse.observation.type": "span",
   "langfuse.observation.input": '{"label": "job-0"}',
