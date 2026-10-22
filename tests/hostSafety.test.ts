@@ -20,6 +20,7 @@ import { observe } from "../src/observe.js";
 import { GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES, WORKSPACE_ROUTE } from "../src/semconv.js";
 import { startAsCurrentSpan, startSpan } from "../src/spans.js";
 import { registerWorkspace, withWorkspace } from "../src/workspace.js";
+import { prependProcessor } from "./prependProcessor.js";
 
 let client: RiusClient | undefined;
 let exporter: InMemorySpanExporter;
@@ -309,8 +310,7 @@ describe("DelegatingSpanProcessor", () => {
   it("keeps span.end() from throwing into the caller and still exports the span", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     testInit();
-    const { spanProcessorSink } = await import("../src/client.js");
-    spanProcessorSink(client as RiusClient).addFirst(new Throwing());
+    prependProcessor(client as RiusClient, new Throwing());
     const span = startSpan("exported");
     expect(() => span.end()).not.toThrow();
     expect((await finished()).map((s) => s.name)).toEqual(["exported"]);

@@ -9,7 +9,7 @@ import {
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { init, type RiusClient, spanProcessorSink } from "../src/client.js";
+import { init, type RiusClient } from "../src/client.js";
 import { isContentKey } from "../src/masking.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { PendingSpanProcessor } from "../src/pending.js";
@@ -19,6 +19,7 @@ import {
   RIUS_SPAN_PENDING,
 } from "../src/semconv.js";
 import { withSession } from "../src/session.js";
+import { prependProcessor } from "./prependProcessor.js";
 
 // What a third-party span's pending snapshot can know. The snapshot is built
 // from the attributes a span carries at onStart, so only what an integration
@@ -377,7 +378,7 @@ describe("pending snapshots of real third-party spans, through init()", () => {
 
   beforeAll(async () => {
     client = init({ spanExporter: exporter, partialSpans: true, heartbeat: false });
-    spanProcessorSink(client).addFirst(recorder);
+    prependProcessor(client, recorder);
     await client.ready;
   });
 

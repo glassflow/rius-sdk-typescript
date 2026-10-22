@@ -41,6 +41,20 @@ npm install @glassflow-ai/rius @opentelemetry/api
 `@opentelemetry/api` is a peer dependency and is never bundled. Install
 it alongside `@glassflow-ai/rius` at a version satisfying `^1.9.0`.
 
+### ESM and CommonJS in one process
+
+The package ships an ES module build and a CommonJS build. If one process
+loads both, say your code uses `import` while a dependency calls
+`require("@glassflow-ai/rius")`, Node loads two separate copies of the SDK
+with separate state. `init()` configures only the copy it was imported from:
+the other copy's spans reach Rius only through the OpenTelemetry global
+provider (so not at all when another SDK holds it), its AGENT and TOOL spans
+lack the agent name `init()` was given, and `registerWorkspace()` on it is
+skipped with a warning because it sees no client. Sessions and users
+(`withSession`, `withUser`) ride OpenTelemetry context and work across both.
+Load the SDK one way throughout, or call every Rius function through the copy
+you called `init()` on.
+
 ## Quickstart
 
 ```ts
@@ -98,8 +112,10 @@ Each surface has more detail below: `observe` for the function wrapper,
 
 ### `observe`: wrap a function
 
-`observe` wraps a function so every call becomes a span. It always
-returns a **promise**, even when the wrapped function is synchronous.
+`observe` wraps a function so every call becomes a span. It returns a
+**promise**, even when the wrapped function is synchronous. The exception is
+a generator function (`function*` or `async function*`): its wrapper returns
+a generator, and the span covers the whole iteration (see below).
 
 Use a named function expression (or pass `{ name }`) so the span gets a
 real name. An arrow function has no inferrable name, and its span falls
@@ -138,6 +154,45 @@ one `init()` was given), a RETRIEVER after its `dataSourceId`. A function
 name is not an agent or an index, so it is never used as one. Pass `{ name }`
 to override any of this.
 
+A wrapped generator function stays a generator. Its span opens on the first
+step and ends when the iteration finishes, throws (recorded as an error), or
+is closed early by `break` or `return()`, which also closes the wrapped
+generator so its `finally` blocks run. The span is current only while the
+generator's own code runs, so spans the caller opens between steps do not nest
+under it. Its input is recorded; what it yields is not, as in the Python SDK.
+
+```ts
+const streamAnswer = observe(async function* streamAnswer(query: string) {
+  for await (const chunk of callModelStreaming(query)) yield chunk;
+});
+
+for await (const chunk of streamAnswer("hello")) process.stdout.write(chunk);
+```
+
+Generators are recognised by function kind, so wrap the generator function
+itself: a plain function that returns a generator is an ordinary function to
+`observe`, and so is an async generator compiled to a target older than
+ES2018. A generator abandoned mid-iteration without being closed leaves its
+span open.
+
+The wrapper's type follows the generator's: `Generator`/`AsyncGenerator`
+when inferred, or the declared type when the generator function is annotated
+with exactly `Iterable<T>`, `IterableIterator<T>`, `AsyncIterable<T>` or
+`AsyncIterableIterator<T>`, so `.then()` on it does not compile. A function
+returning an array, a string, a `Set` or a `Map` is typed as a promise, as it
+runs. A type cannot see the function kind, so a few cases are typed
+differently from what the wrapper returns:
+
+- A plain function annotated as returning exactly one of those interfaces is
+  typed as an iterator although its wrapper returns a promise; annotate it
+  with the concrete type it returns instead.
+- A plain function returning a built-in iterator, such as `arr.values()`,
+  `map.entries()`, `set.values()` or `str.matchAll(re)`, is typed as that
+  iterator although its wrapper returns a promise.
+- A generator function annotated with a union such as
+  `Iterable<T> | undefined` is typed as a promise although its wrapper
+  returns a generator; annotate it with the iteration interface alone.
+
 An AGENT span (from `observe`, `startSpan` or `startAsCurrentSpan`) can also
 carry `agentId` and `agentVersion`, which describe the agent it *invoked*, as
 `gen_ai.agent.id` and `gen_ai.agent.version`. Both are taken verbatim (the
@@ -171,7 +226,9 @@ await startAsCurrentSpan("fetch-documents", { input: query }, async (span) => {
 `startAsCurrentSpan` runs a callback with the span active, ending it
 automatically and recording any thrown exception. The options argument is
 optional in both, so `startAsCurrentSpan("step", async (span) => { ... })`
-works when you have nothing to configure.
+works when you have nothing to configure. `span.update({ input, output })`
+sets both in one call (on a generation, as messages); a field left out, or
+`null`, is not touched.
 
 **The name is optional too.** Omit it and the span is named the way the
 OpenTelemetry GenAI conventions say to, `{operation} {target}`, composed
@@ -586,6 +643,13 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
+Three `init()` options of the Python SDK have no TypeScript counterpart
+yet: `headers` (extra exporter headers; use `spanExporter` with your own
+`OTLPTraceExporter` meanwhile), `instruments` (choosing which bundled
+auto-instrumentations to enable; this SDK enables every one it finds) and
+`set_global` (keeping the provider out of the OpenTelemetry global; this SDK
+always registers it unless another SDK already has).
+
 ### Running next to another OpenTelemetry SDK
 
 OpenTelemetry has one global tracer provider per process, and the first
@@ -666,8 +730,8 @@ Export is designed to never block or crash your application:
   failures with exponential backoff and jitter, up to 5 attempts, bounded
   by the export timeout.
 - **Graceful degradation.** If the backend stays unreachable, spans are
-  dropped and the failure is logged, it is never raised into application
-  code. Only the first export failure in a process is logged, naming
+  dropped and the failure is logged; an export failure is never raised into
+  application code. Only the first export failure in a process is logged, naming
   `RIUS_API_KEY`/`RIUS_ENDPOINT` as the likely cause; later failures stay
   silent so a persistent outage does not spam your logs. `client.flush()`
   returns `false` when the most recent export failed, so you can check
@@ -679,14 +743,19 @@ Export is designed to never block or crash your application:
   warning is logged once per process, so the same bad input in a loop does
   not flood your logs. A span processor
   that throws is isolated from the others and from `span.end()`.
+- **Your errors stay yours.** An error thrown by your own code inside
+  `observe`, `startAsCurrentSpan` or `startAsCurrentGeneration` is recorded on
+  the span and rethrown unchanged; the SDK never swallows or replaces it.
 - **Mask failures fail safe.** If a `mask` callback throws, the affected
   attribute (or status description) is dropped and a warning logged, rather
   than leaking the unmasked value, dropping the batch or letting the
   exception escape.
-- **No automatic flush on exit.** The SDK does not register a process-exit
-  hook. Call `client.flush()` to force a pending export, or
-  `client.shutdown()` to drain the queue and tear the client down, before
-  your process exits:
+- **No automatic flush on exit.** The only exit hook the SDK registers is
+  the heartbeat's: on Node's `beforeExit` it sends the final `stopped` ping.
+  Queued spans are not flushed there, and `beforeExit` does not fire on
+  `process.exit()` or a fatal signal. Call `client.flush()` to force a pending
+  export, or `client.shutdown()` to drain the queue and tear the client down,
+  before your process exits:
 
   ```ts
   await client.flush();

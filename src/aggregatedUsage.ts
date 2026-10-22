@@ -52,6 +52,20 @@ export function aggregatingTracer(tracer: Tracer): Tracer {
 }
 
 /**
+ * Rename every `gen_ai.usage.*` key to `rius.aggregated_usage.*`, in place:
+ * the usage stays on the span, but under the name the backend does not sum.
+ */
+function moveUsageAside(attributes: Record<string, AttributeValue | undefined>): void {
+  for (const key of Object.keys(attributes)) {
+    if (!key.startsWith(GEN_AI_USAGE_PREFIX)) continue;
+    const value = attributes[key];
+    delete attributes[key];
+    if (value === undefined) continue;
+    attributes[RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length)] = value;
+  }
+}
+
+/**
  * Moves every `gen_ai.usage.*` key to `rius.aggregated_usage.*` on an
  * aggregating producer's in-process invoke_agent span, in place, at onEnd.
  *
@@ -68,13 +82,7 @@ export function moveAggregatedUsage(
   if (!fromAggregatingProducer.has(span)) return;
   if (span.kind !== OtelSpanKind.INTERNAL) return;
   if (attributes[GEN_AI_OPERATION_NAME] !== INVOKE_AGENT) return;
-  for (const key of Object.keys(attributes)) {
-    if (!key.startsWith(GEN_AI_USAGE_PREFIX)) continue;
-    const value = attributes[key];
-    delete attributes[key];
-    if (value === undefined) continue;
-    attributes[RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length)] = value;
-  }
+  moveUsageAside(attributes);
 }
 
 /**
@@ -164,11 +172,5 @@ export function moveWrappedCallUsage(
   const id = idOf(span);
   openWrappers.delete(id);
   if (!markedWrappers.delete(id)) return;
-  for (const key of Object.keys(attributes)) {
-    if (!key.startsWith(GEN_AI_USAGE_PREFIX)) continue;
-    const value = attributes[key];
-    delete attributes[key];
-    if (value === undefined) continue;
-    attributes[RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length)] = value;
-  }
+  moveUsageAside(attributes);
 }

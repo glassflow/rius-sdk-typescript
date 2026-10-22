@@ -22,8 +22,13 @@ import { SDK_VERSION } from "./version.js";
  * - Never throws into user code. Pings have a short timeout, are never
  *   retried or queued (liveness is only true fresh; a late heartbeat is
  *   misinformation), and delivery problems warn once per sender.
- * - No fork handling and no process-exit hook: Node has no equivalent to
- *   `os.register_at_fork`/`atexit`, so the caller owns start/stop lifecycle.
+ * - No fork handling: Node has no equivalent to `os.register_at_fork`, and
+ *   this module installs no exit hook of its own; the caller owns the
+ *   start/stop lifecycle. `init()` is that caller: it stops the sender on
+ *   `shutdown()` and on Node's `beforeExit`, the nearest thing to `atexit`.
+ *   `beforeExit` fires when the event loop drains, not on `process.exit()` or
+ *   a fatal signal, so a process ended that way sends no stopped ping and
+ *   reports as gone once its pings stop.
  */
 
 const PAYLOAD_VERSION = 1;
@@ -120,7 +125,7 @@ export interface HeartbeatSenderOptions {
   finalPingTimeoutMs?: number;
   /**
    * Cumulative count of spans whose local parent came from another in-process
-   * tracer provider Rius does not receive (RIUS-1070). Read at every ping;
+   * tracer provider Rius does not receive. Read at every ping;
    * omitted from the payload entirely when not supplied.
    */
   foreignParentSpans?: () => number;
@@ -189,8 +194,8 @@ export class HeartbeatSender {
       open_trace_count: openIds.length,
     };
     // Cumulative for this instance, not a delta: a backend that misses a ping
-    // still sees the total. The backend ignores this field until RIUS-1093, so
-    // sending it now costs nothing and starts the data flowing.
+    // still sees the total. Sent whether or not the backend reads it yet: it
+    // costs nothing, and the count is there from the first ping once it does.
     if (this.foreignParentSpans !== undefined) {
       payload.foreign_parent_spans = this.foreignParentSpans();
     }

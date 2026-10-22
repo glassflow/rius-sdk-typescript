@@ -1,5 +1,5 @@
 import type { AttributeValue } from "@opentelemetry/api";
-import { replacement, stripRawPayload } from "./mediaParts.js";
+import { MAX_DEPTH, replacement, stripRawPayload } from "./mediaParts.js";
 
 /**
  * Serialized payload cap, in characters, shared with the Python SDK so a
@@ -19,10 +19,86 @@ export const TRUNCATION_MARKER = "…(truncated)";
  * could not be found any more.
  */
 export function truncate(text: string): string {
-  const stripped = stripRawPayload(text);
+  const stripped = stripMedia(text);
   return stripped.length > MAX_ATTR_CHARS
     ? stripped.slice(0, MAX_ATTR_CHARS) + TRUNCATION_MARKER
     : stripped;
+}
+
+/**
+ * A run of the base64 alphabet (either variant, with padding): what the
+ * fallback replaces once it is long enough to be media. A JSON text may write
+ * a character of the alphabet as an escape (PHP writes "/" as "\/", others "+"
+ * as "+"), so such an escape is one character of the run. Each match is
+ * a whole run, its length checked after, so every character is read once.
+ */
+const BASE64_RUN =
+  /(?:[A-Za-z0-9+/\-_=]|\\\/|\\u00(?:2[bdfBDF]|3[0-9dD]|4[1-9a-fA-F]|5[0-9aAfF]|6[1-9a-fA-F]|7[0-9aA]))+/g;
+
+/** The shortest run the fallback takes for media rather than a word. */
+const MIN_MEDIA_RUN = 64;
+
+/**
+ * A JSON string, or one bracket outside any. A string the text ends inside
+ * (a cut payload, possibly cut after a backslash) runs to the end of the text
+ * rather than failing: a failed match would restart at the next quote, which
+ * in double-encoded JSON is the next escaped quote, and rescan to the end
+ * each time. Its brackets then count as a string's, on top of the depth it
+ * sits at, as the scan's upper bound already assumes.
+ */
+const STRING_OR_BRACKET = /"(?:[^"\\]|\\.)*(?:"|\\?$)|[[\]{}]/gs;
+
+/**
+ * The media strip, plus a fallback for a text nested deeper than its parser
+ * reads.
+ *
+ * The parser gives up past `MAX_DEPTH` arrays and objects, so such a text is
+ * not JSON to it and only its data URLs are found: a keyed image's base64
+ * would survive. Every run of the base64 alphabet long enough to be media is
+ * replaced then, along with any long word of the same alphabet. The Python
+ * SDK applies the same guard, so both write the same text; a text within the
+ * depth is the strip's alone, byte for byte.
+ */
+export function stripMedia(text: string): string {
+  const stripped = stripRawPayload(text);
+  return nestsPastParserDepth(stripped) ? stripped.replace(BASE64_RUN, replaceMediaRun) : stripped;
+}
+
+/**
+ * True when the parser may read past `MAX_DEPTH` somewhere in `text`.
+ *
+ * An upper bound, not the parser's exact depth: the parser re-parses a
+ * JSON-looking string at the depth it sits at, so every opening bracket in a
+ * string (at any level of escaping) counts on top of that depth, and its
+ * closing brackets, which may close nothing, are not counted. A false
+ * positive only applies the run fallback.
+ */
+function nestsPastParserDepth(text: string): boolean {
+  if (countOf(text, "{") + countOf(text, "[") <= MAX_DEPTH) return false; // the common case
+  let depth = 0;
+  for (const [token] of text.matchAll(STRING_OR_BRACKET)) {
+    if (token[0] === '"') {
+      if (depth + countOf(token, "{") + countOf(token, "[") > MAX_DEPTH) return true;
+    } else if (token === "[" || token === "{") {
+      depth += 1;
+      if (depth > MAX_DEPTH) return true;
+    } else {
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+function countOf(text: string, character: string): number {
+  let count = 0;
+  for (let i = text.indexOf(character); i !== -1; i = text.indexOf(character, i + 1)) count += 1;
+  return count;
+}
+
+function replaceMediaRun(run: string): string {
+  // A backslash starts an escape: "\/" writes one character, "\u00XX" one.
+  const length = run.length - countOf(run, "\\/") - 5 * countOf(run, "\\u");
+  return length >= MIN_MEDIA_RUN ? replacement(undefined, undefined) : run;
 }
 
 /** A UTF-16 surrogate with no partner. */

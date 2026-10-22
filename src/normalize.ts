@@ -14,7 +14,6 @@ import {
   isDataUrl,
   NOT_CAPTURED,
   rebuildNativeMediaParts,
-  stripRawPayload,
   uriModality,
   urlPart,
 } from "./mediaParts.js";
@@ -83,7 +82,7 @@ import {
   RIUS_REQUEST_TOOL_CHOICE,
   SpanKind,
 } from "./semconv.js";
-import { toAttributeValue, wellFormed } from "./serde.js";
+import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -756,7 +755,7 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  * first-token event. Spelled here rather than in semconv.ts for the reason
  * gen_ai.system is: a source spelling we map and never emit.
  */
-export const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk";
+const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk";
 
 /**
  * The OpenInference model-call and usage families.
@@ -2318,12 +2317,10 @@ function stripBag(attributes: Record<string, AttributeValue | undefined> | undef
   if (attributes === undefined) return;
   for (const [key, value] of Object.entries(attributes)) {
     if (typeof value === "string") {
-      const stripped = stripRawPayload(value);
+      const stripped = stripMedia(value);
       if (stripped !== value) attributes[key] = stripped;
     } else if (Array.isArray(value) && value.some((item) => typeof item === "string")) {
-      const stripped = value.map((item) =>
-        typeof item === "string" ? stripRawPayload(item) : item,
-      );
+      const stripped = value.map((item) => (typeof item === "string" ? stripMedia(item) : item));
       if (stripped.some((item, i) => item !== value[i])) {
         attributes[key] = stripped as AttributeValue;
       }

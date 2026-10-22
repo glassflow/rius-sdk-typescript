@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Reproduce RIUS-1097: LLM spans exported with a parent Rius never receives.
+ * Reproduce LLM spans exported with a parent Rius never receives.
  *
  * When another SDK registers the OpenTelemetry global tracer provider before
  * `rius.init()`, Rius keeps its own provider (the global is write-once) and
@@ -48,7 +48,7 @@
  *
  *     npm run build
  *     npm install --no-save --no-package-lock @traceloop/node-server-sdk
- *     node scripts/repro-rius-1097.mjs
+ *     node scripts/repro-foreign-provider-parent.mjs
  *
  * Exits 0 when every case gives its expected verdict (or is skipped), 1
  * otherwise (a single `--case` run exits 3 when ORPHANED, 4 when skipped, 5

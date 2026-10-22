@@ -701,7 +701,7 @@ describe("@ai-sdk/otel speech, decision and provider-metadata keys", () => {
   });
 });
 
-// --- content keys of other OTel-based SDKs (RIUS-1097) -------------------------
+// --- content keys of other OTel-based SDKs ------------------------------------
 //
 // With the bridge on, a Langfuse or Logfire span reaches this exporter; so it
 // does whenever Rius holds the global provider those SDKs then write to. Either

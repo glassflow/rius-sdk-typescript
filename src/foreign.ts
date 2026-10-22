@@ -1,5 +1,5 @@
 /**
- * Another SDK's tracer provider in the same process (RIUS-1097 / RIUS-1070).
+ * Another SDK's tracer provider in the same process.
  *
  * The OpenTelemetry global provider is write-once. When another SDK (Langfuse
  * v3, for one) claims it before `init()`, Rius keeps a private provider and its
