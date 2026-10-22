@@ -100,7 +100,10 @@ export function observe<F extends (...args: never[]) => unknown>(
   const captureInput = options.captureInput ?? true;
   const captureOutput = options.captureOutput ?? true;
 
-  const wrapped = (...args: Parameters<F>): Promise<R> => {
+  // A `function`, not an arrow, so a wrapped method keeps its receiver:
+  // `{ run: observe(async function () { return this.name }) }.run()` must see
+  // the object it was called on.
+  const wrapped = function (this: unknown, ...args: Parameters<F>): Promise<R> {
     const spanOptions = {
       kind: options.kind,
       toolName,
@@ -117,7 +120,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       input: captureInput ? { args, kwargs: {} } : undefined,
     };
     const body = async (observation: Observation): Promise<R> => {
-      const result = (await fn(...(args as never[]))) as R;
+      const result = (await fn.apply(this, args as never[])) as R;
       // An undefined result is recorded too, as "null": Python records the
       // None a function without a return gives back.
       if (captureOutput) observation.setOutput(result);

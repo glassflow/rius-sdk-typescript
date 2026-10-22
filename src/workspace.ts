@@ -50,6 +50,9 @@ export type WorkspaceExporterFactory = (apiKey: string) => SpanExporter;
  * all OTel context does, but a trace must stay inside one workspace: enter
  * the scope at a request boundary, before the root span starts.
  *
+ * An empty (or non-string) alias logs a warning and runs `fn` without a
+ * scope, so its spans go to the default destination; it never throws.
+ *
  * ```typescript
  * await withWorkspace("acme", async () => {
  *   await handle(request) // every span of the request lands in acme's workspace
@@ -57,7 +60,14 @@ export type WorkspaceExporterFactory = (apiKey: string) => SpanExporter;
  * ```
  */
 export function withWorkspace<T>(alias: string, fn: (alias: string) => T): T {
-  if (!alias) throw new Error("workspace alias must be a non-empty string");
+  if (!usableString(alias)) {
+    // Warn and run unscoped rather than throw: the caller's work must still
+    // happen, and its spans go to the default destination.
+    console.warn(
+      "[rius] withWorkspace() needs a non-empty string alias; running the callback without a workspace scope, so its spans go to the default destination.",
+    );
+    return fn(alias);
+  }
   return apiContext.with(apiContext.active().setValue(WORKSPACE_KEY, alias), () => fn(alias));
 }
 
@@ -235,9 +245,17 @@ export class RoutingSpanExporter implements SpanExporter {
 /** The routing exporter of the active global client, when routing is enabled. */
 let globalRouting: RoutingSpanExporter | undefined;
 
+/** Whether the active global client was initialized disabled. */
+let routingDisabled = false;
+
 /** @internal Wired by init()/shutdown(); not part of the public API. */
-export function setGlobalRouting(routing: RoutingSpanExporter | undefined): void {
+export function setGlobalRouting(routing: RoutingSpanExporter | undefined, disabled = false): void {
   globalRouting = routing;
+  routingDisabled = disabled;
+}
+
+function usableString(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
 }
 
 /**
@@ -246,13 +264,25 @@ export function setGlobalRouting(routing: RoutingSpanExporter | undefined): void
  * Requires `init({ workspaces })` to have opted into routing (an empty
  * object opts in with no static routes). Spans started inside
  * `withWorkspace(alias, ...)` are then exported with `apiKey`.
+ *
+ * Never throws: without routing enabled, or with an empty alias or key, it
+ * logs a warning and registers nothing; with the SDK disabled it does nothing.
  */
 export function registerWorkspace(alias: string, apiKey: string): void {
+  // A disabled SDK records nothing, so there is nothing to route: the same
+  // call must work unchanged whether RIUS_DISABLED is set or not.
+  if (routingDisabled) return;
   if (globalRouting === undefined) {
-    throw new Error(
-      "[rius] workspace routing is not enabled: pass workspaces (an empty object is fine) " +
-        "to init() to opt in before registering destinations",
+    console.warn(
+      "[rius] registerWorkspace() skipped: workspace routing is not enabled. Pass workspaces (an empty object is fine) to init() to opt in before registering destinations.",
     );
+    return;
+  }
+  if (!usableString(alias) || !usableString(apiKey)) {
+    console.warn(
+      "[rius] registerWorkspace() skipped: the workspace alias and apiKey must be non-empty strings.",
+    );
+    return;
   }
   globalRouting.register(alias, apiKey);
 }

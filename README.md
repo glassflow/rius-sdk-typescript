@@ -332,8 +332,8 @@ smaller, `rius.compaction.tokens.dropped` is their difference. `summary` is
 recorded as `rius.compaction.summary.text` with its UTF-8 size in
 `rius.compaction.summary.bytes`; like every content attribute the text is
 dropped under `captureContent: false` and the size stays. An unknown `kind` or
-`trigger`, or a count that is not a non-negative integer, throws a `TypeError`,
-with or without an initialized client; without one nothing is recorded.
+`trigger`, or a count that is not a non-negative integer, logs a warning and
+records nothing, with or without an initialized client; it never throws.
 
 The next LLM span started in the same async context is flagged
 `gen_ai.conversation.compacted`, once, so a trace shows which call ran on the
@@ -601,7 +601,9 @@ To send the other SDK's spans to Rius as well, opt in with
 Rius then attaches its own pipeline to that provider and exports its spans too,
 subject to Rius's `sampleRate`, `captureContent` and `mask`, under the Rius
 resource identity. It never modifies what the other SDK exports: that vendor
-receives exactly what it would without Rius.
+receives exactly what it would without Rius. `client.shutdown()` releases only
+the OpenTelemetry globals Rius itself registered, so the other SDK's tracer
+provider, context manager and propagator keep working after it.
 
 ```typescript
 init({ bridgeForeignProvider: true }) // export the other SDK's spans as well
@@ -670,6 +672,11 @@ Export is designed to never block or crash your application:
   silent so a persistent outage does not spam your logs. `client.flush()`
   returns `false` when the most recent export failed, so you can check
   delivery explicitly instead of relying on logs alone.
+- **Bad input warns, never throws.** An SDK call given input it cannot use
+  (an invalid `markCompaction` option, an empty `withWorkspace` alias, a
+  message list whose getters throw) logs a warning and skips that one write;
+  the rest of your code runs as if the SDK were not there. A span processor
+  that throws is isolated from the others and from `span.end()`.
 - **Mask failures fail safe.** If a `mask` callback throws, the affected
   attribute (or status description) is dropped and a warning logged, rather
   than leaking the unmasked value, dropping the batch or letting the

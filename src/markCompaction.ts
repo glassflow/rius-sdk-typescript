@@ -1,6 +1,7 @@
 import type { Attributes } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import { COMPACTION_OPERATION, droppedTokens, markNextLlmSpanCompacted } from "./compaction.js";
+import { errorType } from "./errorType.js";
 import {
   composeSpanName,
   GEN_AI_OPERATION_NAME,
@@ -74,16 +75,19 @@ const KINDS: readonly string[] = [
 
 const TRIGGERS: readonly string[] = [RIUS_COMPACTION_TRIGGER_AUTO, RIUS_COMPACTION_TRIGGER_MANUAL];
 
+/** A caller error in markCompaction's options; caught and reported as a warning. */
+class InvalidOption extends Error {}
+
 function oneOf(name: string, value: unknown, allowed: readonly string[]): void {
   if (typeof value !== "string" || !allowed.includes(value)) {
-    throw new TypeError(`markCompaction: ${name} must be one of ${allowed.join(", ")}`);
+    throw new InvalidOption(`${name} must be one of ${allowed.join(", ")}`);
   }
 }
 
 function checkCount(name: string, value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new TypeError(`markCompaction: ${name} must be a non-negative integer`);
+    throw new InvalidOption(`${name} must be a non-negative integer`);
   }
   return value;
 }
@@ -108,9 +112,10 @@ function checkCount(name: string, value: unknown): number | undefined {
  *   creates afterwards, so mark in the flow that makes the call rather than
  *   in a helper that other concurrent flows are started beside.
  *
- * Throws a `TypeError` for an unknown `kind` or `trigger`, or a count that is
- * not a non-negative integer, before recording anything. Without an
- * initialized client nothing is recorded, but the arguments are still checked.
+ * Never throws: an unknown `kind` or `trigger`, a count that is not a
+ * non-negative integer, or a summary that is not a string logs a warning and
+ * records nothing. Without an initialized client nothing is recorded, but the
+ * arguments are still checked.
  *
  * Compactions the provider reports in a response (Anthropic context editing
  * and compaction blocks, OpenAI Responses `compaction` items) are recorded
@@ -129,8 +134,23 @@ function checkCount(name: string, value: unknown): number | undefined {
  * ```
  */
 export function markCompaction(options: MarkCompactionOptions = {}): void {
+  try {
+    record(options);
+  } catch (error) {
+    // Anything else (a throwing getter on the options, say) is skipped too:
+    // recording a compaction must never throw into the app.
+    const why =
+      error instanceof InvalidOption
+        ? error.message
+        : `the options could not be read (${errorType(error)})`;
+    console.warn(`[rius] markCompaction() skipped: ${why}; nothing was recorded.`);
+  }
+}
+
+/** markCompaction's body; an invalid option throws InvalidOption before anything is recorded. */
+function record(options: MarkCompactionOptions): void {
   if (typeof options !== "object" || options === null) {
-    throw new TypeError("markCompaction: options must be an object");
+    throw new InvalidOption("options must be an object");
   }
   const kind = options.kind ?? RIUS_COMPACTION_KIND_SUMMARIZE;
   oneOf("kind", kind, KINDS);
@@ -140,7 +160,7 @@ export function markCompaction(options: MarkCompactionOptions = {}): void {
   const compacted = checkCount("messagesCompacted", options.messagesCompacted);
   const kept = checkCount("messagesKept", options.messagesKept);
   if (options.summary !== undefined && typeof options.summary !== "string") {
-    throw new TypeError("markCompaction: summary must be a string");
+    throw new InvalidOption("summary must be a string");
   }
 
   const attributes: Attributes = {

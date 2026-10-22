@@ -320,10 +320,12 @@ describe("markCompaction validation", () => {
 
   for (const [label, options] of invalid) {
     it(
-      `throws a TypeError for ${label}, recording nothing and flagging nothing`,
+      `warns and skips ${label}, recording nothing and flagging nothing`,
       isolated(async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         testInit();
-        expect(() => markCompaction(options)).toThrow(TypeError);
+        expect(() => markCompaction(options)).not.toThrow();
+        expect(warn).toHaveBeenCalledTimes(1);
         llmSpan("after");
         const spans = await finished();
         expect(spans.map((s) => s.name)).toEqual(["after"]);
@@ -333,20 +335,28 @@ describe("markCompaction validation", () => {
   }
 
   it(
-    "names the offending option",
+    "names the offending option in the warning",
     isolated(async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       testInit();
-      expect(() => markCompaction({ kind: "shrink" as never })).toThrow(/kind/);
-      expect(() => markCompaction({ tokensBefore: -1 })).toThrow(/tokensBefore/);
-      expect(() => markCompaction({ summary: 5 as never })).toThrow(/summary must be a string/);
-      expect(() => markCompaction(null as never)).toThrow(/options must be an object/);
+      markCompaction({ kind: "shrink" as never });
+      markCompaction({ tokensBefore: -1 });
+      markCompaction({ summary: 5 as never });
+      markCompaction(null as never);
+      const messages = warn.mock.calls.map((c) => String(c[0]));
+      expect(messages[0]).toMatch(/kind/);
+      expect(messages[1]).toMatch(/tokensBefore/);
+      expect(messages[2]).toMatch(/summary must be a string/);
+      expect(messages[3]).toMatch(/options must be an object/);
     }),
   );
 
   it(
-    "throws without a client too",
+    "warns and skips without a client too",
     isolated(async () => {
-      expect(() => markCompaction({ kind: "shrink" as never })).toThrow(TypeError);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(() => markCompaction({ kind: "shrink" as never })).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
     }),
   );
 });

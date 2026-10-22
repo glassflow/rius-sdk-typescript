@@ -7,7 +7,13 @@ import {
   type TracerProvider,
   trace,
 } from "@opentelemetry/api";
-import { getNumberFromEnv } from "@opentelemetry/core";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import {
+  CompositePropagator,
+  getNumberFromEnv,
+  W3CBaggagePropagator,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core";
 // The -proto exporter (OTLP protobuf over HTTP), matching the Python SDK's
 // opentelemetry-exporter-otlp-proto-http. The Rius ingest accepts only
 // protobuf and refuses a JSON export with 415 Unsupported Media Type, so the
@@ -240,18 +246,63 @@ export class RiusClient {
         ownTracerProvider = undefined;
         setGlobalRouting(undefined);
         setConfiguredAgentName(undefined);
-        // All three globals provider.register() claimed, not just the tracer:
-        // leaving context and propagation registered makes the next init()'s
-        // register() log duplicate-registration diag errors.
-        trace.disable();
-        context.disable();
-        propagation.disable();
+        releaseGlobals(ownGlobals);
+        ownGlobals = undefined;
       }
     }
   }
 }
 
 let globalClient: RiusClient | undefined;
+
+/** Which OpenTelemetry globals init() registered, so shutdown() releases only those. */
+interface OwnGlobals {
+  trace: boolean;
+  context: boolean;
+  propagation: boolean;
+}
+
+let ownGlobals: OwnGlobals | undefined;
+
+/**
+ * Register `provider` and the defaults `NodeTracerProvider.register()` would
+ * install (an AsyncLocalStorage context manager, W3C trace context and
+ * baggage propagation), recording which of the three this call won.
+ *
+ * Done by hand rather than through `register()` because each global is
+ * write-once and `register()` does not say which ones it took: another SDK
+ * may already hold any of them, and shutdown() must leave that SDK's globals
+ * exactly as they were. Disabling a global Rius did not register would
+ * unregister the other SDK's tracer, the context manager that parents its
+ * spans, and its propagator.
+ */
+function registerGlobals(provider: TracerProvider): OwnGlobals {
+  const won: OwnGlobals = {
+    trace: trace.setGlobalTracerProvider(provider),
+    context: false,
+    propagation: false,
+  };
+  const contextManager = new AsyncLocalStorageContextManager().enable();
+  won.context = context.setGlobalContextManager(contextManager);
+  if (!won.context) contextManager.disable();
+  won.propagation = propagation.setGlobalPropagator(
+    new CompositePropagator({
+      propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+    }),
+  );
+  return won;
+}
+
+/**
+ * Release the globals {@link registerGlobals} won. All three, not just the
+ * tracer: leaving our context manager or propagator registered makes the next
+ * init() log duplicate-registration diag errors.
+ */
+function releaseGlobals(won: OwnGlobals | undefined): void {
+  if (won?.trace) trace.disable();
+  if (won?.context) context.disable();
+  if (won?.propagation) propagation.disable();
+}
 
 /**
  * The span attribute COUNT limit init() applies when the environment names
@@ -631,7 +682,7 @@ export function init(options: InitOptions = {}): RiusClient {
   // shutdown() has a registration to release.
   rememberOwnProvider(provider);
   ownTracerProvider = provider;
-  provider.register();
+  ownGlobals = registerGlobals(provider);
   const bridged = config.disabled
     ? undefined
     : bridgeOrWarn(provider, processors, sampler, spanLimits, config.bridgeForeignProvider);
@@ -678,7 +729,7 @@ export function init(options: InitOptions = {}): RiusClient {
     heartbeat,
     bridge: bridged,
   });
-  setGlobalRouting(routing);
+  setGlobalRouting(routing, config.disabled);
   // AGENT spans fall back to this when the caller names no agent.
   setConfiguredAgentName(config.agentName);
   return globalClient;
@@ -688,7 +739,7 @@ export function init(options: InitOptions = {}): RiusClient {
  * Attach Rius's pipeline to whichever provider won the OpenTelemetry global, or
  * explain why it did not.
  *
- * Called after `register()`, and a no-op when that registration took. The
+ * Called after the global registration, and a no-op when it took. The
  * loser is not always another vendor: a provider this SDK built in an earlier
  * init() holds the global just as firmly, and its spans are just as invisible
  * to the new client. Rius's own helpers (`observe`, `startSpan`, the
