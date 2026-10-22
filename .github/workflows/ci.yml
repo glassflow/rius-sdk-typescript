@@ -86,6 +86,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      # The lockfile pins the latest @anthropic-ai/sdk; the integration must
+      # keep working on the oldest release we test against too, which has no
+      # tracing of its own. One leg: what differs is the SDK, not Node.
+      - name: anthropic integration on the oldest tested @anthropic-ai/sdk
+        if: matrix.node-version == '24'
+        run: |
+          npm i --no-save @anthropic-ai/sdk@0.133.0
+          npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts
 
   packaging:
     runs-on: ubuntu-latest
@@ -239,12 +247,17 @@ jobs:
               // what it collected. flush() drains the batch processor
               // deterministically instead of guessing at its schedule delay.
               await client.flush();
-              const names = exporter.getFinishedSpans().map((span) => span.name);
-              const expectedNames = wantLangchain ? ['CiEcho', 'Anthropic Messages'] : ['Anthropic Messages'];
-              for (const expected of expectedNames) {
-                if (!names.includes(expected)) {
-                  throw new Error('no ' + expected + ' span was exported: ' + JSON.stringify(names));
-                }
+              const spans = exporter.getFinishedSpans();
+              const names = spans.map((span) => span.name);
+              if (wantLangchain && !names.includes('CiEcho')) {
+                throw new Error('no CiEcho span was exported: ' + JSON.stringify(names));
+              }
+              // Exactly one LLM span for the one call: the registry's latest
+              // @anthropic-ai/sdk traces the call itself as well, and that
+              // span must not count as a second LLM call.
+              const llm = spans.filter((span) => span.attributes['openinference.span.kind'] === 'LLM').map((span) => span.name);
+              if (JSON.stringify(llm) !== JSON.stringify(['Anthropic Messages'])) {
+                throw new Error('expected one Anthropic Messages LLM span, got ' + JSON.stringify(llm) + ' of ' + JSON.stringify(names));
               }
               process.exit(0);
             }).catch((e) => { console.error(e.message); process.exit(1); });
@@ -292,9 +305,13 @@ jobs:
           // what it collected. flush() drains the batch processor
           // deterministically instead of guessing at its schedule delay.
           await client.flush();
-          const names = exporter.getFinishedSpans().map((span) => span.name);
-          if (!names.includes("Anthropic Messages")) {
-            throw new Error("no Anthropic Messages span from the ESM consumer: " + JSON.stringify(names));
+          const spans = exporter.getFinishedSpans();
+          const llm = spans
+            .filter((span) => span.attributes["openinference.span.kind"] === "LLM")
+            .map((span) => span.name);
+          if (JSON.stringify(llm) !== JSON.stringify(["Anthropic Messages"])) {
+            throw new Error("expected one Anthropic Messages LLM span from the ESM consumer, got " +
+              JSON.stringify(llm) + " of " + JSON.stringify(spans.map((span) => span.name)));
           }
           EOF
           node esm-check.mjs
