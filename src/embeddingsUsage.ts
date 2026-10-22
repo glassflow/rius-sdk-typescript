@@ -1,6 +1,11 @@
 import { type Span, trace } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { OPENINFERENCE_SPAN_KIND, SpanKind } from "./semconv.js";
+import {
+  LLM_TOKEN_COUNT_PROMPT,
+  LLM_TOKEN_COUNT_TOTAL,
+  OPENINFERENCE_SPAN_KIND,
+  SpanKind,
+} from "./semconv.js";
 
 /**
  * Token counts for OpenAI embeddings calls, which the OpenInference JS
@@ -26,9 +31,6 @@ import { OPENINFERENCE_SPAN_KIND, SpanKind } from "./semconv.js";
  * Once the instrumentor records usage itself, its `.then` runs after this one
  * and writes the same keys with the provider's same values, so nothing differs.
  */
-
-const LLM_TOKEN_COUNT_PROMPT = "llm.token_count.prompt";
-const LLM_TOKEN_COUNT_TOTAL = "llm.token_count.total";
 
 interface EmbeddingsUsageState {
   original: (...args: unknown[]) => unknown;

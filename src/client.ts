@@ -28,7 +28,6 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
 import {
   CompactionFlagSpanProcessor,
@@ -65,6 +64,8 @@ import {
   RIUS_MAIN_AGENT_VERSION,
   RIUS_SDK_GLOBAL_PROVIDER,
   SERVICE_INSTANCE_ID,
+  SERVICE_NAME,
+  SERVICE_VERSION,
   TELEMETRY_DISTRO_NAME,
   TELEMETRY_DISTRO_VERSION,
   TRACER_NAME,
@@ -502,7 +503,7 @@ export function init(options: InitOptions = {}): RiusClient {
   // attributes are the update in the merge, so service.name replaces the
   // default `unknown_service:<process>`.
   const riusAttributes = resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: config.serviceName,
+    [SERVICE_NAME]: config.serviceName,
     [SERVICE_INSTANCE_ID]: instanceId,
     // The agent name the heartbeats already carry. Without it here, spans
     // fall back to service.name downstream while heartbeats group under the
@@ -555,9 +556,7 @@ export function init(options: InitOptions = {}): RiusClient {
     // back on by design: `service.name`'s `unknown_service` is the standing
     // argument against inventing one, since every unversioned process would
     // then claim the same fake version.
-    ...(config.serviceVersion === undefined
-      ? {}
-      : { [ATTR_SERVICE_VERSION]: config.serviceVersion }),
+    ...(config.serviceVersion === undefined ? {} : { [SERVICE_VERSION]: config.serviceVersion }),
   });
   // OTEL_RESOURCE_ATTRIBUTES sits between the two, as Python's
   // Resource.create merges it: every key it carries reaches the resource

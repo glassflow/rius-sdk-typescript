@@ -18,9 +18,12 @@ import {
   urlPart,
 } from "./mediaParts.js";
 import {
+  AI_OPERATION_ID,
+  EMBEDDING_MODEL_NAME,
   ERROR_TYPE,
   EXCEPTION_EVENT,
   EXCEPTION_TYPE,
+  GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK,
   GEN_AI_INPUT_MESSAGES,
   GEN_AI_OPERATION_NAME,
   GEN_AI_OUTPUT_MESSAGES,
@@ -44,24 +47,44 @@ import {
   GEN_AI_RESPONSE_ID,
   GEN_AI_RESPONSE_MODEL,
   GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+  GEN_AI_SYSTEM,
+  GEN_AI_SYSTEM_INSTRUCTIONS,
+  GEN_AI_TOOL_CALL_ARGUMENTS,
   GEN_AI_TOOL_CALL_ID,
+  GEN_AI_TOOL_CALL_RESULT,
   GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_TOOL_NAME,
   GEN_AI_TOOL_TYPE,
   GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
   GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+  GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+  GEN_AI_USAGE_DETAILS_AUDIO_CACHE_TOKENS,
+  GEN_AI_USAGE_DETAILS_AUDIO_CANDIDATES_TOKENS,
+  GEN_AI_USAGE_DETAILS_AUDIO_PROMPT_TOKENS,
+  GEN_AI_USAGE_DETAILS_AUDIO_RESPONSE_TOKENS,
+  GEN_AI_USAGE_DETAILS_CACHE_AUDIO_READ_TOKENS,
+  GEN_AI_USAGE_DETAILS_IMAGE_CACHE_TOKENS,
+  GEN_AI_USAGE_DETAILS_IMAGE_CANDIDATES_TOKENS,
+  GEN_AI_USAGE_DETAILS_IMAGE_PROMPT_TOKENS,
+  GEN_AI_USAGE_DETAILS_INPUT_AUDIO_TOKENS,
+  GEN_AI_USAGE_DETAILS_OUTPUT_AUDIO_TOKENS,
+  GEN_AI_USAGE_DETAILS_REASONING_TOKENS,
+  GEN_AI_USAGE_DETAILS_THINKING_TOKENS,
+  GEN_AI_USAGE_DETAILS_THOUGHTS_TOKENS,
   GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
   GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
+  GEN_AI_USAGE_INPUT_TOKEN_DETAILS_AUDIO_TOKENS,
   GEN_AI_USAGE_INPUT_TOKENS,
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_PREFIX,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
   INVOCATION_PARAMETERS_CONTENT_MEMBERS,
   kindForOperation,
+  LLM_FINISH_REASON,
   LLM_INPUT_MESSAGES_PREFIX,
   LLM_INVOCATION_PARAMETERS,
   LLM_MESSAGE_CONTENT,
@@ -71,16 +94,30 @@ import {
   LLM_MESSAGE_TOOL_CALL_ID,
   LLM_MESSAGE_TOOL_CALLS_PREFIX,
   LLM_OUTPUT_MESSAGES_PREFIX,
+  LLM_PROVIDER,
+  LLM_REQUEST_MODEL_NAME,
+  LLM_RESPONSE_MODEL_NAME,
+  LLM_SYSTEM,
+  LLM_TOKEN_COUNT_COMPLETION,
+  LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
+  LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+  LLM_TOKEN_COUNT_PROMPT,
+  LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
+  LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+  LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE,
   LLM_TOOL_CALL_FUNCTION_ARGUMENTS,
   LLM_TOOL_CALL_FUNCTION_NAME,
   LLM_TOOL_CALL_ID,
   LLM_TOOL_CALL_PREFIX,
+  METADATA,
   OPENINFERENCE_SPAN_KIND,
+  OUTPUT_MIME_TYPE,
   OUTPUT_VALUE,
   operationForKind,
   RIUS_AGGREGATED_USAGE_PREFIX,
   RIUS_REQUEST_TOOL_CHOICE,
   SpanKind,
+  TOOL_NAME,
 } from "./semconv.js";
 import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
 
@@ -356,13 +393,6 @@ export function withoutProviderRoute(model: string, provider: AttributeValue | u
 }
 
 /**
- * OpenInference's name for the API a client speaks. A source spelling, like
- * gen_ai.system: mapped, never emitted, so it is spelled here rather than in
- * semconv.ts.
- */
-const LLM_SYSTEM = "llm.system";
-
-/**
  * `llm.system` kept, plus the provider it implies.
  *
  * The fallback for a span with no llm.provider: an OpenAI client pointed at a
@@ -562,12 +592,6 @@ export const REQUEST_PARAMETER_GUARDS: Readonly<
 };
 
 /**
- * OpenInference's run-metadata attribute. Read to recognise a LangChain run,
- * never emitted, so spelled here rather than in semconv.ts.
- */
-const METADATA = "metadata";
-
-/**
  * The prefix LangChain gives its own run-metadata keys (ls_provider,
  * ls_model_name, ls_integration, ...), in both its Python and JS releases.
  */
@@ -750,14 +774,6 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
 ];
 
 /**
- * The GenAI conventions' METRIC name for time to first chunk. @ai-sdk/otel and
- * pydantic-ai write it onto the chat span as an attribute, in seconds, with no
- * first-token event. Spelled here rather than in semconv.ts for the reason
- * gen_ai.system is: a source spelling we map and never emit.
- */
-const GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk";
-
-/**
  * The OpenInference model-call and usage families.
  *
  * ORDER MATTERS where two sources share a target: the first rule to produce
@@ -800,10 +816,10 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Provider. One rule, two spellings, first present wins: llm.provider is
   // OpenInference's and the more specific (azure/aws/google rather than the
   // product), gen_ai.system is the deprecated GenAI key, which is mapped here
-  // and never emitted. That is why gen_ai.system is spelled inline rather
-  // than in semconv.ts: that module is the set of keys we EMIT.
+  // and never emitted. Like the llm.* keys, both are source spellings the
+  // registry names so they are not typed here.
   {
-    source: ["llm.provider", "gen_ai.system"],
+    source: [LLM_PROVIDER, GEN_AI_SYSTEM],
     target: GEN_AI_PROVIDER_NAME,
     convert: providerName,
     identity: true,
@@ -814,12 +830,12 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // Model. Only the anthropic instrumentation emits this unambiguous pair;
   // see the omission note on llm.model_name.
   {
-    source: "llm.request.model_name",
+    source: LLM_REQUEST_MODEL_NAME,
     target: GEN_AI_REQUEST_MODEL,
     convert: copy,
     identity: true,
   },
-  { source: "llm.response.model_name", target: GEN_AI_RESPONSE_MODEL, convert: copy },
+  { source: LLM_RESPONSE_MODEL_NAME, target: GEN_AI_RESPONSE_MODEL, convert: copy },
   // Tool identity. OpenInference writes the bare key only on TOOL spans (on an
   // LLM span the same name sits under llm.tools.N.tool.name instead), so the
   // rule needs no kind guard. Identity, so it also runs at start and a
@@ -830,7 +846,7 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // deriving the tool name from the span name because a span name is not a
   // tool name, and a wrong name silently groups unrelated calls, which is
   // worse than an absent one. A third-party span offers no better guarantee.
-  { source: "tool.name", target: GEN_AI_TOOL_NAME, convert: textValue, identity: true },
+  { source: TOOL_NAME, target: GEN_AI_TOOL_NAME, convert: textValue, identity: true },
   // Why the model stopped. The source is a SCALAR and the canonical key is an
   // array (one entry per generation), so wrap rather than copy.
   //
@@ -854,36 +870,36 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // is a question for a reader who still has both, not for the SDK that would
   // destroy one of them. The native path (Generation.setFinishReasons) records
   // verbatim too, so both paths agree.
-  { source: "llm.finish_reason", target: GEN_AI_RESPONSE_FINISH_REASONS, convert: wrapInList },
+  { source: LLM_FINISH_REASON, target: GEN_AI_RESPONSE_FINISH_REASONS, convert: wrapInList },
   // Usage. toInt rather than copy: a count under a canonical key must be a
   // count, and a converter that yields nothing is how a wrongly-shaped value
   // stays off the wire.
-  { source: "llm.token_count.prompt", target: GEN_AI_USAGE_INPUT_TOKENS, convert: toInt },
-  { source: "llm.token_count.completion", target: GEN_AI_USAGE_OUTPUT_TOKENS, convert: toInt },
+  { source: LLM_TOKEN_COUNT_PROMPT, target: GEN_AI_USAGE_INPUT_TOKENS, convert: toInt },
+  { source: LLM_TOKEN_COUNT_COMPLETION, target: GEN_AI_USAGE_OUTPUT_TOKENS, convert: toInt },
   {
-    source: "llm.token_count.prompt_details.cache_read",
+    source: LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
     target: GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "llm.token_count.prompt_details.cache_write",
+    source: LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE,
     target: GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "llm.token_count.completion_details.reasoning",
+    source: LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
   // The audio subsets: copied as they are, never added to or subtracted from
   // the input and output counts, which already include them.
   {
-    source: "llm.token_count.prompt_details.audio",
+    source: LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
     target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "llm.token_count.completion_details.audio",
+    source: LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
     target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
     convert: toInt,
   },
@@ -892,8 +908,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // target where a span somehow carries both, and a separate rule rather than
   // a second source means an OpenInference count that won't parse still lets
   // a usable alternate through (a rule converts only its first present
-  // source). Spelled inline for the reason gen_ai.system is: source spellings
-  // we map and never emit.
+  // source). Like gen_ai.system, they are source spellings we map and never
+  // emit.
   //
   // cache_creation is the cache-write count's name before the upstream rename
   // to cache_write. Permanent, not a transition aid: current third-party
@@ -901,7 +917,7 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // pydantic-ai), and the backend prices cache writes from the canonical key
   // alone. The rename is exact, so nothing is lost.
   {
-    source: "gen_ai.usage.cache_creation.input_tokens",
+    source: GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
     target: GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
     convert: toInt,
   },
@@ -909,7 +925,7 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // transcription models): the audio subset of the input, before pydantic-ai's
   // below. Its text_tokens twin has no per-modality key we emit, and stays.
   {
-    source: "gen_ai.usage.input_token_details.audio_tokens",
+    source: GEN_AI_USAGE_INPUT_TOKEN_DETAILS_AUDIO_TOKENS,
     target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
     convert: toInt,
   },
@@ -920,17 +936,17 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // one; if it carries several, this order decides and all of them go, as in
   // the sink. Separate rules so one that won't parse does not block the next.
   {
-    source: "gen_ai.usage.details.reasoning_tokens",
+    source: GEN_AI_USAGE_DETAILS_REASONING_TOKENS,
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.thinking_tokens",
+    source: GEN_AI_USAGE_DETAILS_THINKING_TOKENS,
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.thoughts_tokens",
+    source: GEN_AI_USAGE_DETAILS_THOUGHTS_TOKENS,
     target: GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     convert: toInt,
   },
@@ -950,59 +966,59 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // output's), under a name with no direction, and output_audio_tokens
   // carries the same count.
   {
-    source: "gen_ai.usage.details.image_prompt_tokens",
+    source: GEN_AI_USAGE_DETAILS_IMAGE_PROMPT_TOKENS,
     target: GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.image_cache_tokens",
+    source: GEN_AI_USAGE_DETAILS_IMAGE_CACHE_TOKENS,
     target: GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.image_candidates_tokens",
+    source: GEN_AI_USAGE_DETAILS_IMAGE_CANDIDATES_TOKENS,
     target: GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.input_audio_tokens",
+    source: GEN_AI_USAGE_DETAILS_INPUT_AUDIO_TOKENS,
     target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.cache_audio_read_tokens",
+    source: GEN_AI_USAGE_DETAILS_CACHE_AUDIO_READ_TOKENS,
     target: GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.output_audio_tokens",
+    source: GEN_AI_USAGE_DETAILS_OUTPUT_AUDIO_TOKENS,
     target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.audio_prompt_tokens",
+    source: GEN_AI_USAGE_DETAILS_AUDIO_PROMPT_TOKENS,
     target: GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.audio_cache_tokens",
+    source: GEN_AI_USAGE_DETAILS_AUDIO_CACHE_TOKENS,
     target: GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.audio_candidates_tokens",
+    source: GEN_AI_USAGE_DETAILS_AUDIO_CANDIDATES_TOKENS,
     target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
     convert: toInt,
   },
   {
-    source: "gen_ai.usage.details.audio_response_tokens",
+    source: GEN_AI_USAGE_DETAILS_AUDIO_RESPONSE_TOKENS,
     target: GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
     convert: toInt,
   },
   // Time to first chunk under the conventions' metric name, which @ai-sdk/otel
   // and pydantic-ai write as a span attribute. The duration is the whole
   // signal: no first-token event is added.
-  { source: GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK, expand: firstChunkFromMetric },
+  { source: GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK, expand: firstChunkFromMetric },
   // The request bag, last: the dedicated model rules above take precedence
   // over its `model` member. Identity, because what it promotes is.
   {
@@ -1016,7 +1032,7 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
   // it only fills the key when no LLM spelling above produced one. Identity,
   // as the request model is, so a pending embedding span is classifiable.
   {
-    source: "embedding.model_name",
+    source: EMBEDDING_MODEL_NAME,
     target: GEN_AI_REQUEST_MODEL,
     convert: textValue,
     identity: true,
@@ -1035,10 +1051,8 @@ export const OPENINFERENCE_RULES: readonly NormalizationRule[] = [
 // way, so raw AI SDK traffic that never passed through this SDK stores it too.
 //
 // Source spellings throughout, read from the `ai` package at 5.0.273 and
-// 6.0.304 (the recorded versions) and spelled inline, as for every dialect.
-
-/** The AI SDK's operation id. Kept on the span: it is the dialect's own name for the call. */
-const VERCEL_OPERATION_ID = "ai.operationId";
+// 6.0.304 (the recorded versions) and spelled inline: the registry names only
+// ai.operationId among them.
 
 /**
  * What an operation id says: its kind, and whether the span is ONE model call
@@ -1094,9 +1108,9 @@ function vercelOperation(raw: AttributeValue | undefined): VercelOperation | und
  */
 export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Expansion {
   const operation = vercelOperation(raw);
-  if (operation === undefined) return { [VERCEL_OPERATION_ID]: raw };
+  if (operation === undefined) return { [AI_OPERATION_ID]: raw };
   const produced: Expansion = {
-    [VERCEL_OPERATION_ID]: raw,
+    [AI_OPERATION_ID]: raw,
     [OPENINFERENCE_SPAN_KIND]: operation.kind,
     [GEN_AI_OPERATION_NAME]: operationForKind(operation.kind),
   };
@@ -1163,7 +1177,7 @@ export const vercelProviderName: Converter = (values) => {
  * see {@link normalizeVercelSpan}.
  */
 export const VERCEL_RULES: readonly NormalizationRule[] = [
-  { source: VERCEL_OPERATION_ID, expand: taxonomyFromVercelOperation, identity: true },
+  { source: AI_OPERATION_ID, expand: taxonomyFromVercelOperation, identity: true },
   {
     source: "ai.model.provider",
     target: GEN_AI_PROVIDER_NAME,
@@ -1207,14 +1221,6 @@ export const VERCEL_RULES: readonly NormalizationRule[] = [
     identity: true,
   },
 ];
-
-/**
- * Canonical keys the AI SDK path produces that semconv.ts does not name.
- * Inline, like the dialect's sources: semconv.ts lists them only as content.
- */
-const GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions";
-const GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments";
-const GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result";
 
 /**
  * Each usage count and its AI SDK spellings, in precedence order: v6's
@@ -1664,9 +1670,9 @@ function vercelUsage(
  * mapped source goes.
  */
 export function normalizeVercelSpan(attributes: Record<string, AttributeValue | undefined>): void {
-  const operation = vercelOperation(attributes[VERCEL_OPERATION_ID]);
+  const operation = vercelOperation(attributes[AI_OPERATION_ID]);
   if (operation === undefined) {
-    if (attributes[VERCEL_OPERATION_ID] === undefined) vercelOtelUsage(attributes);
+    if (attributes[AI_OPERATION_ID] === undefined) vercelOtelUsage(attributes);
     return;
   }
   vercelUsage(attributes, operation);
@@ -2348,7 +2354,8 @@ export function stripSpanPayloads(span: ReadableSpan): void {
 
 /**
  * OpenInference's indexed tool-definition family, `llm.tools.{i}.tool.json_schema`.
- * A source spelling, inline for the reason the `llm.*` rule sources are.
+ * A source spelling the registry has no constant for (a pattern over indexed
+ * keys, not one key), so it is spelled here.
  */
 const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
 
@@ -2607,7 +2614,8 @@ export function promoteSystemInstruction(
 
 /**
  * OpenInference's embedding vectors, `embedding.embeddings.N.embedding.vector`.
- * A source spelling, inline for the reason the `llm.*` rule sources are.
+ * A source spelling the registry has no constant for (a pattern over indexed
+ * keys, not one key), so it is spelled here.
  */
 const EMBEDDING_VECTOR = /^embedding\.embeddings\.[0-9]+\.embedding\.vector$/;
 
@@ -2660,8 +2668,9 @@ export function responseIdFromOutput(
   // Declared anything but JSON, the output is the model's own words: the JS
   // instrumentors record a stream's accumulated reply as text/plain, and a
   // JSON-mode reply's "id" is the model's, not the response's. Undeclared is
-  // taken, as the contract has it. A source spelling, inline.
-  const mime = attributes["output.mime_type"];
+  // taken, as the contract has it. OUTPUT_MIME_TYPE is a source spelling:
+  // read here, never emitted.
+  const mime = attributes[OUTPUT_MIME_TYPE];
   if (mime !== undefined && mime !== "application/json") return {};
   const output = attributes[OUTPUT_VALUE];
   if (typeof output !== "string" || !output.startsWith("{")) return {};
