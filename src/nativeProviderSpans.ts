@@ -21,8 +21,8 @@ import {
  * While Rius has the OpenInference instrumentation enabled, the SDK's chat
  * span is demoted instead of dropped: it keeps its place in the trace, and the
  * HTTP spans an application's own instrumentation hangs under it, but loses
- * every `gen_ai.*` key except the provider name, so it exports as a plain
- * CLIENT call. The backend classes a span as an LLM call by its kind, its
+ * every `gen_ai.*` key except the provider name and the conversation id, so
+ * it exports as a plain CLIENT call. The backend classes a span as an LLM call by its kind, its
  * operation or its model, and prices it from its model and usage, so all of
  * those have to go. The SDK's other spans (the tool runner's `execute_tool`
  * and `invoke_agent`) have no OpenInference counterpart and pass untouched, as
@@ -35,12 +35,20 @@ const ANTHROPIC_SDK_SCOPE_PREFIX = "com.anthropic.sdk.";
 /** The GenAI conventions' namespace, stripped from a demoted span. */
 const GEN_AI_NAMESPACE = "gen_ai.";
 
+/**
+ * Kept on a demoted span, with the provider name: an id, not content, and
+ * nothing the backend classes or prices by. Not a registry constant because
+ * Rius never emits it (it emits session.id); this only leaves the Anthropic
+ * SDK's own value in place, as the Python SDK does.
+ */
+const GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id";
+
 type Bag = Record<string, AttributeValue | undefined>;
 
 /** Remove the LLM classification, model, usage and content keys, in place. */
 function demote(attributes: Bag): void {
   for (const key of Object.keys(attributes)) {
-    if (key === GEN_AI_PROVIDER_NAME) continue;
+    if (key === GEN_AI_PROVIDER_NAME || key === GEN_AI_CONVERSATION_ID) continue;
     if (key === OPENINFERENCE_SPAN_KIND || key.startsWith(GEN_AI_NAMESPACE)) {
       delete attributes[key];
     }

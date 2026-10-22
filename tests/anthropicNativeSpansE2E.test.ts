@@ -4,6 +4,7 @@ import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trac
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
 import {
+  GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
   GEN_AI_REQUEST_MODEL,
   GEN_AI_USAGE_INPUT_TOKENS,
@@ -43,6 +44,8 @@ const Anthropic = (
       apiKey: string;
       baseURL: string;
       maxRetries: number;
+      // From 0.134; older clients ignore it.
+      openTelemetry?: { traces: { contentMode: "content" | "metadata_only" } };
     }) => AnthropicClient;
   }
 ).default;
@@ -59,11 +62,12 @@ const REPLY = {
   type: "message",
   role: "assistant",
   model: "claude-test",
-  content: [{ type: "text", text: "ok" }],
+  content: [{ type: "text", text: "REPLY-TEXT" }],
   stop_reason: "end_turn",
   stop_sequence: null,
   usage: USAGE,
 };
+const REPLY_TEXT = "REPLY-TEXT";
 
 function streamBody(): string {
   const events: Array<[string, unknown]> = [
@@ -77,7 +81,7 @@ function streamBody(): string {
     ],
     [
       "content_block_delta",
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: REPLY_TEXT } },
     ],
     ["content_block_stop", { type: "content_block_stop", index: 0 }],
     [
@@ -163,6 +167,41 @@ const CALLS: Array<[string, () => Promise<unknown>]> = [
   ["beta.messages.stream", () => anthropic.beta.messages.stream(REQUEST).finalMessage()],
 ];
 
+/**
+ * How argus-core reads a span, as of its main branch: the sink derives
+ * openinference.span.kind from gen_ai.operation.name when only the operation
+ * is set (normalize.kindByOperation), the console badges a span by that kind,
+ * else as llm when it has gen_ai.request.model (spans.spanKindExpr), and
+ * enrich.costFor prices any span with gen_ai.request.model and at least one
+ * of the four token counts, whatever its kind. A change to those rules should
+ * break this, so the demotion is revisited with it.
+ */
+const LLM_OPERATIONS = new Set(["chat", "text_completion", "generate_content", "decide"]);
+const PRICED_COUNTS = [
+  "gen_ai.usage.input_tokens",
+  "gen_ai.usage.output_tokens",
+  "gen_ai.usage.cache_read.input_tokens",
+  "gen_ai.usage.cache_write.input_tokens",
+];
+
+function backendView(span: ReadableSpan): { badge: string; priced: boolean } {
+  const a = span.attributes;
+  const operation = a[GEN_AI_OPERATION_NAME];
+  const kind =
+    a[OPENINFERENCE_SPAN_KIND] ??
+    (typeof operation === "string" && LLM_OPERATIONS.has(operation) ? "LLM" : undefined);
+  const model = a[GEN_AI_REQUEST_MODEL];
+  const badge =
+    typeof kind === "string" && kind !== ""
+      ? kind.toLowerCase()
+      : typeof model === "string" && model !== ""
+        ? "llm"
+        : "other";
+  const priced =
+    typeof model === "string" && model !== "" && PRICED_COUNTS.some((k) => a[k] !== undefined);
+  return { badge, priced };
+}
+
 describe("one Anthropic call", () => {
   it.each(CALLS)("is one LLM call through %s", async (_name, call) => {
     const spans = await spansOf(call);
@@ -184,6 +223,35 @@ describe("one Anthropic call", () => {
       expect(genAi).toEqual([GEN_AI_PROVIDER_NAME]);
       expect(span.attributes[OPENINFERENCE_SPAN_KIND]).toBeUndefined();
       expect(span.attributes["http.response.status_code"]).toBe(200);
+      expect(backendView(span)).toEqual({ badge: "other", priced: false });
     }
+    expect(llm.map(backendView)).toEqual([{ badge: "llm", priced: true }]);
   });
+
+  it.runIf(TRACES_ITSELF)(
+    "leaves no prompt or reply on the SDK's span, even in the SDK's content mode",
+    async () => {
+      const recording = new Anthropic({
+        apiKey: "not-a-real-key",
+        baseURL: server.url,
+        maxRetries: 0,
+        openTelemetry: { traces: { contentMode: "content" } },
+      });
+      const spans = await spansOf(() =>
+        recording.messages.create({
+          ...REQUEST,
+          system: "SYSTEM-TEXT",
+          messages: [{ role: "user", content: "PROMPT-TEXT" }],
+        }),
+      );
+      const native = spans.filter((s) =>
+        s.instrumentationScope.name.startsWith("com.anthropic.sdk"),
+      );
+      expect(native).toHaveLength(1);
+      const text = JSON.stringify(native[0].attributes);
+      for (const content of ["SYSTEM-TEXT", "PROMPT-TEXT", REPLY_TEXT]) {
+        expect(text).not.toContain(content);
+      }
+    },
+  );
 });

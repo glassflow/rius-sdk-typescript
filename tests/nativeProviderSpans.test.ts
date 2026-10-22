@@ -80,6 +80,39 @@ describe("the Anthropic SDK's chat span, with the OpenInference instrumentation 
     expect(finished("POST")?.parentSpanContext?.spanId).toBe(span.spanContext().spanId);
   });
 
+  // The Bedrock and Vertex clients (@anthropic-ai/bedrock-sdk and
+  // @anthropic-ai/vertex-sdk 1.x) call through the same patched Messages
+  // resource, so OpenInference records their calls too; their own spans carry
+  // the platform as a scope suffix and their own provider name.
+  it.each([
+    ["com.anthropic.sdk.typescript.bedrock", "aws.bedrock"],
+    ["com.anthropic.sdk.typescript.vertex", "gcp.vertex_ai"],
+  ])("is demoted from the %s scope too", (scope, provider) => {
+    const { finished, tracer } = setup(true);
+    tracer(scope)
+      .startSpan("anthropic.messages.create", {
+        kind: SpanKind.CLIENT,
+        attributes: { ...CHAT, [GEN_AI_PROVIDER_NAME]: provider },
+      })
+      .end();
+    expect(finished("anthropic.messages.create")?.attributes).toEqual({
+      [GEN_AI_PROVIDER_NAME]: provider,
+      "http.route": "/v1/messages",
+    });
+  });
+
+  it("keeps the conversation id, which is neither content nor what the backend counts by", () => {
+    const { finished, tracer } = setup(true);
+    tracer(NATIVE_SCOPE)
+      .startSpan("anthropic.messages.create", {
+        attributes: { ...CHAT, "gen_ai.conversation.id": "thread_1" },
+      })
+      .end();
+    expect(finished("anthropic.messages.create")?.attributes["gen_ai.conversation.id"]).toBe(
+      "thread_1",
+    );
+  });
+
   it("leaves the SDK's tool runner spans, which have no OpenInference counterpart", () => {
     const { finished, tracer } = setup(true);
     for (const operation of ["execute_tool", "invoke_agent"]) {
