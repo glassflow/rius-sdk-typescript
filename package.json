@@ -101,7 +101,7 @@
     "@langchain/core": "^1.2.5",
     "@langchain/openai": "1.6.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^25.9.9",
     "ai": "^7.0.141",
     "openai": "^7.4.0",
     "tsup": "^8.0.0",
