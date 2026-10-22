@@ -23,9 +23,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Text for a part: strings verbatim, everything else JSON, as Python's serialize() does. */
 function asText(value: unknown): string {
-  if (typeof value === "string") return value;
-  const text = toAttributeValue(value);
-  return typeof text === "string" ? text : String(text);
+  return typeof value === "string" ? value : toAttributeValue(value);
+}
+
+/**
+ * The message's own role, else the default. Only an ABSENT role defaults (an
+ * `undefined` one is absent too, since JSON drops it): an explicit `null` is
+ * kept, as Python's `dict.get` / `setdefault` keep a `None`.
+ */
+function roleOf(message: Record<string, unknown>, defaultRole: string): unknown {
+  return message.role === undefined ? defaultRole : message.role;
 }
 
 /** One content-list entry into spec message parts. */
@@ -75,7 +82,7 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
   if ("parts" in message) {
     return {
       ...message,
-      role: message.role ?? defaultRole,
+      role: roleOf(message, defaultRole),
       parts: normalizeParts(message.parts),
     } as Message;
   }
@@ -85,7 +92,7 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
     if (media !== undefined) return { role: defaultRole, parts: media };
   }
 
-  const role = message.role ?? defaultRole;
+  const role = roleOf(message, defaultRole);
   if (role === "tool" && "tool_call_id" in message) {
     return {
       role: "tool",
@@ -141,5 +148,5 @@ export function normalizeMessages(messages: unknown, defaultRole: string): Messa
 
 /** Serialize to the spec message-array shape (a JSON string attribute). */
 export function serializeMessages(messages: unknown, defaultRole: string): string {
-  return toAttributeValue(normalizeMessages(messages, defaultRole)) as string;
+  return toAttributeValue(normalizeMessages(messages, defaultRole));
 }

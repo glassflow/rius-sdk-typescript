@@ -105,16 +105,22 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Coerce an arbitrary value into something an OTel attribute accepts, bounded
- * by {@link MAX_ATTR_CHARS} and well formed (see {@link textValue}: the cut
- * can split a surrogate pair). Must never throw: this runs on the user's data on
- * the hot path.
+ * An arbitrary value as the bounded string an OTel attribute stores, the
+ * Python SDK's `serialize`: a string as it is, anything else its JSON, cut at
+ * {@link MAX_ATTR_CHARS} and kept well formed (see {@link textValue}: the cut
+ * can split a surrogate pair). A number or boolean is its JSON text too
+ * (`"1.5"`, `"true"`), as OpenInference defines `input.value` /
+ * `output.value`, and `null` / `undefined` are `"null"`, the JSON of Python's
+ * `None`. A non-finite number is `NaN` / `Infinity` / `-Infinity`, as
+ * Python's encoder writes it. Must never throw: this runs on the user's data
+ * on the hot path.
  */
-export function toAttributeValue(value: unknown): string | number | boolean {
+export function toAttributeValue(value: unknown): string {
   if (typeof value === "string") return textValue(value);
-  if (typeof value === "number" || typeof value === "boolean") return value;
-  if (value === null || value === undefined) return "";
-  if (typeof value === "bigint") return String(value);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value === null || value === undefined) return "null";
   // Track the ANCESTOR chain, not every object seen. A global seen-set would
   // report a shared sibling reference ({ a: x, b: x }) as circular and drop
   // real data, which is a plausible shape in LLM message payloads.
@@ -172,6 +178,8 @@ const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];
  */
 export function attributeValue(value: unknown): AttributeValue | undefined {
   if (value === undefined || value === null) return undefined;
+  // A scalar is stored typed, as Python's `_attribute_value` keeps it.
+  if (typeof value === "number" || typeof value === "boolean") return value;
   if (isByteObject(value)) return byteObjectMarker(value);
   if (Array.isArray(value)) {
     let items: unknown;

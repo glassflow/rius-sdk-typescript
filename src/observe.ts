@@ -118,7 +118,9 @@ export function observe<F extends (...args: never[]) => unknown>(
     };
     const body = async (observation: Observation): Promise<R> => {
       const result = (await fn(...(args as never[]))) as R;
-      if (captureOutput && result !== undefined) observation.setOutput(result);
+      // An undefined result is recorded too, as "null": Python records the
+      // None a function without a return gives back.
+      if (captureOutput) observation.setOutput(result);
       return result;
     };
     // Two calls rather than one with an optional name: the span helpers keep

@@ -10,10 +10,11 @@ import {
 import { CONTRACT } from "./mediaContract.js";
 
 describe("toAttributeValue", () => {
-  it("passes primitives through untouched", () => {
+  it("keeps a string as it is and writes other scalars as their JSON text", () => {
     expect(toAttributeValue("s")).toBe("s");
-    expect(toAttributeValue(1)).toBe(1);
-    expect(toAttributeValue(true)).toBe(true);
+    expect(toAttributeValue(1)).toBe("1");
+    expect(toAttributeValue(true)).toBe("true");
+    expect(toAttributeValue(null)).toBe("null");
   });
 
   it("JSON-encodes objects and arrays", () => {
