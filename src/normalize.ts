@@ -6,6 +6,7 @@ import {
 } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { moveAggregatedUsage, moveWrappedCallUsage, noteWrapperStart } from "./aggregatedUsage.js";
+import { addProviderCompactions } from "./compaction.js";
 import { qualifyRecordedExceptions } from "./errorType.js";
 import {
   base64Blob,
@@ -82,7 +83,7 @@ import {
   RIUS_REQUEST_TOOL_CHOICE,
   SpanKind,
 } from "./semconv.js";
-import { toAttributeValue } from "./serde.js";
+import { toAttributeValue, wellFormed } from "./serde.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -405,14 +406,6 @@ function asTextList(value: unknown): AttributeValue | undefined {
   if (typeof value === "string") return [value];
   if (Array.isArray(value) && value.every((v) => typeof v === "string")) return [...value];
   return undefined;
-}
-
-/** A UTF-16 surrogate with no partner. */
-const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
-
-/** `text` with every unpaired surrogate replaced by U+FFFD, as Go's encoder does. */
-function wellFormed(text: string): string {
-  return text.replace(LONE_SURROGATE, "\ufffd");
 }
 
 /**
@@ -2695,9 +2688,11 @@ export class NormalizingSpanProcessor implements SpanProcessor {
   private readonly rules: readonly NormalizationRule[];
   private readonly identityRules: readonly NormalizationRule[];
   private readonly prefixes: readonly string[];
+  private readonly eventCountLimit?: number;
 
-  constructor(rules: readonly NormalizationRule[] = NORMALIZATION_RULES) {
+  constructor(rules: readonly NormalizationRule[] = NORMALIZATION_RULES, eventCountLimit?: number) {
     this.rules = rules;
+    this.eventCountLimit = eventCountLimit;
     this.identityRules = rules.filter((rule) => rule.identity === true);
     this.prefixes = sourcePrefixes(rules);
   }
@@ -2741,6 +2736,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }
+    // Reads the same `output.value` as the response id above, and for the same
+    // reason only at end.
+    addProviderCompactions(span, attributes, this.eventCountLimit);
     // Export-stage only, like the event passes, and for a reason of its own:
     // messages are content, so they must never be written at span start, where
     // a pending snapshot could carry them. The sources are an indexed family,

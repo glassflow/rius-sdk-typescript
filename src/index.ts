@@ -6,6 +6,12 @@ export type { Mask, RiusOptions } from "./config.js";
 export type { GenerationBody, GenerationOptions } from "./generation.js";
 export { Generation, startAsCurrentGeneration, startGeneration } from "./generation.js";
 export type { InjectedIntegration, InstrumentModules } from "./instrumentation.js";
+export type {
+  CompactionKind,
+  CompactionTrigger,
+  MarkCompactionOptions,
+} from "./markCompaction.js";
+export { markCompaction } from "./markCompaction.js";
 export type { ObserveOptions } from "./observe.js";
 export { observe } from "./observe.js";
 export { SpanKind } from "./semconv.js";

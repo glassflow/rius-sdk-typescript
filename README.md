@@ -302,6 +302,70 @@ The name is optional here as well: `startAsCurrentGeneration({ model:
 "gpt-4o" }, fn)` names the span `chat gpt-4o`, and an `operation` override
 names it after that operation instead (`embeddings text-embedding-3-small`).
 
+### `markCompaction`: context compactions
+
+When an agent shortens its own history (summarising it, dropping old tool
+results or thinking, truncating it) call `markCompaction` right where it
+happens:
+
+```ts
+import { markCompaction } from "@glassflow-ai/rius";
+
+const summary = await summarise(messages);
+markCompaction({
+  kind: "summarize",
+  trigger: "auto",
+  tokensBefore: 182_000,
+  tokensAfter: 9_500,
+  messagesCompacted: 64,
+  messagesKept: 6,
+  summary,
+});
+```
+
+It records a point-in-time `compaction` span (a child of the current span, or a
+root when there is none) with the fields as `rius.compaction.*` attributes and
+`rius.compaction.executor` set to `client`. `kind` defaults to `summarize` and
+may also be `clear_tool_results`, `clear_thinking` or `truncate`; `trigger` is
+`auto` or `manual`. When both token counts are given and `tokensBefore` is not
+smaller, `rius.compaction.tokens.dropped` is their difference. `summary` is
+recorded as `rius.compaction.summary.text` with its UTF-8 size in
+`rius.compaction.summary.bytes`; like every content attribute the text is
+dropped under `captureContent: false` and the size stays. An unknown `kind` or
+`trigger`, or a count that is not a non-negative integer, throws a `TypeError`,
+with or without an initialized client; without one nothing is recorded.
+
+The next LLM span started in the same async context is flagged
+`gen_ai.conversation.compacted`, once, so a trace shows which call ran on the
+compacted history. Mark the compaction in the flow that makes that call. The
+mark belongs to the async context it ran in (it is set with
+`AsyncLocalStorage.enterWith`), so:
+
+- A mark made after an `await` inside a helper is not seen by the caller. Only
+  a mark in the synchronous prefix of an `async` function, before its first
+  `await`, reaches the caller.
+- An `async` function that is called eagerly and marks in its synchronous
+  prefix also marks the context of flows the caller creates afterwards, so a
+  sibling started after it can take the flag. Mark in the flow that makes the
+  call, not in a helper that runs beside other concurrent flows.
+
+Compactions the provider makes inside a request are recorded for you. When an
+auto-instrumented Anthropic response reports `context_management.applied_edits`
+or a `compaction` content block, or an OpenAI Responses response has a
+`compaction` output item, the LLM span gets one `rius.compaction` event per
+compaction (with `rius.compaction.executor` `provider`) and the same
+`gen_ai.conversation.compacted` flag. Limits:
+
+- A streamed Anthropic or chat completions response is recorded by the
+  instrumentation as its accumulated text, which carries none of this, so those
+  calls report no provider compaction; mark it with `markCompaction` if you
+  need it on the trace. A streamed OpenAI Responses call is reported, because
+  its final `response.completed` payload is recorded as JSON.
+- OpenAI's standalone `/responses/compact` endpoint is not instrumented by
+  OpenInference, so a call to it produces no span and no event.
+- The encrypted content of an OpenAI compaction item is never read or
+  recorded.
+
 ## Auto-instrumentation
 
 The SDK bundles five integrations. Each one attaches to an optional peer

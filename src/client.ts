@@ -24,6 +24,11 @@ import {
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { setConfiguredAgentName } from "./agent.js";
+import {
+  CompactionFlagSpanProcessor,
+  DEFAULT_SPAN_EVENT_COUNT_LIMIT,
+  EVENT_COUNT_LIMIT_ENV,
+} from "./compaction.js";
 import { namedAgent, type OperatorMainAgent, type RiusOptions, resolveConfig } from "./config.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
@@ -393,6 +398,9 @@ function resolveSpanLimits(): SpanLimits {
     attributeCountLimit: fromEnv(ATTRIBUTE_COUNT_LIMIT_ENV) ?? DEFAULT_SPAN_ATTRIBUTE_COUNT_LIMIT,
     attributeValueLengthLimit:
       fromEnv(ATTRIBUTE_VALUE_LENGTH_LIMIT_ENV) ?? Number.POSITIVE_INFINITY,
+    // Resolved here so the provider and the normalizer, which adds events to
+    // an ended span, enforce one number.
+    eventCountLimit: fromEnv([EVENT_COUNT_LIMIT_ENV]) ?? DEFAULT_SPAN_EVENT_COUNT_LIMIT,
   };
 }
 
@@ -421,6 +429,7 @@ export function init(options: InitOptions = {}): RiusClient {
 
   const config = resolveConfig(options);
   const processors = new DelegatingSpanProcessor();
+  const spanLimits = resolveSpanLimits();
 
   // Read before anything is registered: the OpenTelemetry global is write-once,
   // so whichever provider already holds it keeps it, and the resource below —
@@ -557,9 +566,10 @@ export function init(options: InitOptions = {}): RiusClient {
     // the queue) decides what is content. At onStart it must run before the
     // pending processor snapshots the span, so the snapshot's canonical
     // identity allowlist matches. Always on; there is no opt-out.
-    processors.add(new NormalizingSpanProcessor());
+    processors.add(new NormalizingSpanProcessor(undefined, spanLimits.eventCountLimit));
     processors.add(new SessionSpanProcessor(config.sessionId));
     processors.add(new UserSpanProcessor());
+    processors.add(new CompactionFlagSpanProcessor());
     if (routing !== undefined) {
       processors.add(new WorkspaceSpanProcessor());
     }
@@ -574,7 +584,6 @@ export function init(options: InitOptions = {}): RiusClient {
   const sampler = new BridgeAwareSampler(
     new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
   );
-  const spanLimits = resolveSpanLimits();
   const provider = new NodeTracerProvider({
     resource,
     // Always ParentBased, with no AlwaysOn shortcut at rate 1. They are not
