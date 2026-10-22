@@ -9,6 +9,8 @@ import {
   CONTENT_ATTRIBUTES,
   CONTENT_PREFIX_IDENTITY_ATTRIBUTES,
   EXCEPTION_EVENT,
+  EXCEPTION_MESSAGE,
+  EXCEPTION_STACKTRACE,
 } from "./semconv.js";
 import { toAttributeValue, truncate } from "./serde.js";
 
@@ -48,7 +50,7 @@ export function isContentKey(key: string): boolean {
  * `exception.type` is a class name, never content, and survives together with
  * the event itself so a failure is still visible.
  */
-const EXCEPTION_CONTENT_KEYS: readonly string[] = ["exception.message", "exception.stacktrace"];
+const EXCEPTION_CONTENT_KEYS: readonly string[] = [EXCEPTION_MESSAGE, EXCEPTION_STACKTRACE];
 
 /**
  * The status description is the same string once more: `recordException`

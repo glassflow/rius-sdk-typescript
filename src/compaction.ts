@@ -7,6 +7,7 @@ import {
   GEN_AI_OPERATION_NAME,
   kindForOperation,
   OPENINFERENCE_SPAN_KIND,
+  OUTPUT_MIME_TYPE,
   OUTPUT_VALUE,
   RIUS_COMPACTION_EVENT,
   RIUS_COMPACTION_EXECUTOR,
@@ -232,7 +233,7 @@ export function providerCompactions(
   attributes: Readonly<Record<string, AttributeValue | undefined>>,
 ): EventAttributes[] {
   if (attributes[OPENINFERENCE_SPAN_KIND] !== SpanKind.LLM) return [];
-  const mime = attributes["output.mime_type"];
+  const mime = attributes[OUTPUT_MIME_TYPE];
   if (mime !== undefined && mime !== "application/json") return [];
   const output = attributes[OUTPUT_VALUE];
   if (typeof output !== "string" || !output.startsWith("{")) return [];
