@@ -67,12 +67,30 @@ const EXCEPTION_CONTENT_KEYS: readonly string[] = [EXCEPTION_MESSAGE, EXCEPTION_
 const ANTHROPIC_SDK_URL_CONTENT_KEYS: readonly string[] = [URL_QUERY, URL_FULL];
 
 /**
+ * `url` as its scheme, host and path, or `undefined` when nothing is left:
+ * without its query and fragment, and without a user name or password before
+ * the host, which the URL convention says must never be recorded.
+ */
+function schemeHostAndPath(url: string): string | undefined {
+  let base = url.split(/[?#]/, 1)[0];
+  const authority = base.indexOf("://");
+  if (authority >= 0) {
+    const start = authority + 3;
+    const slash = base.indexOf("/", start);
+    const end = slash < 0 ? base.length : slash;
+    const at = base.lastIndexOf("@", end - 1);
+    if (at >= start) base = base.slice(0, start) + base.slice(at + 1);
+  }
+  return base === "" ? undefined : base;
+}
+
+/**
  * What is left of a content attribute with content capture off, or
- * `undefined` to drop it: `url.full` keeps its scheme, host and path, since
- * only its query and fragment are content. Every other key is dropped.
+ * `undefined` to drop it: a string `url.full` keeps its scheme, host and path,
+ * since only the rest of it is content. Every other key is dropped.
  */
 function withoutContent(key: string, value: unknown): unknown {
-  if (key === URL_FULL && typeof value === "string") return value.split(/[?#]/, 1)[0];
+  if (key === URL_FULL && typeof value === "string") return schemeHostAndPath(value);
   return undefined;
 }
 
