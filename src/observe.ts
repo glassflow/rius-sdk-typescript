@@ -146,13 +146,15 @@ const ASYNC_GENERATOR_FUNCTION_TAG = "[object AsyncGeneratorFunction]";
  * is a stream, not a value, which is what the Python SDK does too.
  *
  * A generator abandoned mid-iteration, dropped without finishing or being
- * closed, has its span ended when the garbage collector reclaims it, timed at
- * its last step, as Python ends it at collection. That is best effort: the
- * collector decides when, or whether, it runs, so until then (and for good if
- * the process exits first) the span stays open and is reported as pending.
- * The wrapped generator's own `finally` blocks do not run. Close a generator
- * you stop iterating early (`return()`, or `break` out of a loop) for an exact
- * end.
+ * closed, has its span ended when the garbage collector reclaims it, as the
+ * Python SDK does when a generator is collected. The span is timed at the last
+ * value it yielded, so an async generator abandoned while awaiting its next
+ * value is timed at the value before it, not at the wait. That is best
+ * effort: the collector decides when, or whether, it runs, so until then (and
+ * for good if the process exits first) the span stays open and is reported as
+ * pending. The wrapped generator's own `finally` blocks do not run. Close a
+ * generator you stop iterating early (`return()`, or `break` out of a loop)
+ * for an exact end.
  *
  * Generators are recognised by function kind, as Python recognises them, so a
  * plain function that returns a generator built elsewhere is an ordinary
@@ -410,7 +412,9 @@ export interface AbandonedIteration {
  */
 export function endAbandonedIteration(abandoned: AbandonedIteration): void {
   try {
-    abandoned.observation.span.end(abandoned.lastStep);
+    // Through the handle, not the raw span: its guard keeps a span from
+    // ending twice, and a subclass's end() records what it owes first.
+    abandoned.observation.end(abandoned.lastStep);
   } catch {
     // Nothing to report to: the generator is gone, and so is its caller.
   }

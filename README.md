@@ -175,11 +175,13 @@ itself: a plain function that returns a generator is an ordinary function to
 ES2018.
 
 A generator abandoned mid-iteration, dropped without finishing or being
-closed, has its span ended when the garbage collector reclaims it, timed at
-its last step. That is best effort: the collector decides when, or whether,
-that happens, so until then (and for good if the process exits first) the
-span stays open and shows as pending, and the wrapped generator's own
-`finally` blocks never run. Close a generator you stop iterating early, with
+closed, has its span ended when the garbage collector reclaims it. The span
+is timed at the last value it yielded, so an async generator abandoned while
+awaiting its next value is timed at the value before it, not at the wait.
+That is best effort: the collector decides when, or whether, that happens,
+so until then (and for good if the process exits first) the span stays open
+and shows as pending, and the wrapped generator's own `finally` blocks never
+run. Close a generator you stop iterating early, with
 `return()` or a `break` out of the loop, for an exact end.
 
 The wrapper's type follows the generator's: `Generator`/`AsyncGenerator`

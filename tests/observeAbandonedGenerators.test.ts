@@ -1,8 +1,9 @@
 import { DiagLogLevel, diag, trace } from "@opentelemetry/api";
 import { hrTimeToMilliseconds } from "@opentelemetry/core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
+import { Generation } from "../src/generation.js";
 import { endAbandonedIteration, observe } from "../src/observe.js";
 import { Observation } from "../src/spans.js";
 
@@ -12,7 +13,11 @@ import { Observation } from "../src/spans.js";
 // SDK ends it from a FinalizationRegistry callback, best effort, once the
 // abandoned generator is garbage collected.
 
-const gc = (globalThis as { gc?: () => void }).gc;
+const exposedGc = (globalThis as { gc?: () => void }).gc;
+function gc(): void {
+  if (exposedGc === undefined) throw new Error("these tests need node --expose-gc");
+  exposedGc();
+}
 
 let exporter: InMemorySpanExporter;
 let client: RiusClient;
@@ -38,7 +43,6 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * yields to the event loop before checking.
  */
 async function collectUntil(done: () => Promise<boolean>): Promise<boolean> {
-  if (gc === undefined) throw new Error("these tests need node --expose-gc");
   for (let round = 0; round < 50; round++) {
     gc();
     await sleep(0);
@@ -126,12 +130,16 @@ describe("a generator abandoned mid-iteration", () => {
       })();
       // Give a stray finalizer every chance to run.
       for (let round = 0; round < 10; round++) {
-        gc?.();
+        gc();
         await sleep(0);
       }
       expect(await finished()).toHaveLength(1);
       expect(errors).toEqual([]);
     } finally {
+      // The diag API has no getter for the logger it holds, so there is
+      // nothing to restore by value. Disabling is the restore: no logger is
+      // installed before this test (the setup file and init() install none),
+      // and disable() returns the API to exactly that state.
       diag.disable();
     }
   });
@@ -144,6 +152,32 @@ describe("the abandoned-iteration finalizer", () => {
     const lastStep = performance.now();
     await sleep(50);
     endAbandonedIteration({ observation, lastStep });
+    const spans = await finished();
+    expect(spans).toHaveLength(1);
+    expect(durationMs(spans[0])).toBeLessThan(40);
+  });
+
+  it("ends the span through the handle's own end(), so its guard holds", () => {
+    const observation = new Observation(trace.getTracer("test").startSpan("abandoned"));
+    const end = vi.spyOn(observation, "end");
+    const lastStep = performance.now();
+    endAbandonedIteration({ observation, lastStep });
+    expect(end).toHaveBeenCalledWith(lastStep);
+    const spanEnd = vi.spyOn(observation.span, "end");
+    observation.end();
+    expect(spanEnd).not.toHaveBeenCalled();
+  });
+
+  it("ends a generation through its end(), which records context sizes at that time", async () => {
+    const generation = new Generation(trace.getTracer("test").startSpan("abandoned"));
+    const setContextSizes = vi.spyOn(
+      generation as unknown as { setContextSizes: () => void },
+      "setContextSizes",
+    );
+    const lastStep = performance.now();
+    await sleep(50);
+    endAbandonedIteration({ observation: generation, lastStep });
+    expect(setContextSizes).toHaveBeenCalledOnce();
     const spans = await finished();
     expect(spans).toHaveLength(1);
     expect(durationMs(spans[0])).toBeLessThan(40);

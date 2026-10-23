@@ -3,6 +3,7 @@ import {
   type SpanKind as OtelSpanKind,
   type Span,
   SpanStatusCode,
+  type TimeInput,
 } from "@opentelemetry/api";
 import { executingAgentName, resolveAgentName, withAgentScope } from "./agent.js";
 import { getTracer } from "./client.js";
@@ -239,10 +240,15 @@ export class Observation {
     return this;
   }
 
-  end(): void {
+  /**
+   * End the span, now or at `endTime` when given (any OTel `TimeInput`:
+   * a `performance.now()` value, epoch milliseconds, a `Date` or an
+   * `HrTime`). Idempotent: only the first call ends the span.
+   */
+  end(endTime?: TimeInput): void {
     if (this.ended) return;
     this.ended = true;
-    this.span.end();
+    this.span.end(endTime);
   }
 
   /** Lets callers write `using obs = startSpan(...)`. Sugar over end(). */
