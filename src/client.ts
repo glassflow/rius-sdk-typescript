@@ -34,7 +34,14 @@ import {
   DEFAULT_SPAN_EVENT_COUNT_LIMIT,
   EVENT_COUNT_LIMIT_ENV,
 } from "./compaction.js";
-import { namedAgent, type OperatorMainAgent, type RiusOptions, resolveConfig } from "./config.js";
+import {
+  hasAuthorization,
+  namedAgent,
+  type OperatorMainAgent,
+  type RiusOptions,
+  resolveConfig,
+  workspaceHeaders,
+} from "./config.js";
 import { CredentialHeaderDroppingExporter } from "./credentialHeaders.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
 import { ExportOutcomeExporter } from "./exportHealth.js";
@@ -261,10 +268,9 @@ export class RiusClient {
     }
     // Instrumentations first, so a later init() re-patches against its own
     // provider instead of finding the double-patch guard already set. Waits
-    // for `ready`, since the enabling may still be in flight; its rejections
-    // were already turned into an empty list.
-    // Never rejects by contract, but a shutdown that threw here would never
-    // release the globals or the client slot, so it is not trusted to.
+    // for `ready`, since the enabling may still be in flight. It never
+    // rejects by contract, but a shutdown that threw here would never release
+    // the globals or the client slot, so it is not trusted to.
     await this.ready.catch(() => []);
     for (const disable of this.teardown.splice(0)) {
       try {
@@ -606,12 +612,6 @@ export function init(options: InitOptions = {}): RiusClient {
     .merge(resourceFromAttributes(config.otelResourceAttributes))
     .merge(riusAttributes);
 
-  // Shared with the heartbeat sender below: both hit the same managed
-  // endpoint under the same API key.
-  const authHeaders: Record<string, string> = config.apiKey
-    ? { Authorization: `Bearer ${config.apiKey}` }
-    : {};
-
   let health: ExportOutcomeExporter | undefined;
   let routing: RoutingSpanExporter | undefined;
   let detector: ForeignParentDetector | undefined;
@@ -622,7 +622,7 @@ export function init(options: InitOptions = {}): RiusClient {
       options.spanExporter ??
       new OTLPTraceExporter({
         url: `${config.endpoint}/v1/traces`,
-        headers: config.apiKey ? authHeaders : undefined,
+        headers: Object.keys(config.headers).length > 0 ? config.headers : undefined,
       });
     if (options.workspaces !== undefined) {
       // Innermost in the chain, so masking and export-health wrap the whole
@@ -632,7 +632,7 @@ export function init(options: InitOptions = {}): RiusClient {
         ((apiKey: string) =>
           new OTLPTraceExporter({
             url: `${config.endpoint}/v1/traces`,
-            headers: { Authorization: `Bearer ${apiKey}` },
+            headers: workspaceHeaders(config.headers, apiKey),
           }));
       routing = new RoutingSpanExporter(base, factory, options.workspaces);
       base = routing;
@@ -770,17 +770,20 @@ export function init(options: InitOptions = {}): RiusClient {
   // tracker rides the delegating processor so payloads can carry the
   // currently-open root trace ids; disabled kills it too.
   let heartbeat: { sender: HeartbeatSender; beforeExitHandler: () => void } | undefined;
-  // Without an API key the managed endpoint rejects every ping with 401, so
-  // the default transport would only produce a warn-once and 15-second
-  // failures. An injected transport (tests, own collectors) knows better.
+  // Without credentials (an API key, or an Authorization header of the
+  // caller's own) the managed endpoint rejects every ping with 401, so the
+  // default transport would only produce a warn-once and 15-second failures.
+  // An injected transport (tests, own collectors) knows better. Credentials
+  // given only through OTEL_EXPORTER_OTLP_HEADERS reach the span exporter but
+  // not this check.
   const heartbeatCanAuthenticate =
-    config.apiKey !== undefined || options.heartbeatTransport !== undefined;
+    options.heartbeatTransport !== undefined || hasAuthorization(config.headers);
   if (config.heartbeat && !config.disabled && heartbeatCanAuthenticate) {
     const tracker = new OpenRootSpanTracker();
     processors.add(tracker);
     const sender = new HeartbeatSender({
       url: config.heartbeatEndpoint,
-      headers: authHeaders,
+      headers: config.headers,
       intervalMs: config.heartbeatIntervalMs,
       agentName: config.agentName,
       instanceId,

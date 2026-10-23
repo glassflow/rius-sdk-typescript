@@ -92,7 +92,14 @@ function httpTransport(url: string, headers: Record<string, string>): HeartbeatT
   return async (payload, timeoutMs) => {
     const response = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", ...headers },
+      // The body is JSON whatever the caller's headers say. Their content
+      // type is dropped in any case: fetch would otherwise send both values.
+      headers: {
+        ...Object.fromEntries(
+          Object.entries(headers).filter(([name]) => name.toLowerCase() !== "content-type"),
+        ),
+        "content-type": "application/json",
+      },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
     });

@@ -1,4 +1,4 @@
-import type { AttributeValue } from "@opentelemetry/api";
+import type { AttributeValue, TimeInput } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
 import { contextSizes, textContents } from "./contextSizes.js";
 import { errorType } from "./errorType.js";
@@ -221,9 +221,9 @@ export class Generation extends Observation {
   }
 
   /** Ends the span after recording the context sizes; idempotent like the base. */
-  override end(): void {
+  override end(endTime?: TimeInput): void {
     if (!this.ended) this.setContextSizes();
-    super.end();
+    super.end(endTime);
   }
 
   /**

@@ -342,6 +342,43 @@ describe("which client holds an integration", () => {
     });
   });
 
+  it("leaves an integration with its holder when another client cannot resolve it", async () => {
+    const log: string[] = [];
+    let resolvable = true;
+    const entry: RegistryEntry = {
+      name: "alpha",
+      kind: "self-applying",
+      // Never reached: an entry with prepare() is enabled through it.
+      load: () => Promise.reject(new Error("load() used instead of prepare()")),
+      async prepare() {
+        await new Promise((resolve) => setImmediate(resolve));
+        if (!resolvable) return undefined;
+        return (undo) => {
+          log.push("patch alpha");
+          undo.push(() => log.push("unpatch alpha"));
+          return true;
+        };
+      },
+    };
+    await withRegistry([entry], async () => {
+      const scoped: Array<() => void> = [];
+      expect(
+        await enableInstrumentations(scopedProvider, ["alpha"], scoped, { forGlobal: false }),
+      ).toEqual(["alpha"]);
+      resolvable = false;
+      expect(await enableInstrumentations(globalProvider, undefined, [])).toEqual([]);
+      expect(log).toEqual(["patch alpha"]);
+      // Once it can be resolved again, the global client takes it as usual.
+      resolvable = true;
+      const held: Array<() => void> = [];
+      expect(await enableInstrumentations(globalProvider, undefined, held)).toEqual(["alpha"]);
+      expect(log).toEqual(["patch alpha", "unpatch alpha", "patch alpha"]);
+      release(scoped);
+      release(held);
+      expect(log).toEqual(["patch alpha", "unpatch alpha", "patch alpha", "unpatch alpha"]);
+    });
+  });
+
   it("undoes what onEnabled added when the integration moves to another client", async () => {
     const log: string[] = [];
     await withRegistry([recordingEntry("alpha", log)], async () => {

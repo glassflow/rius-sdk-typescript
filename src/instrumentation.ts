@@ -61,6 +61,43 @@ export interface RegistryEntry {
     teardown?: Array<() => void>,
     modules?: InstrumentModules,
   ): Promise<unknown | undefined>;
+  /**
+   * The same integration in two steps, which `enableInstrumentations` prefers
+   * when an entry has it: resolve everything the integration needs (the
+   * asynchronous imports and shape checks) and patch nothing, then patch
+   * synchronously through the returned function. Resolves undefined when a
+   * package is absent; throws when one is present but unusable. Only once it
+   * has resolved is the client holding the integration made to give it up,
+   * and the patch follows with no await in between, so a failed resolution
+   * leaves the holder untouched and no call goes unpatched in the handover.
+   */
+  prepare?(
+    tracerProvider?: TracerProvider,
+    modules?: InstrumentModules,
+  ): Promise<ApplyIntegration | undefined>;
+}
+
+/**
+ * Patches a resolved integration, synchronously, pushing whatever undoes it
+ * onto `teardown`. Returns what `load()` would: the instrumentation to
+ * register, or a truthy value for a self-applying entry.
+ */
+export type ApplyIntegration = (teardown: Array<() => void>) => unknown;
+
+/**
+ * A registry entry whose `load()` is its `prepare()` followed by the apply,
+ * for callers (and tests) that want the integration in one step.
+ */
+function twoPhase(
+  entry: Omit<RegistryEntry, "load"> & { prepare: NonNullable<RegistryEntry["prepare"]> },
+): RegistryEntry {
+  return {
+    ...entry,
+    async load(tracerProvider, teardown, modules) {
+      const apply = await entry.prepare(tracerProvider, modules);
+      return apply === undefined ? undefined : apply(teardown ?? []);
+    },
+  };
 }
 
 /**
@@ -352,17 +389,28 @@ export async function patchActiveBuild(
   toPatchable: (exports: Record<string, unknown>) => object | undefined,
   prepare?: (patchable: object) => void,
 ): Promise<void> {
+  const patchable = await resolveActiveBuild(pkg, toPatchable);
+  if (patchable === undefined) return;
+  prepare?.(patchable);
+  instrumentation.manuallyInstrument(patchable);
+}
+
+/**
+ * The patchable exports of the build {@link patchActiveBuild} patches, found
+ * without patching it, or undefined when the provider is absent or of a shape
+ * the patch cannot wrap.
+ */
+async function resolveActiveBuild(
+  pkg: string,
+  toPatchable: (exports: Record<string, unknown>) => object | undefined,
+): Promise<object | undefined> {
   const cached = cachedCjsExports(pkg, toPatchable);
-  if (cached !== undefined) {
-    prepare?.(cached);
-    instrumentation.manuallyInstrument(cached);
-    return;
-  }
+  if (cached !== undefined) return cached;
   // Provider not installed resolves undefined and stays quiet, matching the
   // registry's loud/quiet split: the missing package here is the PROVIDER, not
   // the instrumentation the user installed.
   const ns = await optional(pkg);
-  if (ns === undefined) return;
+  if (ns === undefined) return undefined;
   const patchable = toPatchable(ns);
   if (patchable === undefined) {
     // The provider IS present but its exports are not a shape the OpenInference
@@ -371,10 +419,9 @@ export async function patchActiveBuild(
     // enabled, and "enabled but silently unpatched" is the failure this whole
     // change exists to eliminate.
     warnBroken(pkg, new Error("unrecognised module shape, instrumentation not applied"));
-    return;
+    return undefined;
   }
-  prepare?.(patchable);
-  instrumentation.manuallyInstrument(patchable);
+  return patchable;
 }
 
 /**
@@ -399,11 +446,6 @@ export function anthropicPatchable(exports: Record<string, unknown>): object | u
   return cls?.Messages?.prototype?.create ? { default: cls } : undefined;
 }
 
-interface PatchingInstrumentation extends ManuallyInstrumentable {
-  patch(moduleExports: unknown, moduleVersion?: string): unknown;
-  unpatch(moduleExports: unknown, moduleVersion?: string): void;
-}
-
 /**
  * Shape test for the MCP SDK's client module: picks the exports carrying a
  * `Client` whose prototype has the `callTool` this SDK wraps, so
@@ -422,32 +464,49 @@ export function mcpClientPatchable(exports: Record<string, unknown>): object | u
  * path does not depend on the installed `node_modules` layout the way the
  * SDK's runtime-built imports do.
  *
- * Throws on a wrongly shaped module so `enableInstrumentations` logs its one
- * warning for the entry. The app passed the module on purpose, so a silent skip
+ * Resolves the injected modules without patching anything. Throws on a
+ * wrongly shaped module so `enableInstrumentations` logs its one warning for
+ * the entry. The app passed the module on purpose, so a silent skip
  * would hide a mistake it can fix.
  */
-function loadInjected(
+function resolveInjected(
   option: string,
   injected: InjectedIntegration,
   exportName: string,
   toPatchable: (exports: Record<string, unknown>) => object | undefined,
-  construct: (Ctor: new () => PatchingInstrumentation) => ManuallyInstrumentable,
-  prepare?: (patchable: object) => void,
-): ManuallyInstrumentable {
+): { Ctor: new () => ManuallyInstrumentable; patchable: object } {
   const Ctor = (injected.instrumentation as Record<string, unknown>)[exportName];
   if (typeof Ctor !== "function") {
     throw new Error(`instrumentModules.${option}.instrumentation does not export ${exportName}`);
   }
-  const instrumentation = construct(Ctor as new () => PatchingInstrumentation);
   const patchable = toPatchable(injected.sdk as Record<string, unknown>);
   if (patchable === undefined) {
     throw new Error(
       `instrumentModules.${option}.sdk is not the ${option === "openai" ? "openai" : "@anthropic-ai/sdk"} module namespace`,
     );
   }
-  prepare?.(patchable);
-  instrumentation.manuallyInstrument(patchable);
-  return instrumentation;
+  return { Ctor: Ctor as new () => ManuallyInstrumentable, patchable };
+}
+
+/**
+ * The apply step of a provider integration: construct the instrumentation and
+ * patch the resolved build, if there is one. Without one the instrumentation
+ * is still returned for registration, so its require hook covers a CJS build
+ * required later.
+ */
+function applyProvider(
+  Ctor: new () => ManuallyInstrumentable,
+  patchable: object | undefined,
+  prepare?: (patchable: object, teardown: Array<() => void>) => void,
+): ApplyIntegration {
+  return (teardown) => {
+    const instrumentation = new Ctor();
+    if (patchable !== undefined) {
+      prepare?.(patchable, teardown);
+      instrumentation.manuallyInstrument(patchable);
+    }
+    return instrumentation;
+  };
 }
 
 /** The injected integration for `name`, only when the app set it as its own property. */
@@ -482,13 +541,12 @@ function injectedFor(
 // through a shut-down provider.
 let vercelTelemetryIntegration: unknown;
 
-async function registerVercelTelemetry(
+async function prepareVercelTelemetry(
   tracerProvider: TracerProvider,
-  teardown?: Array<() => void>,
-): Promise<boolean> {
+): Promise<ApplyIntegration | undefined> {
   const ai = await optional("ai");
   const register = ai?.registerTelemetry as ((integration: unknown) => void) | undefined;
-  if (register === undefined) return false; // ai absent, or v5/v6: nothing to register
+  if (register === undefined) return undefined; // ai absent, or v5/v6: nothing to register
   const otel = await optional("@ai-sdk/otel");
   const OpenTelemetryIntegration = otel?.OpenTelemetry as
     | (new (options: {
@@ -502,8 +560,20 @@ async function registerVercelTelemetry(
         "which is not installed — `ai` calls will not be traced. " +
         "Install it (npm i @ai-sdk/otel) and rius registers it automatically.",
     );
-    return false;
+    return undefined;
   }
+  return (teardown) => {
+    registerVercelIntegration(tracerProvider, register, OpenTelemetryIntegration, teardown);
+    return true;
+  };
+}
+
+function registerVercelIntegration(
+  tracerProvider: TracerProvider,
+  register: (integration: unknown) => void,
+  OpenTelemetryIntegration: new (options: { tracer: unknown; usage: boolean }) => unknown,
+  teardown: Array<() => void>,
+): void {
   const bag = globalThis as { AI_SDK_TELEMETRY_INTEGRATIONS?: unknown[] };
   if (vercelTelemetryIntegration !== undefined && bag.AI_SDK_TELEMETRY_INTEGRATIONS) {
     bag.AI_SDK_TELEMETRY_INTEGRATIONS = bag.AI_SDK_TELEMETRY_INTEGRATIONS.filter(
@@ -523,7 +593,7 @@ async function registerVercelTelemetry(
   register(integration);
   // The AI SDK has no unregister; removing ours from its global list is the
   // only way a shut-down provider stops receiving spans.
-  teardown?.push(() => {
+  teardown.push(() => {
     if (bag.AI_SDK_TELEMETRY_INTEGRATIONS) {
       bag.AI_SDK_TELEMETRY_INTEGRATIONS = bag.AI_SDK_TELEMETRY_INTEGRATIONS.filter(
         (candidate) => candidate !== integration,
@@ -531,105 +601,91 @@ async function registerVercelTelemetry(
     }
     if (vercelTelemetryIntegration === integration) vercelTelemetryIntegration = undefined;
   });
-  return true;
 }
 
 export const REGISTRY: RegistryEntry[] = [
-  {
+  twoPhase({
     name: "vercel-ai",
     // Self-applying: on ai v7 the registration IS the integration (see
-    // registerVercelTelemetry above). v5/v6 apps need nothing here: their
+    // prepareVercelTelemetry above). v5/v6 apps need nothing here: their
     // spans come from per-call `experimental_telemetry`, and the normalizer
     // maps their ai.* dialect itself, the way the sink does, so this entry
     // reports them as nothing to enable.
     kind: "self-applying",
     install:
       "it registers on the Vercel AI SDK v7 or newer: install `ai` and `@ai-sdk/otel` (AI SDK v5 and v6 need no integration; pass `experimental_telemetry` per call)",
-    async load(tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
+    async prepare(tracerProvider?: TracerProvider) {
       if (tracerProvider === undefined) return undefined;
-      return (await registerVercelTelemetry(tracerProvider, teardown)) ? true : undefined;
+      return prepareVercelTelemetry(tracerProvider);
     },
-  },
-  {
+  }),
+  twoPhase({
     name: "openai",
     kind: "instrumentation",
     optInPackage: "@arizeai/openinference-instrumentation-openai",
     install: "install `@arizeai/openinference-instrumentation-openai` beside `openai`",
-    async load(
-      _tracerProvider?: TracerProvider,
-      teardown?: Array<() => void>,
-      modules?: InstrumentModules,
-    ) {
+    async prepare(_tracerProvider?: TracerProvider, modules?: InstrumentModules) {
       // Embeddings token counts, which the instrumentation does not record
       // (see embeddingsUsage.ts). Installed on the very build the
       // instrumentation is about to patch, right before it patches, so it ends
       // up underneath the instrumentation's wrapper. A CJS build first
       // required after init() is patched by the instrumentation's require hook
       // alone and gets no counts, the same residual gap as the providers'.
-      const prepare = (patchable: object): void => {
+      const prepare = (patchable: object, teardown: Array<() => void>): void => {
         const uninstall = installEmbeddingsUsage(patchable);
-        teardown?.push(uninstall);
+        teardown.push(uninstall);
       };
       const injected = injectedFor(modules, "openai");
       if (injected !== undefined) {
-        return loadInjected(
+        const { Ctor, patchable } = resolveInjected(
           "openai",
           injected,
           "OpenAIInstrumentation",
           openaiPatchable,
-          (Ctor) => new Ctor(),
-          prepare,
         );
+        return applyProvider(Ctor, patchable, prepare);
       }
       const mod = await optional("@arizeai/openinference-instrumentation-openai");
-      const Ctor = mod?.OpenAIInstrumentation as (new () => PatchingInstrumentation) | undefined;
+      const Ctor = mod?.OpenAIInstrumentation as (new () => ManuallyInstrumentable) | undefined;
       if (Ctor === undefined) return undefined;
-      const instrumentation = new Ctor();
       // The require hook registered by enableInstrumentations only covers CJS
       // consumers, and only for requires that happen after init(). Patch the
       // build in use directly so ESM apps and require-before-init both work.
-      await patchActiveBuild(instrumentation, "openai", openaiPatchable, prepare);
-      // Still returned for registration: the patched methods read the
-      // instrumentation's tracer per call, so it has to be bound to our tracer
+      // The instrumentation is still returned for registration: the patched
+      // methods read its tracer per call, so it has to be bound to our tracer
       // provider to emit anywhere.
-      return instrumentation;
+      return applyProvider(Ctor, await resolveActiveBuild("openai", openaiPatchable), prepare);
     },
-  },
-  {
+  }),
+  twoPhase({
     name: "anthropic",
     kind: "instrumentation",
     optInPackage: "@arizeai/openinference-instrumentation-anthropic",
     install:
       "install `@arizeai/openinference-instrumentation-anthropic` beside `@anthropic-ai/sdk`",
-    async load(
-      _tracerProvider?: TracerProvider,
-      _teardown?: Array<() => void>,
-      modules?: InstrumentModules,
-    ) {
+    async prepare(_tracerProvider?: TracerProvider, modules?: InstrumentModules) {
       const injected = injectedFor(modules, "anthropic");
       if (injected !== undefined) {
-        return loadInjected(
+        const { Ctor, patchable } = resolveInjected(
           "anthropic",
           injected,
           "AnthropicInstrumentation",
           anthropicPatchable,
-          (Ctor) => new Ctor(),
         );
+        return applyProvider(Ctor, patchable);
       }
       const mod = await optional("@arizeai/openinference-instrumentation-anthropic");
       const Ctor = mod?.AnthropicInstrumentation as (new () => ManuallyInstrumentable) | undefined;
       if (Ctor === undefined) return undefined;
-      const instrumentation = new Ctor();
       // Same dual-build handling as the openai entry above.
-      await patchActiveBuild(instrumentation, "@anthropic-ai/sdk", anthropicPatchable);
-      return instrumentation;
+      return applyProvider(Ctor, await resolveActiveBuild("@anthropic-ai/sdk", anthropicPatchable));
     },
-  },
-  {
+  }),
+  twoPhase({
     name: "langchain",
     kind: "instrumentation",
     install: "install `@arizeai/openinference-instrumentation-langchain` beside `@langchain/core`",
-    async load(_tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
+    async prepare() {
       const mod = await optional("@arizeai/openinference-instrumentation-langchain");
       const Ctor = mod?.LangChainInstrumentation as
         | (new () => { manuallyInstrument(module: object): void })
@@ -649,60 +705,62 @@ export const REGISTRY: RegistryEntry[] = [
       // it is declared as an optional peer rather than imported blind.
       const callbacks = await optional("@langchain/core/callbacks/manager");
       if (callbacks?.CallbackManager === undefined) return undefined;
-
-      const instrumentation = new Ctor();
-      instrumentation.manuallyInstrument(callbacks);
-      // The instrumentation never makes its spans current, so the provider
-      // call a chat model makes would land in a trace of its own; see
-      // langchainSpanContext. Install first, push second, as for mcp below.
       const { installLangchainSpanContext } = await import("./langchainSpanContext.js");
-      const uninstallSpanContext = installLangchainSpanContext(
-        await optional("@langchain/core/language_models/chat_models"),
-        await optional("@langchain/core/callbacks/promises"),
-      );
-      teardown?.push(uninstallSpanContext);
-      // Returned rather than treated as self-applying: the patched callback
-      // manager reads the instrumentation's tracer on every call, so it still has
-      // to be registered against our tracer provider to emit anywhere.
-      return instrumentation;
+      const chatModels = await optional("@langchain/core/language_models/chat_models");
+      const promises = await optional("@langchain/core/callbacks/promises");
+
+      return (teardown) => {
+        const instrumentation = new Ctor();
+        instrumentation.manuallyInstrument(callbacks);
+        // The instrumentation never makes its spans current, so the provider
+        // call a chat model makes would land in a trace of its own; see
+        // langchainSpanContext. Install first, push second, as for mcp below.
+        const uninstallSpanContext = installLangchainSpanContext(chatModels, promises);
+        teardown.push(uninstallSpanContext);
+        // Returned rather than treated as self-applying: the patched callback
+        // manager reads the instrumentation's tracer on every call, so it still
+        // has to be registered against our tracer provider to emit anywhere.
+        return instrumentation;
+      };
     },
-  },
-  {
+  }),
+  twoPhase({
     name: "mcp",
     kind: "self-applying",
     install: "it is built in and enables itself once `@modelcontextprotocol/sdk` is installed",
-    async load(tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
+    async prepare(tracerProvider?: TracerProvider) {
       const mod = await optional("@modelcontextprotocol/sdk/client/index.js");
       const ClientClass = mod?.Client as McpClientLike | undefined;
       if (ClientClass === undefined) return undefined;
       const { instrumentMcpClient } = await import("./instrumentationMcp.js");
-      // Both patches hand back an uninstall; shutdown() runs them so the
-      // prototype is the SDK's own again and the next init() re-patches.
-      // Patch first, push second: `teardown?.push(patch())` would skip the
-      // patch itself whenever no collector is passed, optional chaining
-      // short-circuits the arguments too.
-      const uninstallEsm = instrumentMcpClient(ClientClass, tracerProvider);
-      teardown?.push(uninstallEsm);
-      // The dynamic import above resolves the ESM build, but the MCP SDK
-      // dual-builds: a CJS consumer's require() returns a DIFFERENT Client
-      // class, whose tool calls would go unobserved while ready still
-      // reports "mcp". Patch the cached CJS build too when the app has
-      // required it. instrumentMcpClient is idempotent, so a package that
-      // resolves both conditions to one build is patched once. Residual gap,
-      // same as the providers': a CJS require that happens only after
-      // init() is not in the cache yet and stays unpatched.
-      const cjs = cachedCjsExports("@modelcontextprotocol/sdk", mcpClientPatchable) as
-        | { Client: McpClientLike }
-        | undefined;
-      if (cjs !== undefined) {
-        const uninstallCjs = instrumentMcpClient(cjs.Client, tracerProvider);
-        teardown?.push(uninstallCjs);
-      }
-      // The patch already ran; the truthy return only tells the caller the
-      // package was present, there is nothing further to attach.
-      return true;
+      return (teardown) => {
+        // Both patches hand back an uninstall; shutdown() runs them so the
+        // prototype is the SDK's own again and the next init() re-patches.
+        // Patch first, push second, so the uninstall is never lost to an
+        // exception between the two.
+        const uninstallEsm = instrumentMcpClient(ClientClass, tracerProvider);
+        teardown.push(uninstallEsm);
+        // The dynamic import above resolves the ESM build, but the MCP SDK
+        // dual-builds: a CJS consumer's require() returns a DIFFERENT Client
+        // class, whose tool calls would go unobserved while ready still
+        // reports "mcp". Patch the cached CJS build too when the app has
+        // required it. instrumentMcpClient is idempotent, so a package that
+        // resolves both conditions to one build is patched once. Residual gap,
+        // same as the providers': a CJS require that happens only after
+        // init() is not in the cache yet and stays unpatched.
+        const cjs = cachedCjsExports("@modelcontextprotocol/sdk", mcpClientPatchable) as
+          | { Client: McpClientLike }
+          | undefined;
+        if (cjs !== undefined) {
+          const uninstallCjs = instrumentMcpClient(cjs.Client, tracerProvider);
+          teardown.push(uninstallCjs);
+        }
+        // The truthy return only tells the caller the package was present;
+        // there is nothing further to attach.
+        return true;
+      };
     },
-  },
+  }),
 ];
 
 /** A client's hold on one integration. */
@@ -805,28 +863,37 @@ async function enableNow(
 
   for (const entry of wanted) {
     const holder = holders.get(entry.name);
-    if (holder !== undefined) {
-      if (!forGlobal && holder.global) {
-        console.warn(
-          `[rius] instrument "${entry.name}" stays with the global Rius client: an integration patches its library for the whole process, and moving it to a scoped client would take every ${entry.name} span away from the global one.`,
-        );
-        continue;
-      }
-      // Enabled for another client (or before a re-init): undo it there, so
-      // the patch is applied afresh for this one. BEFORE the load, not after
-      // it succeeds: load() is the patch itself, and the patches guard
-      // against double patching (OpenInference marks the module, the MCP
-      // patch hands back the existing wrapper), so loading over the old patch
-      // would be a no-op whose holder then unpatches the library on release.
-      // Python orders it the same way, uninstrument() before instrument().
-      holder.release();
+    if (holder !== undefined && !forGlobal && holder.global) {
+      console.warn(
+        `[rius] instrument "${entry.name}" stays with the global Rius client: an integration patches its library for the whole process, and moving it to a scoped client would take every ${entry.name} span away from the global one.`,
+      );
+      continue;
     }
     // Everything that undoes this entry for this client, run together when
     // the client lets go of it.
     const undo: Array<() => void> = [];
+    const reportedBefore = brokenReports;
+    let loaded: unknown;
     try {
-      const reportedBefore = brokenReports;
-      const loaded = await entry.load(tracerProvider, undo, options?.instrumentModules);
+      if (entry.prepare !== undefined) {
+        const apply = await entry.prepare(tracerProvider, options?.instrumentModules);
+        // Resolved: only now does the holder give it up, and the patch
+        // follows with no await in between. An integration this client cannot
+        // resolve stays where it is.
+        if (apply !== undefined) {
+          holder?.release();
+          loaded = apply(undo);
+        }
+      } else {
+        // An entry whose load() is the patch itself. The holder lets go first:
+        // the patches guard against double patching (OpenInference marks the
+        // module, the MCP patch hands back the existing wrapper), so loading
+        // over the old patch would be a no-op whose holder then unpatches the
+        // library on release. Python orders it the same way, uninstrument()
+        // before instrument().
+        holder?.release();
+        loaded = await entry.load(tracerProvider, undo, options?.instrumentModules);
+      }
       if (loaded === undefined) {
         runAll(undo);
         if (brokenReports !== reportedBefore) continue;
@@ -855,7 +922,7 @@ async function enableNow(
         });
         undo.push(disable);
       }
-      // "self-applying" entries already took effect inside load(); there is
+      // "self-applying" entries already took effect when applied; there is
       // nothing further to attach.
       enabled.push(entry.name);
       try {
@@ -865,17 +932,18 @@ async function enableNow(
       }
     } catch (error) {
       runAll(undo);
-      // Only reached when load() THREW, which means the package was reachable
-      // but enabling it failed: a constructor rejecting its input, or a patch
-      // onto a prototype that is no longer writable. The user installed this
-      // optional peer deliberately and expects instrumentation, so a silent skip
-      // would leave them with nothing and no explanation. An ABSENT package
-      // returns undefined above. That stays quiet too, unless the app named
-      // the integration or its package.json lists the entry's package: then
-      // the user wanted it and the SDK just could not reach it, which gets its
-      // own warning there. Only a package that is neither installed nor asked
-      // for is skipped without a word, which is the distinction this whole
-      // loud/quiet split exists to preserve.
+      // Only reached when resolving or applying the entry THREW, which means
+      // the package was reachable but enabling it failed: a constructor
+      // rejecting its input, or a patch onto a prototype that is no longer
+      // writable. The user installed this optional peer deliberately and
+      // expects instrumentation, so a silent skip would leave them with
+      // nothing and no explanation. An ABSENT package resolves undefined
+      // above. That stays quiet too, unless the app named the integration or
+      // its package.json lists the entry's package: then the user wanted it
+      // and the SDK just could not reach it, which gets its own warning there.
+      // Only a package that is neither installed nor asked for is skipped
+      // without a word, which is the distinction this whole loud/quiet split
+      // exists to preserve.
       //
       // Still not fatal: warn, then carry on to the next entry so one broken
       // integration cannot block the others.
