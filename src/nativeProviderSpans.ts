@@ -1,10 +1,10 @@
 import type { AttributeValue, Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { ATTR_HTTP_RESPONSE_STATUS_CODE } from "@opentelemetry/semantic-conventions";
 import {
   ERROR_TYPE,
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
+  HTTP_RESPONSE_STATUS_CODE,
   OPENINFERENCE_SPAN_KIND,
   operationForKind,
   SpanKind,
@@ -131,7 +131,7 @@ export function nameNativeAnthropicError(span: ReadableSpan): void {
     if (!isNativeSpan(span)) return;
     const attributes = span.attributes as Bag;
     if (attributes[ERROR_TYPE] === undefined) return;
-    const status = attributes[ATTR_HTTP_RESPONSE_STATUS_CODE];
+    const status = attributes[HTTP_RESPONSE_STATUS_CODE];
     if (typeof status !== "number") return;
     const name = errorClassFor(status);
     if (name !== undefined) attributes[ERROR_TYPE] = name;
