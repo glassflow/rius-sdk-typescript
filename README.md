@@ -454,17 +454,25 @@ Install only the ones you use:
 - **`vercel-ai`** traces the Vercel AI SDK. On AI SDK v7 it registers `@ai-sdk/otel`'s OpenTelemetry integration with the SDK's tracer, so calls are traced with no telemetry code; install `@ai-sdk/otel` beside `ai` (both require Node 22 or newer). AI SDK v5 and v6 trace the calls you pass `experimental_telemetry: { isEnabled: true }`, and the SDK maps their `ai.*` spans (generate, stream, object, embed, rerank and tool calls) onto the GenAI conventions itself, on any Node version, with nothing else to install. v5 and v6 do not trace image, speech or transcription calls.
 - **`mcp`** patches `@modelcontextprotocol/sdk`'s `Client.callTool` so every MCP tool call becomes a TOOL span named `execute_tool <tool>`, carrying the tool name, arguments, result, latency, and error status. The span follows the OpenTelemetry MCP conventions: OTel `SpanKind` CLIENT, `mcp.method.name` set to `tools/call`, `mcp.protocol.version` set to the negotiated version when the transport exposes it (Streamable HTTP does; stdio and SSE do not), and `error.type` set to `tool_error` when the server returns an `isError` result.
 
-There is no option to select integrations: `init()` always attempts every
-bundled integration, so which ones actually attach is determined by which
-optional peers it can find, or, for `openai` and `anthropic`, by the
-modules you pass in (see "pnpm and serverless deployments" below).
+By default `init()` attempts every bundled integration, so which ones
+actually attach is determined by which optional peers it can find, or, for
+`openai` and `anthropic`, by the modules you pass in (see "pnpm and
+serverless deployments" below). To choose, pass `instruments` with the names
+above: only those are attempted, and `[]` enables none.
+
+```typescript
+init({ instruments: ["openai", "mcp"] }) // leave the others off
+```
+
 `client.ready` resolves with the
 names that attached (for example `["openai", "mcp"]`) and never rejects,
 even if every peer is missing or one of them is broken. A package that
-is not installed stays quiet, unless it is an `openai` or `anthropic`
-instrumentation package that your `package.json` lists: then the SDK
-logs one warning, because the package is there but the SDK could not
-load it. A package that is installed but fails to load logs a warning
+is not installed stays quiet, unless you named its integration in
+`instruments` (then the warning says what to install) or it is an `openai`
+or `anthropic` instrumentation package that your `package.json` lists: then
+the SDK logs one warning, because the package is there but the SDK could not
+load it. An unknown name in `instruments` logs a warning listing the known
+ones. A package that is installed but fails to load logs a warning
 naming the integration and the underlying error. In every case the SDK
 continues without the integration.
 
@@ -572,6 +580,7 @@ variables, then the defaults below.
 | `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 | `bridgeForeignProvider` | `RIUS_BRIDGE_FOREIGN_PROVIDER` | `false` (also export the spans of another OpenTelemetry SDK that owns the global provider; see below) |
+| `instruments`      | (options only)           | every bundled integration found (a list of names restricts to those, `[]` enables none; see "Auto-instrumentation") |
 | `headers`          | (options only)           | none (extra headers for span exports and the heartbeat; see below) |
 
 Traces are posted to `<endpoint>/v1/traces`.
@@ -679,11 +688,9 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
-Two `init()` options of the Python SDK have no TypeScript counterpart
-yet: `instruments` (choosing which bundled auto-instrumentations to enable;
-this SDK enables every one it finds) and `set_global` (keeping the provider
-out of the OpenTelemetry global; this SDK always registers it unless another
-SDK already has).
+One `init()` option of the Python SDK has no TypeScript counterpart yet:
+`set_global` (keeping the provider out of the OpenTelemetry global; this SDK
+always registers it unless another SDK already has).
 
 ### Running next to another OpenTelemetry SDK
 

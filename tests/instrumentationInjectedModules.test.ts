@@ -241,3 +241,35 @@ describe("real modules through instrumentModules", () => {
     expect(attributes["llm.model_name"]).toBe("claude-test");
   });
 });
+
+describe("a failed attempt to take an integration", () => {
+  it("leaves it with the client that holds it", async () => {
+    const scoped = recordingProvider();
+    const global = recordingProvider();
+    const held: Array<() => void> = [];
+    const log: string[] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const enabled = await enableInstrumentations(scoped.provider, ["anthropic"], held, {
+        forGlobal: false,
+        instrumentModules: {
+          anthropic: { instrumentation: anthropicInstrumentation, sdk: anthropicSdk },
+        },
+        onEnabled: (name, undo) => undo.push(() => log.push(`released ${name}`)),
+      });
+      expect(enabled).toEqual(["anthropic"]);
+      // A global client whose own copy cannot be enabled: the injected module
+      // has the wrong shape, so resolving it fails before anything is patched.
+      const taken = await enableInstrumentations(global.provider, ["anthropic"], [], {
+        instrumentModules: { anthropic: { instrumentation: {}, sdk: anthropicSdk } },
+      });
+      expect(taken).toEqual([]);
+      // The scoped client was not made to give it up for nothing.
+      expect(log).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      for (const undo of held.splice(0)) undo();
+    }
+    expect(log).toEqual(["released anthropic"]);
+  });
+});

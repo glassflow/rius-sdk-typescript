@@ -46,6 +46,16 @@ function spyOnWarn() {
 }
 
 /** Adds a synthetic entry for the duration of `body`, then removes it. */
+/** Runs `body` with the registry holding exactly `entries`, then restores it. */
+async function withOnly(entries: RegistryEntry[], body: () => Promise<void>): Promise<void> {
+  const saved = REGISTRY.splice(0, REGISTRY.length, ...entries);
+  try {
+    await body();
+  } finally {
+    REGISTRY.splice(0, REGISTRY.length, ...saved);
+  }
+}
+
 async function withEntry(entry: RegistryEntry, body: () => Promise<void>): Promise<void> {
   REGISTRY.push(entry);
   try {
@@ -316,12 +326,12 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("stays quiet when load() resolves undefined, because that means absent", async () => {
-    await withEntry(
-      { name: "test-absent-entry", kind: "self-applying", load: async () => undefined },
+    await withOnly(
+      [{ name: "test-absent-entry", kind: "self-applying", load: async () => undefined }],
       async () => {
         const warn = spyOnWarn();
         try {
-          const enabled = await enableInstrumentations(tracerProvider, ["test-absent-entry"]);
+          const enabled = await enableInstrumentations(tracerProvider);
           expect(enabled).toEqual([]);
           // The regression guard: warning here would make every consumer who
           // skipped an optional peer see noise at startup.
@@ -334,22 +344,21 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("warns once when load() resolves undefined for a package the app lists in package.json", async () => {
-    await withEntry(
-      {
-        name: "test-declared-entry",
-        kind: "instrumentation",
-        optInPackage: "test-declared-pkg",
-        load: async () => undefined,
-      },
+    await withOnly(
+      [
+        {
+          name: "test-declared-entry",
+          kind: "instrumentation",
+          optInPackage: "test-declared-pkg",
+          load: async () => undefined,
+        },
+      ],
       async () => {
         const warn = spyOnWarn();
         try {
-          const enabled = await enableInstrumentations(
-            tracerProvider,
-            ["test-declared-entry"],
-            undefined,
-            { declaredDependencies: () => new Set(["test-declared-pkg"]) },
-          );
+          const enabled = await enableInstrumentations(tracerProvider, undefined, undefined, {
+            declaredDependencies: () => new Set(["test-declared-pkg"]),
+          });
           expect(enabled).toEqual([]);
           expect(warn).toHaveBeenCalledTimes(1);
           const message = String(warn.mock.calls[0]?.[0]);
@@ -364,22 +373,21 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("stays quiet when the unloaded package is not listed in package.json", async () => {
-    await withEntry(
-      {
-        name: "test-declared-entry",
-        kind: "instrumentation",
-        optInPackage: "test-declared-pkg",
-        load: async () => undefined,
-      },
+    await withOnly(
+      [
+        {
+          name: "test-declared-entry",
+          kind: "instrumentation",
+          optInPackage: "test-declared-pkg",
+          load: async () => undefined,
+        },
+      ],
       async () => {
         const warn = spyOnWarn();
         try {
-          const enabled = await enableInstrumentations(
-            tracerProvider,
-            ["test-declared-entry"],
-            undefined,
-            { declaredDependencies: () => new Set() },
-          );
+          const enabled = await enableInstrumentations(tracerProvider, undefined, undefined, {
+            declaredDependencies: () => new Set(),
+          });
           expect(enabled).toEqual([]);
           expect(warn).not.toHaveBeenCalled();
         } finally {
@@ -390,22 +398,21 @@ describe("enableInstrumentations diagnostics", () => {
   });
 
   it("does not warn for a listed package that loaded", async () => {
-    await withEntry(
-      {
-        name: "test-declared-entry",
-        kind: "self-applying",
-        optInPackage: "test-declared-pkg",
-        load: async () => applied,
-      },
+    await withOnly(
+      [
+        {
+          name: "test-declared-entry",
+          kind: "self-applying",
+          optInPackage: "test-declared-pkg",
+          load: async () => applied,
+        },
+      ],
       async () => {
         const warn = spyOnWarn();
         try {
-          const enabled = await enableInstrumentations(
-            tracerProvider,
-            ["test-declared-entry"],
-            undefined,
-            { declaredDependencies: () => new Set(["test-declared-pkg"]) },
-          );
+          const enabled = await enableInstrumentations(tracerProvider, undefined, undefined, {
+            declaredDependencies: () => new Set(["test-declared-pkg"]),
+          });
           expect(enabled).toEqual(["test-declared-entry"]);
           expect(warn).not.toHaveBeenCalled();
         } finally {
@@ -422,22 +429,21 @@ describe("enableInstrumentations diagnostics", () => {
     const { dir, cleanup } = scratchDir({ "broken.mjs": 'throw new Error("broken on import");' });
     try {
       const specifier = pathToFileURL(join(dir, "broken.mjs")).href;
-      await withEntry(
-        {
-          name: "test-declared-entry",
-          kind: "instrumentation",
-          optInPackage: "test-declared-pkg",
-          load: () => optional(specifier),
-        },
+      await withOnly(
+        [
+          {
+            name: "test-declared-entry",
+            kind: "instrumentation",
+            optInPackage: "test-declared-pkg",
+            load: () => optional(specifier),
+          },
+        ],
         async () => {
           const warn = spyOnWarn();
           try {
-            const enabled = await enableInstrumentations(
-              tracerProvider,
-              ["test-declared-entry"],
-              undefined,
-              { declaredDependencies: () => new Set(["test-declared-pkg"]) },
-            );
+            const enabled = await enableInstrumentations(tracerProvider, undefined, undefined, {
+              declaredDependencies: () => new Set(["test-declared-pkg"]),
+            });
             expect(enabled).toEqual([]);
             expect(warn).toHaveBeenCalledTimes(1);
             expect(String(warn.mock.calls[0]?.[0])).toContain("broken on import");
@@ -458,27 +464,22 @@ describe("enableInstrumentations diagnostics", () => {
       optInPackage: `${name}-pkg`,
       load: async () => undefined,
     });
-    await withEntry(entry("test-declared-a"), () =>
-      withEntry(entry("test-declared-b"), async () => {
-        const warn = spyOnWarn();
-        try {
-          const declaredDependencies = vi.fn((): ReadonlySet<string> => {
-            throw new Error("cannot read the working directory");
-          });
-          const enabled = await enableInstrumentations(
-            tracerProvider,
-            ["test-declared-a", "test-declared-b"],
-            undefined,
-            { declaredDependencies },
-          );
-          expect(enabled).toEqual([]);
-          expect(warn).not.toHaveBeenCalled();
-          expect(declaredDependencies).toHaveBeenCalledTimes(1);
-        } finally {
-          warn.mockRestore();
-        }
-      }),
-    );
+    await withOnly([entry("test-declared-a"), entry("test-declared-b")], async () => {
+      const warn = spyOnWarn();
+      try {
+        const declaredDependencies = vi.fn((): ReadonlySet<string> => {
+          throw new Error("cannot read the working directory");
+        });
+        const enabled = await enableInstrumentations(tracerProvider, undefined, undefined, {
+          declaredDependencies,
+        });
+        expect(enabled).toEqual([]);
+        expect(warn).not.toHaveBeenCalled();
+        expect(declaredDependencies).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   it("reads package.json at the working directory by default", async () => {
@@ -487,17 +488,19 @@ describe("enableInstrumentations diagnostics", () => {
     });
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(dir);
     try {
-      await withEntry(
-        {
-          name: "test-declared-entry",
-          kind: "instrumentation",
-          optInPackage: "test-declared-pkg",
-          load: async () => undefined,
-        },
+      await withOnly(
+        [
+          {
+            name: "test-declared-entry",
+            kind: "instrumentation",
+            optInPackage: "test-declared-pkg",
+            load: async () => undefined,
+          },
+        ],
         async () => {
           const warn = spyOnWarn();
           try {
-            await enableInstrumentations(tracerProvider, ["test-declared-entry"]);
+            await enableInstrumentations(tracerProvider);
             expect(warn).toHaveBeenCalledTimes(1);
             expect(String(warn.mock.calls[0]?.[0])).toContain("test-declared-pkg");
           } finally {
@@ -516,17 +519,19 @@ describe("enableInstrumentations diagnostics", () => {
       throw new Error("ENOENT: no such file or directory, uv_cwd");
     });
     try {
-      await withEntry(
-        {
-          name: "test-declared-entry",
-          kind: "instrumentation",
-          optInPackage: "test-declared-pkg",
-          load: async () => undefined,
-        },
+      await withOnly(
+        [
+          {
+            name: "test-declared-entry",
+            kind: "instrumentation",
+            optInPackage: "test-declared-pkg",
+            load: async () => undefined,
+          },
+        ],
         async () => {
           const warn = spyOnWarn();
           try {
-            const enabled = await enableInstrumentations(tracerProvider, ["test-declared-entry"]);
+            const enabled = await enableInstrumentations(tracerProvider);
             expect(enabled).toEqual([]);
             expect(warn).not.toHaveBeenCalled();
           } finally {
@@ -546,33 +551,28 @@ describe("enableInstrumentations diagnostics", () => {
       optInPackage: `${name}-pkg`,
       load: async () => undefined,
     });
-    await withEntry(entry("test-declared-a"), () =>
-      withEntry(entry("test-declared-b"), async () => {
-        const warn = spyOnWarn();
-        try {
-          const declaredDependencies = vi.fn(
-            () => new Set(["test-declared-a-pkg", "test-declared-b-pkg"]),
-          );
-          await enableInstrumentations(
-            tracerProvider,
-            ["test-declared-a", "test-declared-b"],
-            undefined,
-            { declaredDependencies },
-          );
-          expect(declaredDependencies).toHaveBeenCalledTimes(1);
-          expect(warn).toHaveBeenCalledTimes(2);
+    await withOnly([entry("test-declared-a"), entry("test-declared-b")], async () => {
+      const warn = spyOnWarn();
+      try {
+        const declaredDependencies = vi.fn(
+          () => new Set(["test-declared-a-pkg", "test-declared-b-pkg"]),
+        );
+        await enableInstrumentations(tracerProvider, undefined, undefined, {
+          declaredDependencies,
+        });
+        expect(declaredDependencies).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledTimes(2);
 
-          // Nothing unloaded, or nothing carrying an opt-in package: never read.
-          declaredDependencies.mockClear();
-          await enableInstrumentations(tracerProvider, [], undefined, {
-            declaredDependencies,
-          });
-          expect(declaredDependencies).not.toHaveBeenCalled();
-        } finally {
-          warn.mockRestore();
-        }
-      }),
-    );
+        // Nothing unloaded, or nothing carrying an opt-in package: never read.
+        declaredDependencies.mockClear();
+        await enableInstrumentations(tracerProvider, [], undefined, {
+          declaredDependencies,
+        });
+        expect(declaredDependencies).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   it("warns without throwing when load() rejects with a non-Error value", async () => {
