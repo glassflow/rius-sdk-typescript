@@ -24,11 +24,15 @@ import {
 } from "./semconv.generated.js";
 
 /**
- * The response status of an HTTP call. An OpenTelemetry convention key the
- * rius registry does not carry, re-exported here so `src/` imports every
- * attribute key from this module.
+ * OpenTelemetry convention keys the rius registry does not carry, re-exported
+ * here so `src/` imports every attribute key from this module: the response
+ * status of an HTTP call, its query and its whole URL.
  */
-export { ATTR_HTTP_RESPONSE_STATUS_CODE as HTTP_RESPONSE_STATUS_CODE } from "@opentelemetry/semantic-conventions";
+export {
+  ATTR_HTTP_RESPONSE_STATUS_CODE as HTTP_RESPONSE_STATUS_CODE,
+  ATTR_URL_FULL as URL_FULL,
+  ATTR_URL_QUERY as URL_QUERY,
+} from "@opentelemetry/semantic-conventions";
 export * from "./semconv.generated.js";
 
 /**

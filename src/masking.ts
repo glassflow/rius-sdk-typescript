@@ -2,6 +2,7 @@ import { SpanStatusCode } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { Mask } from "./config.js";
+import { isNativeSpan } from "./nativeProviderSpans.js";
 import {
   CONTENT_ATTRIBUTE_PREFIXED_SUFFIXES,
   CONTENT_ATTRIBUTE_PREFIXES,
@@ -11,6 +12,8 @@ import {
   EXCEPTION_EVENT,
   EXCEPTION_MESSAGE,
   EXCEPTION_STACKTRACE,
+  URL_FULL,
+  URL_QUERY,
 } from "./semconv.js";
 import { toAttributeValue, truncate } from "./serde.js";
 
@@ -51,6 +54,27 @@ export function isContentKey(key: string): boolean {
  * the event itself so a failure is still visible.
  */
 const EXCEPTION_CONTENT_KEYS: readonly string[] = [EXCEPTION_MESSAGE, EXCEPTION_STACKTRACE];
+
+/**
+ * The URL attributes that are content on the Anthropic SDK's own spans only.
+ * In its content mode the SDK keeps the query parameters it treats as content
+ * (an `email` or `path_prefix` filter, and more that differ by endpoint) in
+ * `url.query` and `url.full`; outside it, it leaves both off when the query
+ * has one. Rius cannot tell which parameters an endpoint treats as content,
+ * so the whole query is content there. On every other span they are an HTTP
+ * call's URL, so they are not content keys.
+ */
+const ANTHROPIC_SDK_URL_CONTENT_KEYS: readonly string[] = [URL_QUERY, URL_FULL];
+
+/**
+ * What is left of a content attribute with content capture off, or
+ * `undefined` to drop it: `url.full` keeps its scheme, host and path, since
+ * only its query and fragment are content. Every other key is dropped.
+ */
+function withoutContent(key: string, value: unknown): unknown {
+  if (key === URL_FULL && typeof value === "string") return value.split(/[?#]/, 1)[0];
+  return undefined;
+}
 
 /**
  * The status description is the same string once more: `recordException`
@@ -103,7 +127,10 @@ export class MaskingSpanExporter implements SpanExporter {
   }
 
   private sanitized(span: ReadableSpan): ReadableSpan {
-    this.sanitizeAttributes(span.attributes as Record<string, unknown> | undefined);
+    this.sanitizeAttributes(
+      span.attributes as Record<string, unknown> | undefined,
+      isNativeSpan(span) ? ANTHROPIC_SDK_URL_CONTENT_KEYS : undefined,
+    );
 
     for (const event of span.events ?? []) {
       // On an exception event the message and stacktrace are content too, so
@@ -155,7 +182,9 @@ export class MaskingSpanExporter implements SpanExporter {
     for (const key of Object.keys(attributes)) {
       if (!isContentKey(key) && !extraContentKeys.includes(key)) continue;
       if (!this.opts.captureContent) {
-        delete attributes[key];
+        const kept = withoutContent(key, attributes[key]);
+        if (kept === undefined) delete attributes[key];
+        else attributes[key] = kept;
         continue;
       }
       if (this.opts.mask === undefined) continue;
