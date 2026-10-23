@@ -40,7 +40,7 @@ import {
   type OperatorMainAgent,
   type RiusOptions,
   resolveConfig,
-  withoutAuthorization,
+  workspaceHeaders,
 } from "./config.js";
 import { CredentialHeaderDroppingExporter } from "./credentialHeaders.js";
 import { DelegatingSpanProcessor } from "./delegatingProcessor.js";
@@ -594,10 +594,7 @@ export function init(options: InitOptions = {}): RiusClient {
         ((apiKey: string) =>
           new OTLPTraceExporter({
             url: `${config.endpoint}/v1/traces`,
-            // The same headers, but the workspace's own key: the default
-            // Authorization (from apiKey or headers) belongs to another
-            // workspace.
-            headers: { ...withoutAuthorization(config.headers), Authorization: `Bearer ${apiKey}` },
+            headers: workspaceHeaders(config.headers, apiKey),
           }));
       routing = new RoutingSpanExporter(base, factory, options.workspaces);
       base = routing;

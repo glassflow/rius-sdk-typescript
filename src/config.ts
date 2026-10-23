@@ -342,6 +342,19 @@ export function withoutAuthorization(headers: Record<string, string>): Record<st
 }
 
 /**
+ * The headers a workspace destination sends: the same headers, with the
+ * workspace's own key as the only Authorization. The default one (from
+ * `apiKey` or `headers`) belongs to another workspace, and a transport that
+ * appends duplicates would otherwise send both.
+ */
+export function workspaceHeaders(
+  headers: Record<string, string>,
+  apiKey: string,
+): Record<string, string> {
+  return { ...withoutAuthorization(headers), Authorization: `Bearer ${apiKey}` };
+}
+
+/**
  * The headers every request carries: a copy of the caller's, plus
  * `Authorization: Bearer <apiKey>` unless they already name one. Never throws:
  * headers that are not an object, or a value that is not a string, warn and
@@ -350,19 +363,34 @@ export function withoutAuthorization(headers: Record<string, string>): Record<st
 function resolveHeaders(headers: unknown, apiKey: string | undefined): Record<string, string> {
   // A Map, then fromEntries, so a `__proto__` header stays a header.
   const resolved = new Map<string, string>();
+  const folded = new Map<string, [string, string]>();
   if (headers !== undefined) {
     if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
       console.warn(
         "[rius] headers must be an object of header names to string values; ignoring them.",
       );
     } else {
+      // Keyed by the lowercased name: HTTP header names are case-insensitive,
+      // and a transport that appends duplicates (fetch) would send
+      // `Bearer a, Bearer b`, which the backend rejects. The last one wins.
+      const collided = new Set<string>();
       for (const [name, value] of Object.entries(headers)) {
-        if (typeof value === "string") {
-          resolved.set(name, value);
+        if (typeof value !== "string") {
+          console.warn(`[rius] header "${name}" is not a string; skipping it.`);
           continue;
         }
-        console.warn(`[rius] header "${name}" is not a string; skipping it.`);
+        const key = name.toLowerCase();
+        const earlier = folded.get(key);
+        if (earlier !== undefined) collided.add(earlier[0]).add(name);
+        folded.set(key, [name, value]);
       }
+      if (collided.size > 0) {
+        // Names only: a header value can be a credential.
+        console.warn(
+          `[rius] headers ${[...collided].map((n) => `"${n}"`).join(", ")} differ only in case; keeping the last of each.`,
+        );
+      }
+      for (const [name, value] of folded.values()) resolved.set(name, value);
     }
   }
   const result = Object.fromEntries(resolved);

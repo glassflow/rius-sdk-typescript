@@ -567,10 +567,15 @@ Traces are posted to `<endpoint>/v1/traces`.
 your own headers to every request the SDK sends: span exports and the
 heartbeat. An `Authorization` header in `headers` (in any case) replaces the
 one `apiKey` would send, and counts as credentials for the heartbeat, which
-does not start without any. A workspace destination (see `workspaces`) sends
-the same headers with its own key as the `Authorization` header. The OTLP
-exporter also reads `OTEL_EXPORTER_OTLP_HEADERS` itself; credentials given only
-there do not start the heartbeat.
+does not start without any. Header names are case-insensitive: two that
+differ only in case keep the last one, with a warning. A workspace destination
+(see `workspaces`) sends the same headers with its own key as the
+`Authorization` header. The OTLP exporter also reads
+`OTEL_EXPORTER_OTLP_HEADERS` itself and merges it underneath: `headers` and the
+`Authorization` from `apiKey` win on the same name, and the rest of the
+variable is still sent. This differs from the Python SDK, whose exporter
+ignores the variable entirely once any header is set. Credentials given only
+in that variable do not start the heartbeat.
 
 ```typescript
 init({ headers: { Authorization: "Bearer <token>", "x-tenant": "acme" } });
@@ -701,7 +706,10 @@ the process disappears before finishing it.
 ### Heartbeat
 
 With `heartbeat: true` (the default), the SDK posts to `<endpoint>/v1/heartbeat`
-for the life of the process: an immediate first ping when `init()` runs,
+for the life of the process, provided it has credentials (`apiKey`, or an
+`Authorization` header in `headers`); without them the heartbeat does not
+start, since the endpoint would reject every ping. It sends your `headers`
+too, with its own JSON content type: an immediate first ping when `init()` runs,
 then one every `heartbeatInterval` seconds (default 15, clamped to 5-300).
 Each ping reports the count of currently open root spans, which is what
 lets the backend tell a live-but-idle agent from one that has vanished.

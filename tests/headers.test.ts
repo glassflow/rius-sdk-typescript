@@ -2,7 +2,12 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
-import { hasAuthorization, resolveConfig, withoutAuthorization } from "../src/config.js";
+import {
+  hasAuthorization,
+  resolveConfig,
+  withoutAuthorization,
+  workspaceHeaders,
+} from "../src/config.js";
 import { startSpan } from "../src/spans.js";
 import { withWorkspace } from "../src/workspace.js";
 
@@ -87,6 +92,49 @@ describe("resolveConfig headers", () => {
   });
 });
 
+describe("resolveConfig folds header names case-insensitively", () => {
+  it("keeps the last of two names that differ only in case, warning once without the values", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const headers = { authorization: "Bearer secret-a", Authorization: "Bearer secret-b" };
+      expect(resolveConfig({ apiKey: "k", headers }, {}).headers).toEqual({
+        Authorization: "Bearer secret-b",
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = String(warn.mock.calls[0]?.[0]);
+      expect(message.toLowerCase()).toContain("authorization");
+      expect(message).not.toContain("secret");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns once however many names collide", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const headers = { "x-a": "1", "X-A": "2", "x-b": "1", "X-B": "2" };
+      expect(resolveConfig({ headers }, {}).headers).toEqual({ "X-A": "2", "X-B": "2" });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("workspaceHeaders", () => {
+  it("sends the workspace's key as the only Authorization, keeping the other headers", () => {
+    const headers = workspaceHeaders(
+      { authorization: "Bearer default", AUTHORIZATION: "Bearer other", "x-tenant": "t1" },
+      "team-key",
+    );
+    expect(headers).toEqual({ "x-tenant": "t1", Authorization: "Bearer team-key" });
+    const authorizations = Object.keys(headers).filter(
+      (name) => name.toLowerCase() === "authorization",
+    );
+    expect(authorizations).toEqual(["Authorization"]);
+  });
+});
+
 describe("Authorization helpers", () => {
   it("finds an Authorization header in any case", () => {
     expect(hasAuthorization({ AUTHORIZATION: "x" })).toBe(true);
@@ -111,6 +159,8 @@ interface Received {
   headers: http.IncomingHttpHeaders;
   /** Every Authorization header as sent, so a duplicate shows up. */
   authorizations: string[];
+  /** Every Content-Type header as sent. */
+  contentTypes: string[];
 }
 
 describe("headers on the wire", () => {
@@ -129,10 +179,14 @@ describe("headers on the wire", () => {
     const received: Received[] = [];
     server = http.createServer((request, response) => {
       const raw = request.rawHeaders;
-      const authorizations = raw.filter(
-        (_, index) => index % 2 === 1 && raw[index - 1]?.toLowerCase() === "authorization",
-      );
-      received.push({ path: request.url ?? "", headers: request.headers, authorizations });
+      const values = (name: string) =>
+        raw.filter((_, index) => index % 2 === 1 && raw[index - 1]?.toLowerCase() === name);
+      received.push({
+        path: request.url ?? "",
+        headers: request.headers,
+        authorizations: values("authorization"),
+        contentTypes: values("content-type"),
+      });
       request.resume();
       request.on("end", () => response.writeHead(200).end());
     });
@@ -167,6 +221,37 @@ describe("headers on the wire", () => {
     expect(pings.length).toBeGreaterThan(0);
     expect(pings[0]?.headers.authorization).toBe("Bearer k");
     expect(pings[0]?.headers["x-tenant"]).toBe("t1");
+  });
+
+  it("sends one Authorization and its own JSON content type with the heartbeat", async () => {
+    const { url, received } = await endpoint();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      client = init({
+        endpoint: url,
+        headers: {
+          authorization: "Bearer a",
+          Authorization: "Bearer b",
+          "Content-Type": "text/plain",
+        },
+        heartbeat: true,
+      });
+      startSpan("op").end();
+      await client.flush();
+      await client.shutdown();
+      client = undefined;
+    } finally {
+      warn.mockRestore();
+    }
+    const pings = received.filter((r) => r.path === "/v1/heartbeat");
+    expect(pings.length).toBeGreaterThan(0);
+    for (const ping of pings) {
+      expect(ping.authorizations).toEqual(["Bearer b"]);
+      expect(ping.contentTypes).toEqual(["application/json"]);
+    }
+    const traces = received.filter((r) => r.path === "/v1/traces");
+    expect(traces.length).toBeGreaterThan(0);
+    expect(traces[0]?.authorizations).toEqual(["Bearer b"]);
   });
 
   it("starts the heartbeat on an explicit Authorization header alone", async () => {
