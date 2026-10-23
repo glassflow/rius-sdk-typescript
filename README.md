@@ -572,8 +572,27 @@ variables, then the defaults below.
 | `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 | `bridgeForeignProvider` | `RIUS_BRIDGE_FOREIGN_PROVIDER` | `false` (also export the spans of another OpenTelemetry SDK that owns the global provider; see below) |
+| `headers`          | (options only)           | none (extra headers for span exports and the heartbeat; see below) |
 
 Traces are posted to `<endpoint>/v1/traces`.
+
+`apiKey` is sent as an `Authorization: Bearer <apiKey>` header. `headers` adds
+your own headers to every request the SDK sends: span exports and the
+heartbeat. An `Authorization` header in `headers` (in any case) replaces the
+one `apiKey` would send, and counts as credentials for the heartbeat, which
+does not start without any. Header names are case-insensitive: two that
+differ only in case keep the last one, with a warning. A workspace destination
+(see `workspaces`) sends the same headers with its own key as the
+`Authorization` header. The OTLP exporter also reads
+`OTEL_EXPORTER_OTLP_HEADERS` itself and merges it underneath: `headers` and the
+`Authorization` from `apiKey` win on the same name, and the rest of the
+variable is still sent. This differs from the Python SDK, whose exporter
+ignores the variable entirely once any header is set. Credentials given only
+in that variable do not start the heartbeat.
+
+```typescript
+init({ headers: { Authorization: "Bearer <token>", "x-tenant": "acme" } });
+```
 
 An empty `endpoint` or `serviceName` (option or environment variable) counts
 as unset. A numeric environment variable that is not a number (`0.5abc`,
@@ -660,12 +679,11 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
-Three `init()` options of the Python SDK have no TypeScript counterpart
-yet: `headers` (extra exporter headers; use `spanExporter` with your own
-`OTLPTraceExporter` meanwhile), `instruments` (choosing which bundled
-auto-instrumentations to enable; this SDK enables every one it finds) and
-`set_global` (keeping the provider out of the OpenTelemetry global; this SDK
-always registers it unless another SDK already has).
+Two `init()` options of the Python SDK have no TypeScript counterpart
+yet: `instruments` (choosing which bundled auto-instrumentations to enable;
+this SDK enables every one it finds) and `set_global` (keeping the provider
+out of the OpenTelemetry global; this SDK always registers it unless another
+SDK already has).
 
 ### Running next to another OpenTelemetry SDK
 
@@ -701,8 +719,12 @@ the process disappears before finishing it.
 ### Heartbeat
 
 With `heartbeat: true` (the default), the SDK posts to `<endpoint>/v1/heartbeat`
-for the life of the process: an immediate first ping when `init()` runs,
-then one every `heartbeatInterval` seconds (default 15, clamped to 5-300).
+for the life of the process, provided it has credentials (`apiKey`, or an
+`Authorization` header in `headers`); without them the heartbeat does not
+start, since the endpoint would reject every ping. It sends an immediate
+first ping when `init()` runs, then one every `heartbeatInterval` seconds
+(default 15, clamped to 5-300), each with your `headers` and its own JSON
+content type.
 Each ping reports the count of currently open root spans, which is what
 lets the backend tell a live-but-idle agent from one that has vanished.
 
