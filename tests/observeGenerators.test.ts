@@ -419,9 +419,11 @@ describe("observe's return type", () => {
   });
 
   it("pins the documented caveats a type cannot see past", () => {
-    // A built-in iterator is exactly an iteration interface to the type
-    // system, so a plain function returning one is typed as that iterator,
-    // although its wrapper returns a Promise at runtime.
+    // Under a lib without the ES2025 iterator helpers, as this repo's is, a
+    // built-in iterator is exactly an iteration interface to the type system,
+    // so a plain function returning one is typed as that iterator, although
+    // its wrapper returns a Promise at runtime. With the helpers it carries
+    // more members than the interface and is typed as a Promise.
     expectTypeOf(observe(() => [1].values())).returns.toEqualTypeOf<ArrayIterator<number>>();
     expectTypeOf(observe(() => new Map([[1, "a"]]).entries())).returns.toEqualTypeOf<
       MapIterator<[number, string]>

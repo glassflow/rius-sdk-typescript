@@ -172,8 +172,17 @@ for await (const chunk of streamAnswer("hello")) process.stdout.write(chunk);
 Generators are recognised by function kind, so wrap the generator function
 itself: a plain function that returns a generator is an ordinary function to
 `observe`, and so is an async generator compiled to a target older than
-ES2018. A generator abandoned mid-iteration without being closed leaves its
-span open.
+ES2018.
+
+A generator abandoned mid-iteration, dropped without finishing or being
+closed, has its span ended when the garbage collector reclaims it. The span
+is timed at the last value it yielded, so an async generator abandoned while
+awaiting its next value is timed at the value before it, not at the wait.
+That is best effort: the collector decides when, or whether, that happens,
+so until then (and for good if the process exits first) the span stays open
+and shows as pending, and the wrapped generator's own `finally` blocks never
+run. Close a generator you stop iterating early, with
+`return()` or a `break` out of the loop, for an exact end.
 
 The wrapper's type follows the generator's: `Generator`/`AsyncGenerator`
 when inferred, or the declared type when the generator function is annotated
@@ -188,7 +197,11 @@ differently from what the wrapper returns:
   with the concrete type it returns instead.
 - A plain function returning a built-in iterator, such as `arr.values()`,
   `map.entries()`, `set.values()` or `str.matchAll(re)`, is typed as that
-  iterator although its wrapper returns a promise.
+  iterator although its wrapper returns a promise, when your `lib` setting
+  predates the ES2025 iterator helpers. With a `lib` that includes them
+  (`ESNext`, or `ES2025` where your TypeScript version has it), built-in
+  iterators carry `map`, `filter` and the rest, and such a function is
+  correctly typed as a promise.
 - A generator function annotated with a union such as
   `Iterable<T> | undefined` is typed as a promise although its wrapper
   returns a generator; annotate it with the iteration interface alone.
