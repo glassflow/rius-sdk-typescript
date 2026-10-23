@@ -445,7 +445,8 @@ By default `init()` attempts every bundled integration, so which ones
 actually attach is determined by which optional peers it can find, or, for
 `openai` and `anthropic`, by the modules you pass in (see "pnpm and
 serverless deployments" below). To choose, pass `instruments` with the names
-above: only those are attempted, and `[]` enables none.
+above: only those are attempted, and `[]` enables none. A scoped client
+(`setGlobal: false`) enables none unless you name them; see "Scoped clients".
 
 ```typescript
 init({ instruments: ["openai", "mcp"] }) // leave the others off
@@ -568,6 +569,7 @@ variables, then the defaults below.
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 | `bridgeForeignProvider` | `RIUS_BRIDGE_FOREIGN_PROVIDER` | `false` (also export the spans of another OpenTelemetry SDK that owns the global provider; see below) |
 | `instruments`      | (options only)           | every bundled integration found (a list of names restricts to those, `[]` enables none; see "Auto-instrumentation") |
+| `setGlobal`        | (options only)           | `true` (`false` builds a scoped client that registers no OpenTelemetry global; see "Scoped clients") |
 
 Traces are posted to `<endpoint>/v1/traces`.
 
@@ -656,11 +658,36 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
-Two `init()` options of the Python SDK have no TypeScript counterpart
-yet: `headers` (extra exporter headers; use `spanExporter` with your own
-`OTLPTraceExporter` meanwhile) and `set_global` (keeping the provider out of
-the OpenTelemetry global; this SDK always registers it unless another SDK
-already has).
+One `init()` option of the Python SDK has no TypeScript counterpart yet:
+`headers` (extra exporter headers; use `spanExporter` with your own
+`OTLPTraceExporter` meanwhile).
+
+### Scoped clients
+
+`init({ setGlobal: false })` builds a client that keeps out of the
+process's OpenTelemetry setup, for a library or a test that must not change
+it. It registers none of the globals (tracer provider, context manager,
+propagator) and releases none on `shutdown()`. It neither takes nor checks
+the one global-client slot, so a global `init()` before or after it is
+unaffected. It never bridges or records another SDK's provider, and
+`bridgeForeignProvider` does not apply to it. The SDK's own helpers
+(`observe`, `startSpan`, the generation helpers) stay on the global client;
+start a scoped client's spans from its own tracer.
+
+```typescript
+const scoped = init({ setGlobal: false, apiKey: process.env.RIUS_API_KEY });
+const span = scoped.getTracer().startSpan("work");
+span.end();
+await scoped.shutdown();
+```
+
+An integration patches its library for the whole process, so a scoped client
+enables only the integrations it names in `instruments`, and never one that a
+live global client holds: that one stays with the global client, with a
+warning. A global `init()` takes an integration back from a scoped client.
+Nesting spans through the active context needs a context manager, which a
+scoped client leaves to your app or to another SDK; without one, pass the
+parent context explicitly.
 
 ### Running next to another OpenTelemetry SDK
 
