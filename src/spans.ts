@@ -4,6 +4,7 @@ import {
   type Span,
   SpanStatusCode,
   type TimeInput,
+  type Tracer,
 } from "@opentelemetry/api";
 import { executingAgentName, resolveAgentName, withAgentScope } from "./agent.js";
 import { getTracer } from "./client.js";
@@ -450,6 +451,29 @@ export function startAsCurrentSpan<T>(
   third?: SpanBody<T>,
 ): Promise<T> {
   const { name, options, fn } = splitScopedArgs<SpanOptions, SpanBody<T>>(first, second, third);
+  return scopedSpan(undefined, name, options, fn);
+}
+
+/**
+ * {@link startAsCurrentSpan} on a given tracer rather than the SDK's global
+ * one, for an integration bound to a client that may not be the global one.
+ *
+ * @internal Not re-exported from the package entry point.
+ */
+export function startAsCurrentSpanOn<T>(
+  tracer: Tracer | undefined,
+  options: SpanOptions,
+  fn: SpanBody<T>,
+): Promise<T> {
+  return scopedSpan(tracer, undefined, options, fn);
+}
+
+function scopedSpan<T>(
+  tracer: Tracer | undefined,
+  name: string | undefined,
+  options: SpanOptions,
+  fn: SpanBody<T>,
+): Promise<T> {
   const attributes = creationAttributes(name, options);
 
   const run = () =>
@@ -460,6 +484,7 @@ export function startAsCurrentSpan<T>(
       (span) => configure(new Observation(span), options),
       fn,
       options.otelKind ?? otelSpanKind(options.kind ?? SpanKind.CHAIN),
+      tracer,
     );
 
   // An AGENT span here establishes the scope that TOOL spans beneath it read
@@ -500,9 +525,10 @@ export function runActive<H extends Observation, T>(
   makeHandle: (span: Span) => H,
   fn: (handle: H) => Promise<T> | T,
   otelKind?: OtelSpanKind,
+  tracer?: Tracer,
 ): Promise<T> {
   const run = () =>
-    getTracer().startActiveSpan(name, { kind: otelKind, attributes }, async (span) => {
+    (tracer ?? getTracer()).startActiveSpan(name, { kind: otelKind, attributes }, async (span) => {
       const handle = makeHandle(span);
       try {
         return await fn(handle);

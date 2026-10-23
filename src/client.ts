@@ -115,6 +115,21 @@ export interface InitOptions extends RiusOptions {
    */
   instruments?: readonly string[];
   /**
+   * Register this client as the process's OpenTelemetry setup: the global
+   * tracer provider, an AsyncLocalStorage context manager and W3C
+   * propagation. Defaults to true. `false` builds a scoped client that
+   * registers none of them, does not take the one global-client slot (so a
+   * global `init()` before or after it is unaffected), leaves `observe`,
+   * `startSpan` and the generation helpers on the global client, and never
+   * bridges another SDK's provider. Its spans come from
+   * {@link RiusClient.getTracer} and from the integrations it names in
+   * `instruments`: a scoped client enables none by default, and never one a
+   * live global client holds. Nesting through the active context needs a
+   * context manager, which a scoped client leaves to the app or to another
+   * SDK.
+   */
+  setGlobal?: boolean;
+  /**
    * Enable multi-workspace routing: a map of alias to API key. Spans started
    * inside `withWorkspace(alias, fn)` are exported with that workspace's
    * key; spans outside any scope use the default `apiKey`. Pass `{}` to opt
@@ -216,6 +231,17 @@ export class RiusClient {
 
   static {
     createClient = (parts) => new RiusClient(parts);
+  }
+
+  /**
+   * A tracer bound to this client's pipeline. The way to start spans on a
+   * scoped client (`setGlobal: false`), whose spans the SDK's own helpers do
+   * not reach.
+   *
+   * @param name Instrumentation scope name; defaults to the SDK's own.
+   */
+  getTracer(name: string = TRACER_NAME): Tracer {
+    return this.provider.getTracer(name, SDK_VERSION);
   }
 
   /** Drains the queue. Resolves false if the most recent export failed. */
@@ -480,7 +506,8 @@ function resolveSpanLimits(): SpanLimits {
  *
  * Call it once, as early as possible in your process. A second call while a
  * client is active logs a warning and returns the existing client unchanged;
- * `shutdown()` releases the slot. `init()` is synchronous; await
+ * `shutdown()` releases the slot. A scoped client (`setGlobal: false`) neither
+ * takes nor checks that slot. `init()` is synchronous; await
  * {@link RiusClient.ready} if instrumentation must be attached before your
  * first span.
  *
@@ -490,7 +517,8 @@ function resolveSpanLimits(): SpanLimits {
  * send its final `stopped` ping; it flushes nothing.)
  */
 export function init(options: InitOptions = {}): RiusClient {
-  if (globalClient !== undefined) {
+  const setGlobal = resolveSetGlobal(options.setGlobal);
+  if (setGlobal && globalClient !== undefined) {
     console.warn(
       "[rius] init() called twice; returning the existing client. Call shutdown() first to reconfigure.",
     );
@@ -504,7 +532,8 @@ export function init(options: InitOptions = {}): RiusClient {
   // Read before anything is registered: the OpenTelemetry global is write-once,
   // so whichever provider already holds it keeps it, and the resource below —
   // immutable once built — is the only place that conflict can be recorded.
-  const foreignGlobal = foreignGlobalProviderName();
+  // A scoped client registers nothing, so there is no conflict to record.
+  const foreignGlobal = setGlobal ? foreignGlobalProviderName() : undefined;
 
   // One identity per client lifetime, shared by spans (resource) and
   // heartbeats (payload instance_id) so the backend can join them and count
@@ -689,32 +718,53 @@ export function init(options: InitOptions = {}): RiusClient {
   // this SDK out of the picture must be left with an unpatched process, so
   // `ready` resolves empty rather than advertising integrations that are not
   // recording anything.
+  //
+  // An integration patches its library for the whole process, so a scoped
+  // client enables only the ones it names, and never one a live global client
+  // holds (moving it would take every span of that library off the global
+  // client).
   const teardown: Array<() => void> = [];
-  const ready = config.disabled
-    ? Promise.resolve<string[]>([])
-    : enableInstrumentations(provider, options.instruments, teardown, {
-        instrumentModules: options.instrumentModules,
-        onEnabled: (name, undo) => {
-          // From here every Anthropic call has an OpenInference LLM span, so
-          // the Anthropic SDK's own chat span would be a second one.
-          if (name !== "anthropic") return;
-          demoter.enable();
-          // Queued right after the instrumentation's own disable, so the
-          // demoter stops when the instrumentation is unbound, not later.
-          undo.push(() => demoter.disable());
-        },
-      });
+  let instruments = options.instruments;
+  if (!setGlobal && instruments !== undefined && !Array.isArray(instruments)) {
+    // A global client falls back to every integration found; a scoped one
+    // must not, since that would patch libraries for the whole process.
+    console.warn(
+      `[rius] instruments must be a list of integration names, got ${typeof instruments}; a scoped client (setGlobal: false) enables none.`,
+    );
+    instruments = [];
+  }
+  const ready =
+    config.disabled || (!setGlobal && instruments === undefined)
+      ? Promise.resolve<string[]>([])
+      : enableInstrumentations(provider, instruments, teardown, {
+          forGlobal: setGlobal,
+          instrumentModules: options.instrumentModules,
+          onEnabled: (name, undo) => {
+            // From here every Anthropic call has an OpenInference LLM span, so
+            // the Anthropic SDK's own chat span would be a second one.
+            if (name !== "anthropic") return;
+            demoter.enable();
+            // Queued right after the instrumentation's own disable, so the
+            // demoter stops when the instrumentation is unbound, not later.
+            undo.push(() => demoter.disable());
+          },
+        });
 
   // Registered even when disabled: a provider whose only processor has no
   // delegates costs nothing, and it keeps getTracer() returning a real tracer,
   // so caller code that starts spans behaves the same either way and
   // shutdown() has a registration to release.
   rememberOwnProvider(provider);
-  ownTracerProvider = provider;
-  ownGlobals = registerGlobals(provider);
-  const bridged = config.disabled
-    ? undefined
-    : bridgeOrWarn(provider, processors, sampler, spanLimits, config.bridgeForeignProvider);
+  // A scoped client takes none of the globals and attaches to no provider
+  // that holds them, which also leaves it nothing to release on shutdown.
+  let bridged: Bridge | undefined;
+  if (setGlobal) {
+    ownTracerProvider = provider;
+    ownGlobals = registerGlobals(provider);
+    bridged = config.disabled
+      ? undefined
+      : bridgeOrWarn(provider, processors, sampler, spanLimits, config.bridgeForeignProvider);
+  }
 
   // Heartbeat: process-lifetime liveness, independent of trace traffic. The
   // tracker rides the delegating processor so payloads can carry the
@@ -752,7 +802,7 @@ export function init(options: InitOptions = {}): RiusClient {
     heartbeat = { sender, beforeExitHandler };
   }
 
-  globalClient = createClient({
+  const client = createClient({
     provider,
     processors,
     health,
@@ -761,10 +811,21 @@ export function init(options: InitOptions = {}): RiusClient {
     heartbeat,
     bridge: bridged,
   });
+  if (!setGlobal) return client;
+  globalClient = client;
   setGlobalRouting(routing, config.disabled);
   // AGENT spans fall back to this when the caller names no agent.
   setConfiguredAgentName(config.agentName);
-  return globalClient;
+  return client;
+}
+
+/** `setGlobal`, defaulting to true; anything but a boolean warns and is ignored. */
+function resolveSetGlobal(value: unknown): boolean {
+  if (value === undefined || typeof value === "boolean") return value ?? true;
+  console.warn(
+    `[rius] setGlobal must be a boolean, got ${typeof value}; registering the client globally.`,
+  );
+  return true;
 }
 
 /**
