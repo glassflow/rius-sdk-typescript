@@ -1,4 +1,4 @@
-import { SpanKind as OtelSpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind as OtelSpanKind, SpanStatusCode, type TracerProvider } from "@opentelemetry/api";
 import {
   ERROR_TYPE,
   ERROR_TYPE_TOOL_ERROR,
@@ -7,9 +7,11 @@ import {
   MCP_PROTOCOL_VERSION,
   OUTPUT_VALUE,
   SpanKind,
+  TRACER_NAME,
 } from "./semconv.js";
 import { asRecord, toAttributeValue, truncate } from "./serde.js";
-import { type Observation, startAsCurrentSpan } from "./spans.js";
+import { type Observation, startAsCurrentSpanOn } from "./spans.js";
+import { SDK_VERSION } from "./version.js";
 
 /**
  * Best-effort rendering of a CallToolResult as `output.value`, matching the
@@ -253,9 +255,17 @@ function instrumentConnect(ClientClass: McpClientLike): () => void {
  * either returned function restores the class to its pre-instrumentation
  * state.
  *
+ * Spans go to `tracerProvider` when one is given, so a client that is not
+ * the global one gets its own tool calls; without one they follow the SDK's
+ * global tracer.
+ *
  * Returns a function that restores the original method.
  */
-export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
+export function instrumentMcpClient(
+  ClientClass: McpClientLike,
+  tracerProvider?: TracerProvider,
+): () => void {
+  const tracer = tracerProvider?.getTracer(TRACER_NAME, SDK_VERSION);
   const uninstallConnect = instrumentConnect(ClientClass);
   const current = ClientClass.prototype.callTool as InstrumentedCallTool;
   const alreadyWrapped = current.riusOriginal;
@@ -277,7 +287,8 @@ export function instrumentMcpClient(ClientClass: McpClientLike): () => void {
     // `toolName` below, which is the same string this used to build by hand
     // and the same one the Python SDK produces. One composer means the manual
     // helpers and this wrapper cannot drift apart, in either language.
-    return startAsCurrentSpan(
+    return startAsCurrentSpanOn(
+      tracer,
       {
         kind: SpanKind.TOOL,
         // The OTel SpanKind FIELD (orthogonal to our taxonomy attribute above):

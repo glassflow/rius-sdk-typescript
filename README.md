@@ -682,9 +682,18 @@ await scoped.shutdown();
 ```
 
 An integration patches its library for the whole process, so a scoped client
-enables only the integrations it names in `instruments`, and never one that a
-live global client holds: that one stays with the global client, with a
-warning. A global `init()` takes an integration back from a scoped client.
+enables only the integrations it names in `instruments` (an `instruments`
+that is not a list enables none, with a warning), and never one that a live
+global client holds: that one stays with the global client, with a warning.
+The integrations a scoped client does hold, `mcp` included, send their spans
+to it. A global `init()` takes an integration from a scoped client, and the
+scoped client does not get it back when that global client later shuts down,
+as in the Python SDK; initialize a new scoped client to enable it again.
+
+Workspace routing on a scoped client is static: the routes passed in
+`init({ workspaces })` apply, but `registerWorkspace()` only reaches the global
+client, and there is no client-level equivalent yet.
+
 Nesting spans through the active context needs a context manager, which a
 scoped client leaves to your app or to another SDK; without one, pass the
 parent context explicitly.

@@ -671,7 +671,7 @@ export const REGISTRY: RegistryEntry[] = [
     name: "mcp",
     kind: "self-applying",
     install: "it is built in and enables itself once `@modelcontextprotocol/sdk` is installed",
-    async load(_tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
+    async load(tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       const mod = await optional("@modelcontextprotocol/sdk/client/index.js");
       const ClientClass = mod?.Client as McpClientLike | undefined;
       if (ClientClass === undefined) return undefined;
@@ -681,7 +681,7 @@ export const REGISTRY: RegistryEntry[] = [
       // Patch first, push second: `teardown?.push(patch())` would skip the
       // patch itself whenever no collector is passed, optional chaining
       // short-circuits the arguments too.
-      const uninstallEsm = instrumentMcpClient(ClientClass);
+      const uninstallEsm = instrumentMcpClient(ClientClass, tracerProvider);
       teardown?.push(uninstallEsm);
       // The dynamic import above resolves the ESM build, but the MCP SDK
       // dual-builds: a CJS consumer's require() returns a DIFFERENT Client
@@ -695,7 +695,7 @@ export const REGISTRY: RegistryEntry[] = [
         | { Client: McpClientLike }
         | undefined;
       if (cjs !== undefined) {
-        const uninstallCjs = instrumentMcpClient(cjs.Client);
+        const uninstallCjs = instrumentMcpClient(cjs.Client, tracerProvider);
         teardown?.push(uninstallCjs);
       }
       // The patch already ran; the truthy return only tells the caller the

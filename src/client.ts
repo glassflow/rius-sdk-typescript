@@ -724,10 +724,19 @@ export function init(options: InitOptions = {}): RiusClient {
   // holds (moving it would take every span of that library off the global
   // client).
   const teardown: Array<() => void> = [];
+  let instruments = options.instruments;
+  if (!setGlobal && instruments !== undefined && !Array.isArray(instruments)) {
+    // A global client falls back to every integration found; a scoped one
+    // must not, since that would patch libraries for the whole process.
+    console.warn(
+      `[rius] instruments must be a list of integration names, got ${typeof instruments}; a scoped client (setGlobal: false) enables none.`,
+    );
+    instruments = [];
+  }
   const ready =
-    config.disabled || (!setGlobal && options.instruments === undefined)
+    config.disabled || (!setGlobal && instruments === undefined)
       ? Promise.resolve<string[]>([])
-      : enableInstrumentations(provider, options.instruments, teardown, {
+      : enableInstrumentations(provider, instruments, teardown, {
           forGlobal: setGlobal,
           instrumentModules: options.instrumentModules,
           onEnabled: (name, undo) => {

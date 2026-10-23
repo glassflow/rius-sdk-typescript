@@ -7,6 +7,9 @@
  * shutdown, and enables only the integrations it names, never one a live
  * global client holds.
  */
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
@@ -17,7 +20,12 @@ import { configuredAgentName } from "../src/agent.js";
 import { getTracer, type InitOptions, init, type RiusClient } from "../src/client.js";
 import { globalTracerProvider } from "../src/foreign.js";
 import { REGISTRY, type RegistryEntry } from "../src/instrumentation.js";
-import { RIUS_SDK_GLOBAL_PROVIDER, SERVICE_NAME, TRACER_NAME } from "../src/semconv.js";
+import {
+  GEN_AI_OPERATION_NAME,
+  RIUS_SDK_GLOBAL_PROVIDER,
+  SERVICE_NAME,
+  TRACER_NAME,
+} from "../src/semconv.js";
 
 const clients: RiusClient[] = [];
 let foreign: NodeTracerProvider | undefined;
@@ -218,6 +226,17 @@ describe("a scoped client's integrations", () => {
     });
   });
 
+  it("enables none, with a warning, when instruments is not a list", async () => {
+    const log: string[] = [];
+    await withRegistry([recordingEntry("alpha", log)], async () => {
+      const warn = spyOnWarn();
+      const instruments = "alpha" as unknown as string[];
+      expect(await scoped({ instruments }).client.ready).toEqual([]);
+      expect(log).toEqual([]);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes("scoped"))).toBe(true);
+    });
+  });
+
   it("enables the ones it names", async () => {
     const log: string[] = [];
     await withRegistry([recordingEntry("alpha", log)], async () => {
@@ -239,6 +258,52 @@ describe("a scoped client's integrations", () => {
     });
   });
 
+  /** An entry whose load takes a turn of the event loop and counts live patches. */
+  function slowEntry(name: string, log: string[], state: { active: number; most: number }) {
+    return {
+      name,
+      kind: "self-applying" as const,
+      async load(_provider?: unknown, teardown?: Array<() => void>) {
+        await new Promise((resolve) => setImmediate(resolve));
+        state.active += 1;
+        state.most = Math.max(state.most, state.active);
+        log.push(`load ${name}`);
+        teardown?.push(() => {
+          state.active -= 1;
+          log.push(`undo ${name}`);
+        });
+        return true;
+      },
+    };
+  }
+
+  it("patches once when a global and a scoped init() race, global first", async () => {
+    const log: string[] = [];
+    const state = { active: 0, most: 0 };
+    await withRegistry([slowEntry("alpha", log, state)], async () => {
+      const warn = spyOnWarn();
+      const global = initTracked();
+      const local = scoped({ instruments: ["alpha"] });
+      expect(await global.client.ready).toEqual(["alpha"]);
+      expect(await local.client.ready).toEqual([]);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes("global"))).toBe(true);
+      expect(state.most).toBe(1);
+    });
+  });
+
+  it("patches once when a scoped and a global init() race, scoped first", async () => {
+    const log: string[] = [];
+    const state = { active: 0, most: 0 };
+    await withRegistry([slowEntry("alpha", log, state)], async () => {
+      const local = scoped({ instruments: ["alpha"] });
+      const global = initTracked();
+      expect(await local.client.ready).toEqual(["alpha"]);
+      expect(await global.client.ready).toEqual(["alpha"]);
+      expect(log).toEqual(["load alpha", "undo alpha", "load alpha"]);
+      expect(state.most).toBe(1);
+    });
+  });
+
   it("gives an integration up to a global client initialized after it", async () => {
     const log: string[] = [];
     await withRegistry([recordingEntry("alpha", log)], async () => {
@@ -247,6 +312,63 @@ describe("a scoped client's integrations", () => {
       const global = initTracked();
       expect(await global.client.ready).toEqual(["alpha"]);
       expect(log).toEqual(["load alpha", "undo alpha", "load alpha"]);
+    });
+  });
+});
+
+describe("a scoped client's mcp spans", () => {
+  it("go to the scoped client while a global client is live", async () => {
+    const global = initTracked({ instruments: [] });
+    const local = scoped({ instruments: ["mcp"] });
+    expect(await local.client.ready).toEqual(["mcp"]);
+
+    const server = new McpServer({ name: "weather", version: "1.0.0" });
+    server.tool("forecast", async () => ({ content: [{ type: "text", text: "sunny" }] }));
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const mcp = new Client({ name: "agent", version: "1.0.0" });
+    await mcp.connect(clientSide);
+    try {
+      await mcp.callTool({ name: "forecast", arguments: {} });
+    } finally {
+      await mcp.close();
+    }
+    await global.client.flush();
+    await local.client.flush();
+
+    const names = (exporter: InMemorySpanExporter) =>
+      exporter.getFinishedSpans().map((span) => span.name);
+    expect(names(local.exporter)).toContain("execute_tool forecast");
+    expect(names(global.exporter)).not.toContain("execute_tool forecast");
+  });
+});
+
+describe("a scoped client that loses the anthropic integration", () => {
+  /** Whether a span shaped like the Anthropic SDK's own chat span is demoted on `client`. */
+  async function demotes(client: RiusClient, exporter: InMemorySpanExporter): Promise<boolean> {
+    exporter.reset();
+    client
+      .getTracer("com.anthropic.sdk.messages")
+      .startSpan("chat", { attributes: { [GEN_AI_OPERATION_NAME]: "chat" } })
+      .end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    return span?.attributes[GEN_AI_OPERATION_NAME] === undefined;
+  }
+
+  it("stops demoting the Anthropic SDK's own spans", async () => {
+    const log: string[] = [];
+    await withRegistry([recordingEntry("anthropic", log)], async () => {
+      const local = scoped({ instruments: ["anthropic"] });
+      expect(await local.client.ready).toEqual(["anthropic"]);
+      expect(await demotes(local.client, local.exporter)).toBe(true);
+
+      const global = initTracked();
+      expect(await global.client.ready).toEqual(["anthropic"]);
+      // The global client now has the instrumentation's LLM span, so the
+      // scoped client's own native spans are its only record again.
+      expect(await demotes(local.client, local.exporter)).toBe(false);
+      expect(await demotes(global.client, global.exporter)).toBe(true);
     });
   });
 });
