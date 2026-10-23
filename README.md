@@ -172,8 +172,17 @@ for await (const chunk of streamAnswer("hello")) process.stdout.write(chunk);
 Generators are recognised by function kind, so wrap the generator function
 itself: a plain function that returns a generator is an ordinary function to
 `observe`, and so is an async generator compiled to a target older than
-ES2018. A generator abandoned mid-iteration without being closed leaves its
-span open.
+ES2018.
+
+A generator abandoned mid-iteration, dropped without finishing or being
+closed, has its span ended when the garbage collector reclaims it. The span
+is timed at the last value it yielded, so an async generator abandoned while
+awaiting its next value is timed at the value before it, not at the wait.
+That is best effort: the collector decides when, or whether, that happens,
+so until then (and for good if the process exits first) the span stays open
+and shows as pending, and the wrapped generator's own `finally` blocks never
+run. Close a generator you stop iterating early, with
+`return()` or a `break` out of the loop, for an exact end.
 
 The wrapper's type follows the generator's: `Generator`/`AsyncGenerator`
 when inferred, or the declared type when the generator function is annotated
@@ -188,7 +197,11 @@ differently from what the wrapper returns:
   with the concrete type it returns instead.
 - A plain function returning a built-in iterator, such as `arr.values()`,
   `map.entries()`, `set.values()` or `str.matchAll(re)`, is typed as that
-  iterator although its wrapper returns a promise.
+  iterator although its wrapper returns a promise, when your `lib` setting
+  predates the ES2025 iterator helpers. With a `lib` that includes them
+  (`ESNext`, or `ES2025` where your TypeScript version has it), built-in
+  iterators carry `map`, `filter` and the rest, and such a function is
+  correctly typed as a promise.
 - A generator function annotated with a union such as
   `Iterable<T> | undefined` is typed as a promise although its wrapper
   returns a generator; annotate it with the iteration interface alone.
@@ -568,8 +581,27 @@ variables, then the defaults below.
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 | `bridgeForeignProvider` | `RIUS_BRIDGE_FOREIGN_PROVIDER` | `false` (also export the spans of another OpenTelemetry SDK that owns the global provider; see below) |
 | `instruments`      | (options only)           | every bundled integration found (a list of names restricts to those, `[]` enables none; see "Auto-instrumentation") |
+| `headers`          | (options only)           | none (extra headers for span exports and the heartbeat; see below) |
 
 Traces are posted to `<endpoint>/v1/traces`.
+
+`apiKey` is sent as an `Authorization: Bearer <apiKey>` header. `headers` adds
+your own headers to every request the SDK sends: span exports and the
+heartbeat. An `Authorization` header in `headers` (in any case) replaces the
+one `apiKey` would send, and counts as credentials for the heartbeat, which
+does not start without any. Header names are case-insensitive: two that
+differ only in case keep the last one, with a warning. A workspace destination
+(see `workspaces`) sends the same headers with its own key as the
+`Authorization` header. The OTLP exporter also reads
+`OTEL_EXPORTER_OTLP_HEADERS` itself and merges it underneath: `headers` and the
+`Authorization` from `apiKey` win on the same name, and the rest of the
+variable is still sent. This differs from the Python SDK, whose exporter
+ignores the variable entirely once any header is set. Credentials given only
+in that variable do not start the heartbeat.
+
+```typescript
+init({ headers: { Authorization: "Bearer <token>", "x-tenant": "acme" } });
+```
 
 An empty `endpoint` or `serviceName` (option or environment variable) counts
 as unset. A numeric environment variable that is not a number (`0.5abc`,
@@ -656,11 +688,9 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
-Two `init()` options of the Python SDK have no TypeScript counterpart
-yet: `headers` (extra exporter headers; use `spanExporter` with your own
-`OTLPTraceExporter` meanwhile) and `set_global` (keeping the provider out of
-the OpenTelemetry global; this SDK always registers it unless another SDK
-already has).
+One `init()` option of the Python SDK has no TypeScript counterpart yet:
+`set_global` (keeping the provider out of the OpenTelemetry global; this SDK
+always registers it unless another SDK already has).
 
 ### Running next to another OpenTelemetry SDK
 
@@ -696,8 +726,12 @@ the process disappears before finishing it.
 ### Heartbeat
 
 With `heartbeat: true` (the default), the SDK posts to `<endpoint>/v1/heartbeat`
-for the life of the process: an immediate first ping when `init()` runs,
-then one every `heartbeatInterval` seconds (default 15, clamped to 5-300).
+for the life of the process, provided it has credentials (`apiKey`, or an
+`Authorization` header in `headers`); without them the heartbeat does not
+start, since the endpoint would reject every ping. It sends an immediate
+first ping when `init()` runs, then one every `heartbeatInterval` seconds
+(default 15, clamped to 5-300), each with your `headers` and its own JSON
+content type.
 Each ping reports the count of currently open root spans, which is what
 lets the backend tell a live-but-idle agent from one that has vanished.
 

@@ -55,7 +55,15 @@ export type Mask = (value: unknown, context?: { key: string }) => unknown;
  */
 export interface RiusOptions {
   endpoint?: string;
+  /** Sent as an `Authorization: Bearer <apiKey>` header, unless `headers` has its own. */
   apiKey?: string;
+  /**
+   * Extra headers for every request the SDK sends: span exports and the
+   * heartbeat. An `Authorization` header here (in any case) wins over
+   * `apiKey` and counts as credentials. A workspace destination drops it and
+   * sends its own key instead.
+   */
+  headers?: Record<string, string>;
   serviceName?: string;
   /**
    * The running build's version, stamped on the resource as `service.version`.
@@ -149,6 +157,8 @@ export interface RiusOptions {
 export interface ResolvedConfig {
   endpoint: string;
   apiKey?: string;
+  /** The headers every request carries, with the API key's Authorization unless one was given. */
+  headers: Record<string, string>;
   serviceName: string;
   /** Absent when nothing supplied one; never a placeholder. */
   serviceVersion?: string;
@@ -319,6 +329,75 @@ function otelResourceAttribute(
   return (Object.hasOwn(attributes, key) && attributes[key]) || undefined;
 }
 
+/** Whether `headers` names an Authorization header, in any case. */
+export function hasAuthorization(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some((name) => name.toLowerCase() === "authorization");
+}
+
+/** `headers` without any Authorization header, whatever its case. */
+export function withoutAuthorization(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => name.toLowerCase() !== "authorization"),
+  );
+}
+
+/**
+ * The headers a workspace destination sends: the same headers, with the
+ * workspace's own key as the only Authorization. The default one (from
+ * `apiKey` or `headers`) belongs to another workspace, and a transport that
+ * appends duplicates would otherwise send both.
+ */
+export function workspaceHeaders(
+  headers: Record<string, string>,
+  apiKey: string,
+): Record<string, string> {
+  return { ...withoutAuthorization(headers), Authorization: `Bearer ${apiKey}` };
+}
+
+/**
+ * The headers every request carries: a copy of the caller's, plus
+ * `Authorization: Bearer <apiKey>` unless they already name one. Never throws:
+ * headers that are not an object, or a value that is not a string, warn and
+ * are skipped.
+ */
+function resolveHeaders(headers: unknown, apiKey: string | undefined): Record<string, string> {
+  // A Map, then fromEntries, so a `__proto__` header stays a header.
+  const resolved = new Map<string, string>();
+  const folded = new Map<string, [string, string]>();
+  if (headers !== undefined) {
+    if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
+      console.warn(
+        "[rius] headers must be an object of header names to string values; ignoring them.",
+      );
+    } else {
+      // Keyed by the lowercased name: HTTP header names are case-insensitive,
+      // and a transport that appends duplicates (fetch) would send
+      // `Bearer a, Bearer b`, which the backend rejects. The last one wins.
+      const collided = new Set<string>();
+      for (const [name, value] of Object.entries(headers)) {
+        if (typeof value !== "string") {
+          console.warn(`[rius] header "${name}" is not a string; skipping it.`);
+          continue;
+        }
+        const key = name.toLowerCase();
+        const earlier = folded.get(key);
+        if (earlier !== undefined) collided.add(earlier[0]).add(name);
+        folded.set(key, [name, value]);
+      }
+      if (collided.size > 0) {
+        // Names only: a header value can be a credential.
+        console.warn(
+          `[rius] headers ${[...collided].map((n) => `"${n}"`).join(", ")} differ only in case; keeping the last of each.`,
+        );
+      }
+      for (const [name, value] of folded.values()) resolved.set(name, value);
+    }
+  }
+  const result = Object.fromEntries(resolved);
+  if (apiKey && !hasAuthorization(result)) result.Authorization = `Bearer ${apiKey}`;
+  return result;
+}
+
 /**
  * Explicit options win, then RIUS_* environment variables, then defaults.
  * GLASSFLOW_* is deliberately not read: this package never shipped under it.
@@ -355,9 +434,11 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
     },
   );
 
+  const apiKey = options.apiKey ?? env.RIUS_API_KEY;
   return {
     endpoint,
-    apiKey: options.apiKey ?? env.RIUS_API_KEY,
+    apiKey,
+    headers: resolveHeaders(options.headers, apiKey),
     serviceName,
     // Empty is unset, as it is for the agent name and the session id: a blank
     // version would stamp `service.version=""` on every span, which reads as
