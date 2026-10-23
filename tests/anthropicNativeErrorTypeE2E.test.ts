@@ -1,7 +1,6 @@
 import http from "node:http";
-import { createRequire } from "node:module";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
 import { ERROR_TYPE, GEN_AI_OPERATION_NAME } from "../src/semconv.js";
 import { Anthropic, isNative, REQUEST, TRACES_ITSELF } from "./anthropicMessages.js";
@@ -13,8 +12,6 @@ import { Anthropic, isNative, REQUEST, TRACES_ITSELF } from "./anthropicMessages
 //
 // A file of its own: the OpenInference packages keep module-level patch state,
 // and vitest's per-file module isolation keeps that state to this file.
-
-const require = createRequire(import.meta.url);
 
 /** Answers every request with `status` and the Messages API's error envelope of `type`. */
 async function failingServer(
@@ -39,19 +36,9 @@ let rius: RiusClient;
 
 beforeAll(async () => {
   exporter = new InMemorySpanExporter();
-  // An Anthropic integration the app injected but that has no instrumentation
-  // class: init() warns once and leaves the integration off, which is the
-  // public way to have the Anthropic SDK traced by its own spans alone.
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  rius = init({
-    spanExporter: exporter,
-    heartbeat: false,
-    instrumentModules: {
-      anthropic: { instrumentation: {}, sdk: require("@anthropic-ai/sdk") },
-    },
-  });
-  expect(await rius.ready).not.toContain("anthropic");
-  warn.mockRestore();
+  // No integration enabled, so the Anthropic SDK is traced by its own spans alone.
+  rius = init({ spanExporter: exporter, heartbeat: false, instruments: [] });
+  expect(await rius.ready).toEqual([]);
 });
 
 afterAll(async () => {

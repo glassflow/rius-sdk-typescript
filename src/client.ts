@@ -100,6 +100,14 @@ export interface InitOptions extends RiusOptions {
    */
   instrumentModules?: InstrumentModules;
   /**
+   * Which bundled auto-instrumentations to enable, by name: `"openai"`,
+   * `"anthropic"`, `"langchain"`, `"vercel-ai"` and `"mcp"`. Omitted, every
+   * one whose packages are installed is enabled; a list restricts to those
+   * names; `[]` enables none. An unknown name, or a named integration whose
+   * packages are missing, logs a warning and is skipped.
+   */
+  instruments?: string[];
+  /**
    * Enable multi-workspace routing: a map of alias to API key. Spans started
    * inside `withWorkspace(alias, fn)` are exported with that workspace's
    * key; spans outside any scope use the default `apiKey`. Pass `{}` to opt
@@ -682,16 +690,16 @@ export function init(options: InitOptions = {}): RiusClient {
   const teardown: Array<() => void> = [];
   const ready = config.disabled
     ? Promise.resolve<string[]>([])
-    : enableInstrumentations(provider, undefined, teardown, {
+    : enableInstrumentations(provider, options.instruments, teardown, {
         instrumentModules: options.instrumentModules,
-        onEnabled: (name) => {
+        onEnabled: (name, undo) => {
           // From here every Anthropic call has an OpenInference LLM span, so
           // the Anthropic SDK's own chat span would be a second one.
           if (name !== "anthropic") return;
           demoter.enable();
           // Queued right after the instrumentation's own disable, so the
           // demoter stops when the instrumentation is unbound, not later.
-          teardown.push(() => demoter.disable());
+          undo.push(() => demoter.disable());
         },
       });
 

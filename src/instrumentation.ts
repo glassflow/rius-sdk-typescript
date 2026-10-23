@@ -31,6 +31,13 @@ export interface RegistryEntry {
    */
   optInPackage?: string;
   /**
+   * What to install for this integration, said to a user who names it in
+   * `init({ instruments })` when it could not be enabled. The fix differs by
+   * entry: most need an OpenInference package beside the library, while the
+   * built-in ones enable themselves once the library is there.
+   */
+  install?: string;
+  /**
    * Resolves undefined when the optional package is not installed.
    * For a `self-applying` entry, resolving to anything other than undefined
    * both means "installed" and confirms the patch already ran.
@@ -96,8 +103,16 @@ export interface EnableOptions {
   /**
    * Called with each integration's name as soon as it is enabled, before the
    * next one loads. A throw is caught and the integration stays enabled.
+   * Whatever the callback pushes onto `teardown` runs when this client lets
+   * go of the integration: at its shutdown, or when another client takes it.
    */
-  onEnabled?: (name: string) => void;
+  onEnabled?: (name: string, teardown: Array<() => void>) => void;
+  /**
+   * False for a client that does not own the OpenTelemetry globals (a scoped
+   * client). Such a client leaves an integration that a live global client
+   * holds where it is. Defaults to true.
+   */
+  forGlobal?: boolean;
 }
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
@@ -528,6 +543,8 @@ export const REGISTRY: RegistryEntry[] = [
     // maps their ai.* dialect itself, the way the sink does, so this entry
     // reports them as nothing to enable.
     kind: "self-applying",
+    install:
+      "it registers on the Vercel AI SDK v7 or newer: install `ai` and `@ai-sdk/otel` (AI SDK v5 and v6 need no integration; pass `experimental_telemetry` per call)",
     async load(tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       if (tracerProvider === undefined) return undefined;
       return (await registerVercelTelemetry(tracerProvider, teardown)) ? true : undefined;
@@ -537,6 +554,7 @@ export const REGISTRY: RegistryEntry[] = [
     name: "openai",
     kind: "instrumentation",
     optInPackage: "@arizeai/openinference-instrumentation-openai",
+    install: "install `@arizeai/openinference-instrumentation-openai` beside `openai`",
     async load(
       _tracerProvider?: TracerProvider,
       teardown?: Array<() => void>,
@@ -581,6 +599,8 @@ export const REGISTRY: RegistryEntry[] = [
     name: "anthropic",
     kind: "instrumentation",
     optInPackage: "@arizeai/openinference-instrumentation-anthropic",
+    install:
+      "install `@arizeai/openinference-instrumentation-anthropic` beside `@anthropic-ai/sdk`",
     async load(
       _tracerProvider?: TracerProvider,
       _teardown?: Array<() => void>,
@@ -608,6 +628,7 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "langchain",
     kind: "instrumentation",
+    install: "install `@arizeai/openinference-instrumentation-langchain` beside `@langchain/core`",
     async load(_tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       const mod = await optional("@arizeai/openinference-instrumentation-langchain");
       const Ctor = mod?.LangChainInstrumentation as
@@ -649,6 +670,7 @@ export const REGISTRY: RegistryEntry[] = [
   {
     name: "mcp",
     kind: "self-applying",
+    install: "it is built in and enables itself once `@modelcontextprotocol/sdk` is installed",
     async load(_tracerProvider?: TracerProvider, teardown?: Array<() => void>) {
       const mod = await optional("@modelcontextprotocol/sdk/client/index.js");
       const ClientClass = mod?.Client as McpClientLike | undefined;
@@ -683,30 +705,102 @@ export const REGISTRY: RegistryEntry[] = [
   },
 ];
 
+/** A client's hold on one integration. */
+interface Holder {
+  provider: TracerProvider;
+  /** Whether the client owns the OpenTelemetry globals. */
+  global: boolean;
+  /** Undoes the integration for this client. Runs once, however often it is called. */
+  release: () => void;
+}
+
 /**
- * Enable every registry entry whose package is present. Instrumentations are
- * registered against `tracerProvider`; self-applying entries take effect in
- * their own `load()`. Returns the names enabled. Never throws: a broken
- * optional integration must not break init().
+ * Which client each integration is bound to. An integration patches a library
+ * for the whole process, so only one client can have it: enabling it for a
+ * second client first undoes it for the first, except that a scoped client
+ * never takes one from a live global client, which would move every span of
+ * that library off the global client. An entry leaves the map when its holder
+ * lets go of it.
+ */
+const holders = new Map<string, Holder>();
+
+/**
+ * The integration names the caller asked for, or undefined for the default
+ * set. Never throws: a name that is not a string, or names that are not a
+ * list, warn and are skipped.
+ */
+function requestedNames(names: unknown): ReadonlySet<string> | undefined {
+  if (names === undefined) return undefined;
+  if (!Array.isArray(names)) {
+    console.warn(
+      `[rius] instruments must be a list of integration names, got ${typeof names}; enabling every integration found.`,
+    );
+    return undefined;
+  }
+  const known = REGISTRY.map((entry) => entry.name);
+  const requested = new Set<string>();
+  for (const name of names as unknown[]) {
+    if (typeof name === "string" && known.includes(name)) {
+      requested.add(name);
+      continue;
+    }
+    console.warn(
+      `[rius] unknown instrument ${typeof name === "string" ? `"${name}"` : String(name)}; known instruments: ${[...known].sort().join(", ")}`,
+    );
+  }
+  return requested;
+}
+
+/**
+ * Enable the registry entries whose packages are present: every one when
+ * `names` is undefined, else only the named ones, warning about a name that is
+ * unknown or whose packages are missing. Instrumentations are registered
+ * against `tracerProvider`; self-applying entries take effect in their own
+ * `load()`. Returns the names enabled. Never throws: a broken optional
+ * integration must not break init().
  */
 export async function enableInstrumentations(
   tracerProvider: TracerProvider,
-  names?: string[],
+  names?: readonly string[],
   teardown?: Array<() => void>,
   options?: EnableOptions,
 ): Promise<string[]> {
-  const wanted = names ? REGISTRY.filter((e) => names.includes(e.name)) : REGISTRY;
+  const requested = requestedNames(names);
+  const forGlobal = options?.forGlobal ?? true;
+  const wanted = requested ? REGISTRY.filter((e) => requested.has(e.name)) : [...REGISTRY];
   const enabled: string[] = [];
   // Read lazily and at most once: most runs never have an unloaded entry that
   // carries an opt-in package, and the read touches the filesystem.
   let declared: ReadonlySet<string> | undefined;
 
   for (const entry of wanted) {
+    const holder = holders.get(entry.name);
+    if (holder !== undefined) {
+      if (!forGlobal && holder.global) {
+        console.warn(
+          `[rius] instrument "${entry.name}" stays with the global Rius client: an integration patches its library for the whole process, and moving it to a scoped client would take every ${entry.name} span away from the global one.`,
+        );
+        continue;
+      }
+      // Enabled for another client (or before a re-init): undo it there, so
+      // the patch is applied afresh for this one.
+      holder.release();
+    }
+    // Everything that undoes this entry for this client, run together when
+    // the client lets go of it.
+    const undo: Array<() => void> = [];
     try {
       const reportedBefore = brokenReports;
-      const loaded = await entry.load(tracerProvider, teardown, options?.instrumentModules);
+      const loaded = await entry.load(tracerProvider, undo, options?.instrumentModules);
       if (loaded === undefined) {
-        if (entry.optInPackage !== undefined && brokenReports === reportedBefore) {
+        runAll(undo);
+        if (brokenReports !== reportedBefore) continue;
+        if (requested !== undefined) {
+          // Named on purpose, so say what is missing rather than staying quiet.
+          console.warn(
+            `[rius] instrument "${entry.name}" was requested but could not be enabled; ${entry.install ?? "its packages are not installed"}.`,
+          );
+        } else if (entry.optInPackage !== undefined) {
           declared ??= declaredDependenciesOf(options?.declaredDependencies);
           if (declared.has(entry.optInPackage))
             warnDeclaredUnloaded(entry.name, entry.optInPackage);
@@ -724,32 +818,59 @@ export async function enableInstrumentations(
           instrumentations: [loaded as Instrumentation],
           tracerProvider,
         });
-        teardown?.push(disable);
+        undo.push(disable);
       }
       // "self-applying" entries already took effect inside load(); there is
       // nothing further to attach.
       enabled.push(entry.name);
       try {
-        options?.onEnabled?.(entry.name);
+        options?.onEnabled?.(entry.name, undo);
       } catch {
         // The integration is attached either way; the callback is the caller's.
       }
     } catch (error) {
+      runAll(undo);
       // Only reached when load() THREW, which means the package was reachable
       // but enabling it failed: a constructor rejecting its input, or a patch
       // onto a prototype that is no longer writable. The user installed this
       // optional peer deliberately and expects instrumentation, so a silent skip
       // would leave them with nothing and no explanation. An ABSENT package
-      // returns undefined above. That stays quiet too, unless the app's
-      // package.json lists the entry's package: then the user wanted it and the
-      // SDK just could not reach it, which gets its own warning there. Only a
-      // package that is neither installed nor listed is skipped without a word,
-      // which is the distinction this whole loud/quiet split exists to preserve.
+      // returns undefined above. That stays quiet too, unless the app named
+      // the integration or its package.json lists the entry's package: then
+      // the user wanted it and the SDK just could not reach it, which gets its
+      // own warning there. Only a package that is neither installed nor asked
+      // for is skipped without a word, which is the distinction this whole
+      // loud/quiet split exists to preserve.
       //
       // Still not fatal: warn, then carry on to the next entry so one broken
       // integration cannot block the others.
       warnBroken(entry.name, error);
+      continue;
     }
+    let released = false;
+    const held: Holder = {
+      provider: tracerProvider,
+      global: forGlobal,
+      release: () => {
+        if (released) return;
+        released = true;
+        if (holders.get(entry.name) === held) holders.delete(entry.name);
+        runAll(undo);
+      },
+    };
+    holders.set(entry.name, held);
+    teardown?.push(held.release);
   }
   return enabled;
+}
+
+/** Runs every function in `undo`, in order; one that throws does not stop the rest. */
+function runAll(undo: Array<() => void>): void {
+  for (const fn of undo.splice(0)) {
+    try {
+      fn();
+    } catch {
+      // A patch that cannot be undone must not block the others.
+    }
+  }
 }
