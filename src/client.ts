@@ -106,7 +106,7 @@ export interface InitOptions extends RiusOptions {
    * names; `[]` enables none. An unknown name, or a named integration whose
    * packages are missing, logs a warning and is skipped.
    */
-  instruments?: string[];
+  instruments?: readonly string[];
   /**
    * Register this client as the process's OpenTelemetry setup: the global
    * tracer provider, an AsyncLocalStorage context manager and W3C
@@ -263,7 +263,9 @@ export class RiusClient {
     // provider instead of finding the double-patch guard already set. Waits
     // for `ready`, since the enabling may still be in flight; its rejections
     // were already turned into an empty list.
-    await this.ready;
+    // Never rejects by contract, but a shutdown that threw here would never
+    // release the globals or the client slot, so it is not trusted to.
+    await this.ready.catch(() => []);
     for (const disable of this.teardown.splice(0)) {
       try {
         disable();

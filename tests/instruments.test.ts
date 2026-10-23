@@ -109,6 +109,26 @@ describe("init({ instruments })", () => {
     });
   });
 
+  it("describes a name that cannot be turned into a string, and still resolves and shuts down", async () => {
+    const log: string[] = [];
+    await withRegistry([recordingEntry("alpha", log)], async () => {
+      const warn = spyOnWarn();
+      try {
+        const instruments = [Object.create(null), "alpha"] as unknown as string[];
+        const client = initTracked({ instruments });
+        await expect(client.ready).resolves.toEqual(["alpha"]);
+        expect(warnings(warn).some((message) => message.includes("object"))).toBe(true);
+        await client.shutdown();
+        live = undefined;
+        // The slot was released: a new init() builds a new client.
+        const next = initTracked();
+        expect(next).not.toBe(client);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   it("warns and keeps the default set when the option is not a list", async () => {
     const log: string[] = [];
     await withRegistry([recordingEntry("alpha", log), recordingEntry("beta", log)], async () => {
@@ -256,6 +276,69 @@ describe("which client holds an integration", () => {
       expect(log).toEqual(["load alpha", "undo alpha", "load alpha"]);
       release(held);
       expect(log).toEqual(["load alpha", "undo alpha", "load alpha", "undo alpha"]);
+    });
+  });
+
+  /**
+   * An entry whose load takes a turn of the event loop, like a real dynamic
+   * import, and which records how many copies of its patch are applied at once.
+   */
+  function slowEntry(name: string, log: string[], state: { active: number; most: number }) {
+    return {
+      name,
+      kind: "self-applying" as const,
+      async load(_provider?: TracerProvider, teardown?: Array<() => void>) {
+        await new Promise((resolve) => setImmediate(resolve));
+        state.active += 1;
+        state.most = Math.max(state.most, state.active);
+        log.push(`load ${name}`);
+        teardown?.push(() => {
+          state.active -= 1;
+          log.push(`undo ${name}`);
+        });
+        return true;
+      },
+    };
+  }
+
+  it("keeps an integration with a global client a scoped one races, neither awaited", async () => {
+    const log: string[] = [];
+    const state = { active: 0, most: 0 };
+    await withRegistry([slowEntry("alpha", log, state)], async () => {
+      const held: Array<() => void> = [];
+      const scoped: Array<() => void> = [];
+      const warn = spyOnWarn();
+      try {
+        const global = enableInstrumentations(globalProvider, undefined, held);
+        const local = enableInstrumentations(scopedProvider, ["alpha"], scoped, {
+          forGlobal: false,
+        });
+        expect(await global).toEqual(["alpha"]);
+        expect(await local).toEqual([]);
+      } finally {
+        warn.mockRestore();
+      }
+      expect(log).toEqual(["load alpha"]);
+      expect(state.most).toBe(1);
+      release(held);
+    });
+  });
+
+  it("moves an integration from a scoped client to a global one that races it, neither awaited", async () => {
+    const log: string[] = [];
+    const state = { active: 0, most: 0 };
+    await withRegistry([slowEntry("alpha", log, state)], async () => {
+      const scoped: Array<() => void> = [];
+      const held: Array<() => void> = [];
+      const local = enableInstrumentations(scopedProvider, ["alpha"], scoped, { forGlobal: false });
+      const global = enableInstrumentations(globalProvider, undefined, held);
+      expect(await local).toEqual(["alpha"]);
+      expect(await global).toEqual(["alpha"]);
+      expect(log).toEqual(["load alpha", "undo alpha", "load alpha"]);
+      expect(state.most).toBe(1);
+      release(scoped);
+      expect(state.active).toBe(1);
+      release(held);
     });
   });
 
