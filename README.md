@@ -559,8 +559,22 @@ variables, then the defaults below.
 | `partialSpansDelay` | `RIUS_PARTIAL_SPANS_DELAY` | `0` (seconds; clamped 0-60)                |
 | `sessionId`        | `RIUS_SESSION_ID`        | none (process-wide session default; `withSession` overrides it) |
 | `bridgeForeignProvider` | `RIUS_BRIDGE_FOREIGN_PROVIDER` | `false` (also export the spans of another OpenTelemetry SDK that owns the global provider; see below) |
+| `headers`          | (options only)           | none (extra headers for span exports and the heartbeat; see below) |
 
 Traces are posted to `<endpoint>/v1/traces`.
+
+`apiKey` is sent as an `Authorization: Bearer <apiKey>` header. `headers` adds
+your own headers to every request the SDK sends: span exports and the
+heartbeat. An `Authorization` header in `headers` (in any case) replaces the
+one `apiKey` would send, and counts as credentials for the heartbeat, which
+does not start without any. A workspace destination (see `workspaces`) sends
+the same headers with its own key as the `Authorization` header. The OTLP
+exporter also reads `OTEL_EXPORTER_OTLP_HEADERS` itself; credentials given only
+there do not start the heartbeat.
+
+```typescript
+init({ headers: { Authorization: "Bearer <token>", "x-tenant": "acme" } });
+```
 
 An empty `endpoint` or `serviceName` (option or environment variable) counts
 as unset. A numeric environment variable that is not a number (`0.5abc`,
@@ -647,12 +661,11 @@ optional integration is loaded, so no third-party module is patched in your
 process. `client.ready` resolves to an empty list. Spans can still be
 created and are simply dropped.
 
-Three `init()` options of the Python SDK have no TypeScript counterpart
-yet: `headers` (extra exporter headers; use `spanExporter` with your own
-`OTLPTraceExporter` meanwhile), `instruments` (choosing which bundled
-auto-instrumentations to enable; this SDK enables every one it finds) and
-`set_global` (keeping the provider out of the OpenTelemetry global; this SDK
-always registers it unless another SDK already has).
+Two `init()` options of the Python SDK have no TypeScript counterpart
+yet: `instruments` (choosing which bundled auto-instrumentations to enable;
+this SDK enables every one it finds) and `set_global` (keeping the provider
+out of the OpenTelemetry global; this SDK always registers it unless another
+SDK already has).
 
 ### Running next to another OpenTelemetry SDK
 
