@@ -81,11 +81,10 @@ function isNativeChatSpan(
 
 /**
  * The exception class every Anthropic client, in Python and TypeScript, raises
- * for an HTTP status, spelled as errorType.ts spells a provider error. Only
- * the statuses all of them agree on: for 413, 503, 504 and 529 the class
- * differs by client or language, so those keep the SDK's own value.
+ * for a 4xx, spelled as errorType.ts spells a provider error. 413 is left out:
+ * its class differs by client or language.
  */
-const ERROR_CLASS_BY_STATUS: ReadonlyMap<number, string> = new Map([
+const CLIENT_ERROR_CLASS: ReadonlyMap<number, string> = new Map([
   [400, "anthropic.BadRequestError"],
   [401, "anthropic.AuthenticationError"],
   [403, "anthropic.PermissionDeniedError"],
@@ -93,8 +92,21 @@ const ERROR_CLASS_BY_STATUS: ReadonlyMap<number, string> = new Map([
   [409, "anthropic.ConflictError"],
   [422, "anthropic.UnprocessableEntityError"],
   [429, "anthropic.RateLimitError"],
-  [500, "anthropic.InternalServerError"],
 ]);
+
+/** Every Anthropic client raises this for a 5xx, except the statuses below. */
+const SERVER_ERROR_CLASS = "anthropic.InternalServerError";
+
+/** 5xx statuses whose class differs by client or language. */
+const UNMAPPED_SERVER_STATUSES: ReadonlySet<number> = new Set([503, 504, 529]);
+
+/** The exception class for an HTTP status, or undefined to keep the SDK's value. */
+function errorClassFor(status: number): string | undefined {
+  if (status >= 500 && status <= 599) {
+    return UNMAPPED_SERVER_STATUSES.has(status) ? undefined : SERVER_ERROR_CLASS;
+  }
+  return CLIENT_ERROR_CLASS.get(status);
+}
 
 /**
  * Names the error on a span the Anthropic SDK made itself by the exception
@@ -107,10 +119,12 @@ const ERROR_CLASS_BY_STATUS: ReadonlyMap<number, string> = new Map([
  * the response status, as the Anthropic SDKs pick the class, so the same
  * failure groups under one name whether or not the instrumentation is on.
  *
- * Only an `error.type` the SDK set is replaced, and only with a status in the
- * table: a span with no status (a connection error, a timeout) or with a 200
- * (an error event on a stream that had opened) keeps it. The span records no
- * exception event, so there is no `exception.type` to keep in step.
+ * Only an `error.type` the SDK set is replaced, and only for a mapped status:
+ * a span with no status (a connection error, a timeout, a tool runner's
+ * span), a 200 (an error event on a stream that had opened) and a status
+ * whose class differs by client or language (413, 503, 504, 529) keep it. The
+ * span records no exception event, so there is no `exception.type` to keep
+ * in step.
  */
 export function nameNativeAnthropicError(span: ReadableSpan): void {
   try {
@@ -119,7 +133,7 @@ export function nameNativeAnthropicError(span: ReadableSpan): void {
     if (attributes[ERROR_TYPE] === undefined) return;
     const status = attributes[ATTR_HTTP_RESPONSE_STATUS_CODE];
     if (typeof status !== "number") return;
-    const name = ERROR_CLASS_BY_STATUS.get(status);
+    const name = errorClassFor(status);
     if (name !== undefined) attributes[ERROR_TYPE] = name;
   } catch {
     // An exotic span keeps the SDK's own value rather than fail the export.
