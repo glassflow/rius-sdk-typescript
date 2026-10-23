@@ -1,6 +1,8 @@
 import type { AttributeValue, Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { ATTR_HTTP_RESPONSE_STATUS_CODE } from "@opentelemetry/semantic-conventions";
 import {
+  ERROR_TYPE,
   GEN_AI_OPERATION_NAME,
   GEN_AI_PROVIDER_NAME,
   OPENINFERENCE_SPAN_KIND,
@@ -62,17 +64,66 @@ function demote(attributes: Bag): void {
  */
 const CHAT = operationForKind(SpanKind.LLM);
 
+/** A span the Anthropic SDK made itself, whatever its operation. */
+function isNativeSpan(span: Pick<ReadableSpan, "instrumentationScope">): boolean {
+  const scope = span.instrumentationScope?.name;
+  return typeof scope === "string" && scope.startsWith(ANTHROPIC_SDK_SCOPE_PREFIX);
+}
+
 /** The Anthropic SDK's own span for a call the OpenInference instrumentation records. */
 function isNativeChatSpan(
   span: Pick<ReadableSpan, "instrumentationScope" | "attributes">,
 ): boolean {
-  const scope = span.instrumentationScope?.name;
   return (
-    typeof scope === "string" &&
-    scope.startsWith(ANTHROPIC_SDK_SCOPE_PREFIX) &&
-    CHAT !== undefined &&
-    span.attributes[GEN_AI_OPERATION_NAME] === CHAT
+    isNativeSpan(span) && CHAT !== undefined && span.attributes[GEN_AI_OPERATION_NAME] === CHAT
   );
+}
+
+/**
+ * The exception class every Anthropic client, in Python and TypeScript, raises
+ * for an HTTP status, spelled as errorType.ts spells a provider error. Only
+ * the statuses all of them agree on: for 413, 503, 504 and 529 the class
+ * differs by client or language, so those keep the SDK's own value.
+ */
+const ERROR_CLASS_BY_STATUS: ReadonlyMap<number, string> = new Map([
+  [400, "anthropic.BadRequestError"],
+  [401, "anthropic.AuthenticationError"],
+  [403, "anthropic.PermissionDeniedError"],
+  [404, "anthropic.NotFoundError"],
+  [409, "anthropic.ConflictError"],
+  [422, "anthropic.UnprocessableEntityError"],
+  [429, "anthropic.RateLimitError"],
+  [500, "anthropic.InternalServerError"],
+]);
+
+/**
+ * Names the error on a span the Anthropic SDK made itself by the exception
+ * class, in place, at end.
+ *
+ * That SDK sets `error.type` to the code in the API's error envelope
+ * (`not_found_error`), or the HTTP status without one, while the
+ * OpenInference span for the same call, and every other span Rius records a
+ * provider failure on, names the class (`anthropic.NotFoundError`). Mapped by
+ * the response status, as the Anthropic SDKs pick the class, so the same
+ * failure groups under one name whether or not the instrumentation is on.
+ *
+ * Only an `error.type` the SDK set is replaced, and only with a status in the
+ * table: a span with no status (a connection error, a timeout) or with a 200
+ * (an error event on a stream that had opened) keeps it. The span records no
+ * exception event, so there is no `exception.type` to keep in step.
+ */
+export function nameNativeAnthropicError(span: ReadableSpan): void {
+  try {
+    if (!isNativeSpan(span)) return;
+    const attributes = span.attributes as Bag;
+    if (attributes[ERROR_TYPE] === undefined) return;
+    const status = attributes[ATTR_HTTP_RESPONSE_STATUS_CODE];
+    if (typeof status !== "number") return;
+    const name = ERROR_CLASS_BY_STATUS.get(status);
+    if (name !== undefined) attributes[ERROR_TYPE] = name;
+  } catch {
+    // An exotic span keeps the SDK's own value rather than fail the export.
+  }
 }
 
 /**

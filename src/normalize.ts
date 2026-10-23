@@ -17,6 +17,7 @@ import {
   uriModality,
   urlPart,
 } from "./mediaParts.js";
+import { nameNativeAnthropicError } from "./nativeProviderSpans.js";
 import {
   AI_OPERATION_ID,
   EMBEDDING_MODEL_NAME,
@@ -2765,6 +2766,12 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     })) {
       if (attributes[key] === undefined) attributes[key] = value;
     }
+    // The one rule that replaces a key the span already has: the Anthropic
+    // SDK's own spans name the error by its API code, everything else by the
+    // exception class. Here rather than in the demoter so it applies whether
+    // or not the OpenInference instrumentation is on, and to a bridged span's
+    // copy as well.
+    nameNativeAnthropicError(span);
     // Reads the same `output.value` as the response id above, and for the same
     // reason only at end.
     addProviderCompactions(span, attributes, this.eventCountLimit);

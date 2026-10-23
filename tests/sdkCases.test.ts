@@ -5,13 +5,14 @@
 // SDKs are held to one expected result for each: how input.value and
 // output.value are written, how setAttribute encodes a value, how messages and
 // rius.context.sizes are recorded, what the masking exporter keeps, how RIUS_*
-// variables resolve and how the resource takes in OTEL_RESOURCE_ATTRIBUTES.
+// variables resolve, how the resource takes in OTEL_RESOURCE_ATTRIBUTES and
+// how the error on the Anthropic SDK's own spans is named.
 // Their README describes the format, including the tagged values JSON cannot
 // hold ({"$bytes": N}, {"$number": "NaN"}).
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SpanStatusCode } from "@opentelemetry/api";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -227,6 +228,21 @@ describe("resource.json: OTEL_RESOURCE_ATTRIBUTES and the SDK's own keys", () =>
       );
       expect(picked).toEqual(c.expected);
       expect((c.absent as string[]).filter((key) => key in attributes)).toEqual([]);
+    });
+  }
+});
+
+describe("anthropic_error_type.json: error.type on the Anthropic SDK's own spans", () => {
+  for (const c of cases("anthropic_error_type")) {
+    it(c.name, async () => {
+      const span = await onlySpanAttributes(new InMemorySpanExporter(), () => {
+        // Through the global, as the Anthropic SDK gets its tracer.
+        const native = trace.getTracer(c.scope).startSpan("s", { attributes: c.attributes });
+        native.setStatus({ code: SpanStatusCode.ERROR });
+        native.end();
+      });
+      expect(span.instrumentationScope.name).toBe(c.scope);
+      expect(span.attributes["error.type"]).toBe(c.expected);
     });
   }
 });

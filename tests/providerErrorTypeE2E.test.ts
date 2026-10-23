@@ -110,6 +110,13 @@ describe("a provider 404", () => {
       expect(exceptionType(llm)).toBe("anthropic.NotFoundError");
       expect(root?.attributes["error.type"]).toBe("anthropic.NotFoundError");
       expect(exceptionType(root)).toBe("anthropic.NotFoundError");
+      // The SDK's own span, demoted, names the error the same way rather than
+      // by the body's error code.
+      for (const native of spans.filter((s) =>
+        s.instrumentationScope.name.startsWith("com.anthropic.sdk."),
+      )) {
+        expect(native.attributes["error.type"]).toBe("anthropic.NotFoundError");
+      }
     } finally {
       server.close();
     }
