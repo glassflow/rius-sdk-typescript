@@ -707,7 +707,6 @@ export const REGISTRY: RegistryEntry[] = [
 
 /** A client's hold on one integration. */
 interface Holder {
-  provider: TracerProvider;
   /** Whether the client owns the OpenTelemetry globals. */
   global: boolean;
   /** Undoes the integration for this client. Runs once, however often it is called. */
@@ -723,6 +722,19 @@ interface Holder {
  * lets go of it.
  */
 const holders = new Map<string, Holder>();
+
+/**
+ * A name for a warning. Never throws: an object without a prototype, or one
+ * whose `toString` throws, would turn the warning itself into an error, so
+ * only primitives are printed and anything else is named by its type.
+ */
+function describeName(name: unknown): string {
+  if (typeof name === "string") return `"${name}"`;
+  if (typeof name === "number" || typeof name === "boolean" || typeof name === "bigint") {
+    return `${name}`;
+  }
+  return `of type ${name === null ? "null" : typeof name}`;
+}
 
 /**
  * The integration names the caller asked for, or undefined for the default
@@ -745,7 +757,7 @@ function requestedNames(names: unknown): ReadonlySet<string> | undefined {
       continue;
     }
     console.warn(
-      `[rius] unknown instrument ${typeof name === "string" ? `"${name}"` : String(name)}; known instruments: ${[...known].sort().join(", ")}`,
+      `[rius] unknown instrument ${describeName(name)}; known instruments: ${[...known].sort().join(", ")}`,
     );
   }
   return requested;
@@ -759,11 +771,29 @@ function requestedNames(names: unknown): ReadonlySet<string> | undefined {
  * `load()`. Returns the names enabled. Never throws: a broken optional
  * integration must not break init().
  */
-export async function enableInstrumentations(
+export function enableInstrumentations(
   tracerProvider: TracerProvider,
   names?: readonly string[],
   teardown?: Array<() => void>,
   options?: EnableOptions,
+): Promise<string[]> {
+  // One call at a time. The holder of an integration is checked before its
+  // load() awaits and recorded after, so two init() calls in one tick would
+  // otherwise both patch the library, or a scoped client would take one a
+  // global client is about to hold.
+  const run = queue.then(() => enableNow(tracerProvider, names, teardown, options));
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+/** The tail of the {@link enableInstrumentations} calls still running. */
+let queue: Promise<unknown> = Promise.resolve();
+
+async function enableNow(
+  tracerProvider: TracerProvider,
+  names: readonly string[] | undefined,
+  teardown: Array<() => void> | undefined,
+  options: EnableOptions | undefined,
 ): Promise<string[]> {
   const requested = requestedNames(names);
   const forGlobal = options?.forGlobal ?? true;
@@ -783,7 +813,12 @@ export async function enableInstrumentations(
         continue;
       }
       // Enabled for another client (or before a re-init): undo it there, so
-      // the patch is applied afresh for this one.
+      // the patch is applied afresh for this one. BEFORE the load, not after
+      // it succeeds: load() is the patch itself, and the patches guard
+      // against double patching (OpenInference marks the module, the MCP
+      // patch hands back the existing wrapper), so loading over the old patch
+      // would be a no-op whose holder then unpatches the library on release.
+      // Python orders it the same way, uninstrument() before instrument().
       holder.release();
     }
     // Everything that undoes this entry for this client, run together when
@@ -849,7 +884,6 @@ export async function enableInstrumentations(
     }
     let released = false;
     const held: Holder = {
-      provider: tracerProvider,
       global: forGlobal,
       release: () => {
         if (released) return;
