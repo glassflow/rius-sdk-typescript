@@ -155,7 +155,9 @@ describe("masking.json: the masking exporter", () => {
           ),
         ],
       });
-      const span = provider.getTracer("cases").startSpan("s", { attributes: c.span.attributes });
+      const span = provider
+        .getTracer(c.scope ?? "cases")
+        .startSpan("s", { attributes: c.span.attributes });
       for (const event of c.span.events ?? []) span.addEvent(event.name, event.attributes);
       if ("status" in c.span) {
         span.setStatus({ code: SpanStatusCode.ERROR, message: c.span.status });

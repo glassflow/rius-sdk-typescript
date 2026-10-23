@@ -65,7 +65,7 @@ function demote(attributes: Bag): void {
 const CHAT = operationForKind(SpanKind.LLM);
 
 /** A span the Anthropic SDK made itself, whatever its operation. */
-function isNativeSpan(span: Pick<ReadableSpan, "instrumentationScope">): boolean {
+export function isNativeSpan(span: Pick<ReadableSpan, "instrumentationScope">): boolean {
   const scope = span.instrumentationScope?.name;
   return typeof scope === "string" && scope.startsWith(ANTHROPIC_SDK_SCOPE_PREFIX);
 }
