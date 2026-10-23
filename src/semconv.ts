@@ -23,6 +23,12 @@ import {
   SpanKind,
 } from "./semconv.generated.js";
 
+/**
+ * The response status of an HTTP call. An OpenTelemetry convention key the
+ * rius registry does not carry, re-exported here so `src/` imports every
+ * attribute key from this module.
+ */
+export { ATTR_HTTP_RESPONSE_STATUS_CODE as HTTP_RESPONSE_STATUS_CODE } from "@opentelemetry/semantic-conventions";
 export * from "./semconv.generated.js";
 
 /**

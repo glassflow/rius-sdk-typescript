@@ -67,8 +67,11 @@ Biome is the only linter/formatter. Do not add ESLint or Prettier.
 - **Normalization** (`src/normalize.ts`) rewrites third-party dialects in place
   at `onEnd`. Because it mutates in place, an expanding rule that returns its own
   source key is a correctness requirement, not a nicety. Native canonical keys
-  always win; normalization only fills gaps. It runs BEFORE masking, so masking
-  only ever sees canonical keys.
+  always win; normalization only fills gaps. The one exception is `error.type`
+  on the Anthropic SDK's own spans, which is replaced by the exception class for
+  the response status (`nativeProviderSpans.ts`), so a failure is named the same
+  with or without the OpenInference instrumentation. It runs BEFORE masking, so
+  masking only ever sees canonical keys.
 
 ## Parity with the Python SDK
 

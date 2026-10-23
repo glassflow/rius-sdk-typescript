@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
 import { observe } from "../src/observe.js";
 import { EXCEPTION_EVENT, EXCEPTION_TYPE, SpanKind } from "../src/semconv.js";
+import { isNative, TRACES_ITSELF } from "./anthropicMessages.js";
 
 // A provider failure end to end: a real provider client, auto-instrumented by
 // the OpenInference package init() enables, called inside an `observe` AGENT
@@ -110,6 +111,13 @@ describe("a provider 404", () => {
       expect(exceptionType(llm)).toBe("anthropic.NotFoundError");
       expect(root?.attributes["error.type"]).toBe("anthropic.NotFoundError");
       expect(exceptionType(root)).toBe("anthropic.NotFoundError");
+      // The SDK's own span, demoted, names the error the same way rather than
+      // by the body's error code.
+      const natives = spans.filter(isNative);
+      if (TRACES_ITSELF) expect(natives).not.toHaveLength(0);
+      for (const native of natives) {
+        expect(native.attributes["error.type"]).toBe("anthropic.NotFoundError");
+      }
     } finally {
       server.close();
     }
