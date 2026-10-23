@@ -708,9 +708,10 @@ the process disappears before finishing it.
 With `heartbeat: true` (the default), the SDK posts to `<endpoint>/v1/heartbeat`
 for the life of the process, provided it has credentials (`apiKey`, or an
 `Authorization` header in `headers`); without them the heartbeat does not
-start, since the endpoint would reject every ping. It sends your `headers`
-too, with its own JSON content type: an immediate first ping when `init()` runs,
-then one every `heartbeatInterval` seconds (default 15, clamped to 5-300).
+start, since the endpoint would reject every ping. It sends an immediate
+first ping when `init()` runs, then one every `heartbeatInterval` seconds
+(default 15, clamped to 5-300), each with your `headers` and its own JSON
+content type.
 Each ping reports the count of currently open root spans, which is what
 lets the backend tell a live-but-idle agent from one that has vanished.
 
