@@ -235,10 +235,9 @@ export class RiusClient {
     }
     // Instrumentations first, so a later init() re-patches against its own
     // provider instead of finding the double-patch guard already set. Waits
-    // for `ready`, since the enabling may still be in flight; its rejections
-    // were already turned into an empty list.
-    // Never rejects by contract, but a shutdown that threw here would never
-    // release the globals or the client slot, so it is not trusted to.
+    // for `ready`, since the enabling may still be in flight. It never
+    // rejects by contract, but a shutdown that threw here would never release
+    // the globals or the client slot, so it is not trusted to.
     await this.ready.catch(() => []);
     for (const disable of this.teardown.splice(0)) {
       try {
