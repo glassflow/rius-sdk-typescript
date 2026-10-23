@@ -67,20 +67,32 @@ const EXCEPTION_CONTENT_KEYS: readonly string[] = [EXCEPTION_MESSAGE, EXCEPTION_
 const ANTHROPIC_SDK_URL_CONTENT_KEYS: readonly string[] = [URL_QUERY, URL_FULL];
 
 /**
- * `url` as its scheme, host and path, or `undefined` when nothing is left:
- * without its query and fragment, and without a user name or password before
- * the host, which the URL convention says must never be recorded.
+ * `url` as its scheme, host and path, or `undefined` when that is not safe to
+ * keep: without its query and fragment, and without a user name or password
+ * before the host, which the URL convention says must never be recorded. The
+ * user name and password go first, so a `?` or `#` inside them cannot hide
+ * them from the cut. A URL that has an `@` where the host and its credentials
+ * cannot be told apart is dropped: one without `://`, one with an `@` before
+ * it, or one whose authority (up to the first `/`) has both an `@` and a `?`
+ * or `#`. So is one with nothing left.
  */
 function schemeHostAndPath(url: string): string | undefined {
-  let base = url.split(/[?#]/, 1)[0];
-  const authority = base.indexOf("://");
-  if (authority >= 0) {
-    const start = authority + 3;
-    const slash = base.indexOf("/", start);
-    const end = slash < 0 ? base.length : slash;
-    const at = base.lastIndexOf("@", end - 1);
-    if (at >= start) base = base.slice(0, start) + base.slice(at + 1);
+  let rest = url;
+  const sep = rest.indexOf("://");
+  if (sep < 0) {
+    if (rest.includes("@")) return undefined;
+  } else {
+    if (rest.slice(0, sep).includes("@")) return undefined;
+    const start = sep + 3;
+    const slash = rest.indexOf("/", start);
+    const end = slash < 0 ? rest.length : slash;
+    const authority = rest.slice(start, end);
+    if (authority.includes("@")) {
+      if (authority.includes("?") || authority.includes("#")) return undefined;
+      rest = rest.slice(0, start) + rest.slice(rest.lastIndexOf("@", end - 1) + 1);
+    }
   }
+  const base = rest.split(/[?#]/, 1)[0];
   return base === "" ? undefined : base;
 }
 
