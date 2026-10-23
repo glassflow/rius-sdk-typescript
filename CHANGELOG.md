@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.8.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.7.0...v1.8.0) (2026-10-23)
+
+
+### Features
+
+* build a scoped client with init({ setGlobal: false }) ([#210](https://github.com/glassflow/rius-sdk-typescript/issues/210)) ([77dec3c](https://github.com/glassflow/rius-sdk-typescript/commit/77dec3c9f627d8c3415e11c837d163be2c360f0f))
+* select bundled integrations with init({ instruments }) ([#209](https://github.com/glassflow/rius-sdk-typescript/issues/209)) ([d4e3888](https://github.com/glassflow/rius-sdk-typescript/commit/d4e38886d4dd043c4d00e464264d3c4c14b83874))
+* send extra headers with init({ headers }) ([#212](https://github.com/glassflow/rius-sdk-typescript/issues/212)) ([4cccbb4](https://github.com/glassflow/rius-sdk-typescript/commit/4cccbb42f508f8ccea99e7622e3fe5396aae7aef))
+
+
+### Bug Fixes
+
+* drop the Anthropic SDK's tool output with captureContent off ([#205](https://github.com/glassflow/rius-sdk-typescript/issues/205)) ([1a260db](https://github.com/glassflow/rius-sdk-typescript/commit/1a260dbbc781322ebad69ac3bbdb83bff08884c5))
+* drop the Anthropic SDK's URL query with captureContent off ([#211](https://github.com/glassflow/rius-sdk-typescript/issues/211)) ([8549a4a](https://github.com/glassflow/rius-sdk-typescript/commit/8549a4aff96ff28be5984c643ac953aa7152cc07))
+* end the span of a generator abandoned mid-iteration when it is collected ([#208](https://github.com/glassflow/rius-sdk-typescript/issues/208)) ([3875754](https://github.com/glassflow/rius-sdk-typescript/commit/38757547a2b45a8259e28c4b0120b983a73bf1af))
+* name the Anthropic SDK's native span errors by exception class ([#206](https://github.com/glassflow/rius-sdk-typescript/issues/206)) ([2a3a0cd](https://github.com/glassflow/rius-sdk-typescript/commit/2a3a0cdc1de3b1bd7a1e06fc5abb47c395ad3ba7))
+
 ## [1.7.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.6.0...v1.7.0) (2026-10-22)
 
 

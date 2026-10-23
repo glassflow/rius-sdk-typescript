@@ -1,6 +1,6 @@
 {
   "name": "@glassflow-ai/rius",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "OpenTelemetry-native agent observability: trace every LLM call, tool call and agent step, with cost per call, alerts, and Claude Code / Codex / Cursor session tracing.",
   "keywords": [
     "opentelemetry",
