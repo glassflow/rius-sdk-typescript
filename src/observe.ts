@@ -82,9 +82,13 @@ export interface ObserveOptions {
  *   is typed as an iterator but returns a Promise; give it the concrete type
  *   it returns.
  * - A plain function returning a built-in iterator (`arr.values()`,
- *   `map.entries()`, `set.values()`, `str.matchAll(re)`), which the type
- *   system sees as exactly `IterableIterator<T>`, is typed as that iterator
- *   but returns a Promise.
+ *   `map.entries()`, `set.values()`, `str.matchAll(re)`) is typed as that
+ *   iterator but returns a Promise, when the consumer's `lib` predates the
+ *   ES2025 iterator helpers: the type system then sees the iterator as
+ *   exactly `IterableIterator<T>`. A `lib` that includes them (`ESNext`, or
+ *   `ES2025` where the compiler has it) gives built-in iterators `map`,
+ *   `filter` and the rest, so they are no longer exactly that interface and
+ *   such a function is correctly typed as a Promise.
  * - A generator function annotated with a union such as
  *   `Iterable<T> | undefined` is typed as a Promise but returns a generator.
  *
@@ -139,8 +143,16 @@ const ASYNC_GENERATOR_FUNCTION_TAG = "[object AsyncGeneratorFunction]";
  * also closes the wrapped generator so its `finally` blocks run. The span is
  * current only while the generator's own code runs, never in the caller
  * between steps. A generator records its input but no output: what it yields
- * is a stream, not a value, which is what the Python SDK does too. A generator
- * that is abandoned mid-iteration without being closed leaves its span open.
+ * is a stream, not a value, which is what the Python SDK does too.
+ *
+ * A generator abandoned mid-iteration, dropped without finishing or being
+ * closed, has its span ended when the garbage collector reclaims it, timed at
+ * its last step, as Python ends it at collection. That is best effort: the
+ * collector decides when, or whether, it runs, so until then (and for good if
+ * the process exits first) the span stays open and is reported as pending.
+ * The wrapped generator's own `finally` blocks do not run. Close a generator
+ * you stop iterating early (`return()`, or `break` out of a loop) for an exact
+ * end.
  *
  * Generators are recognised by function kind, as Python recognises them, so a
  * plain function that returns a generator built elsewhere is an ordinary
@@ -225,6 +237,7 @@ export function observe<F extends (...args: never[]) => unknown>(
     // called: a generator that is never iterated runs none of its code and
     // should leave no span behind, pending or otherwise.
     const step = openIterationSpan(name, spanOptionsFor(args), options.agentName);
+    const abandonment = watchAbandonment(step.observation);
     // Calling the generator function runs its parameter destructuring and
     // default values, which may throw, so it is inside the try that records
     // the error and ends the span.
@@ -238,6 +251,7 @@ export function observe<F extends (...args: never[]) => unknown>(
           resume.throwing ? generator.throw(resume.value) : generator.next(resume.value),
         );
         if (result.done) return result.value;
+        abandonment.lease.lastStep = performance.now();
         try {
           resume = { throwing: false, value: yield result.value };
         } catch (thrown) {
@@ -252,6 +266,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       // Reached on completion, on a throw, and on the caller's return()
       // (a `break` out of for-of). Closing an already finished generator is a
       // no-op; closing a suspended one runs its finally blocks now.
+      abandonment.release();
       closeIteration(step, () => inner?.return(undefined));
     }
   };
@@ -262,6 +277,7 @@ export function observe<F extends (...args: never[]) => unknown>(
   ): AsyncGenerator<unknown, unknown, unknown> {
     // See the synchronous wrapper; this is the same loop with awaits.
     const step = openIterationSpan(name, spanOptionsFor(args), options.agentName);
+    const abandonment = watchAbandonment(step.observation);
     let inner: AsyncGenerator | undefined;
     let resume: Resume = { throwing: false, value: undefined };
     try {
@@ -274,6 +290,7 @@ export function observe<F extends (...args: never[]) => unknown>(
           resume.throwing ? generator.throw(resume.value) : generator.next(resume.value),
         );
         if (result.done) return result.value;
+        abandonment.lease.lastStep = performance.now();
         try {
           resume = { throwing: false, value: yield result.value };
         } catch (thrown) {
@@ -284,6 +301,7 @@ export function observe<F extends (...args: never[]) => unknown>(
       step.observation.recordException(error);
       throw error;
     } finally {
+      abandonment.release();
       await closeAsyncIteration(step, () => inner?.return(undefined));
     }
   };
@@ -370,4 +388,58 @@ async function closeAsyncIteration(
   } finally {
     step.observation.end();
   }
+}
+
+/**
+ * What the finalizer needs to end an abandoned iteration's span: the span, and
+ * when the generator last handed control back to its caller, on the
+ * `performance.now()` clock the span's own timestamps are anchored to.
+ */
+export interface AbandonedIteration {
+  observation: Observation;
+  lastStep: number;
+}
+
+/**
+ * End the span of a wrapped generator that was garbage collected mid-iteration.
+ *
+ * Timed at the last step rather than now: the time a generator spends
+ * abandoned, until a collection happens to find it, is not time it spent
+ * working. Never throws, because a finalizer that throws reaches the host as
+ * an uncaught exception.
+ */
+export function endAbandonedIteration(abandoned: AbandonedIteration): void {
+  try {
+    abandoned.observation.span.end(abandoned.lastStep);
+  } catch {
+    // Nothing to report to: the generator is gone, and so is its caller.
+  }
+}
+
+// Absent on runtimes without weak references; abandoned spans then stay open,
+// as they always did.
+const abandonedIterations =
+  typeof FinalizationRegistry === "function"
+    ? new FinalizationRegistry<AbandonedIteration>(endAbandonedIteration)
+    : undefined;
+
+/**
+ * Arrange for the iteration's span to end if its generator is collected before
+ * the wrapper's `finally` runs.
+ *
+ * The registry cannot watch the generator object itself, which a generator's
+ * body has no reference to. It watches a token instead that only the
+ * wrapper's frame holds, kept alive by `release()` in the `finally`: the token
+ * becomes unreachable exactly when the suspended generator does. The lease is
+ * what the registry holds strongly, so it carries the span and never the
+ * generator, which would otherwise keep itself alive.
+ */
+function watchAbandonment(observation: Observation): {
+  lease: AbandonedIteration;
+  release: () => void;
+} {
+  const lease: AbandonedIteration = { observation, lastStep: performance.now() };
+  const token = {};
+  abandonedIterations?.register(token, lease, token);
+  return { lease, release: () => abandonedIterations?.unregister(token) };
 }
