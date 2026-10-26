@@ -83,6 +83,9 @@ import {
   GEN_AI_USAGE_OUTPUT_TOKENS,
   GEN_AI_USAGE_PREFIX,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+  GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_TEXT_INPUT_TOKENS,
+  GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
   INVOCATION_PARAMETERS_CONTENT_MEMBERS,
   kindForOperation,
   LLM_FINISH_REASON,
@@ -1753,6 +1756,44 @@ export function normalizeVercelSpan(attributes: Record<string, AttributeValue | 
 }
 
 /**
+ * The usage breakdowns the conventions recommend only when available and
+ * non-zero: the cache and reasoning subsets and the per-modality counts. The
+ * input and output totals are not among them; they are reported even at 0.
+ */
+const USAGE_BREAKDOWN_SUFFIXES: readonly string[] = [
+  GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+  GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+  GEN_AI_USAGE_TEXT_INPUT_TOKENS,
+  GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
+  GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
+  GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
+  GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+  GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+  GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+  GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+].map((key) => key.slice(GEN_AI_USAGE_PREFIX.length));
+
+/**
+ * Drops every usage breakdown whose count is 0, in place, under
+ * `gen_ai.usage.*` and under the `rius.aggregated_usage.*` a run's usage
+ * moves to. Whoever wrote it, the producer natively or the table mapping a
+ * dialect's count: the source of a mapped one is already gone, so the zero
+ * leaves the span entirely. Only the number 0; a count of another shape is
+ * the producer's and stays.
+ */
+export function dropZeroUsageBreakdowns(
+  attributes: Record<string, AttributeValue | undefined>,
+): void {
+  for (const prefix of [GEN_AI_USAGE_PREFIX, RIUS_AGGREGATED_USAGE_PREFIX]) {
+    for (const suffix of USAGE_BREAKDOWN_SUFFIXES) {
+      if (attributes[prefix + suffix] === 0) delete attributes[prefix + suffix];
+    }
+  }
+}
+
+/**
  * Time to first chunk, in milliseconds, first readable wins: generateText and
  * streamText write the first, streamObject the second. Source spellings, inline.
  */
@@ -2797,6 +2838,8 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // After the table, which mapped the Vercel AI SDK's identity keys; ahead
     // of every pass below, so their setDefault sees what the dialect said.
     normalizeVercelSpan(attributes);
+    // After every pass that maps usage, the table's and the AI SDK's.
+    dropZeroUsageBreakdowns(attributes);
     // After the table, on its output: the table has already taken the request
     // knobs out of the bag, so what this pass re-serializes is the remainder.
     normalizeToolDefinitions(attributes);

@@ -324,8 +324,8 @@ describe("pydantic-ai's Gemini image and audio usage details", () => {
     const fill = (keys: string[], value: Attributes[string]): Attributes =>
       Object.fromEntries(keys.map((key) => [key, value]));
 
-    it(`treats a zero ${modality} count as a count`, () => {
-      expect(normalized(fill(sources, 0), NORMALIZATION_RULES)).toEqual(fill(targets, 0));
+    it(`drops a zero ${modality} count, which the conventions recommend only when non-zero`, () => {
+      expect(normalized(fill(sources, 0), NORMALIZATION_RULES)).toEqual({});
     });
 
     it(`lets native ${modality} keys win, and the sources still go`, () => {
