@@ -436,9 +436,9 @@ describe("GenAI-shaped usage spellings", () => {
 });
 
 // The conventions recommend the usage breakdowns only when available and
-// non-zero, and still report the totals at 0. A third-party span's zero
-// breakdown goes, whether the producer wrote it under a canonical key or the
-// table mapped it there.
+// non-zero, and still report the totals at 0. A zero breakdown goes from
+// every span, the SDK's own generations included, whether the producer wrote
+// it under a canonical key or the table mapped it there.
 describe("zero usage breakdowns", () => {
   const BREAKDOWNS = [
     "gen_ai.usage.cache_read.input_tokens",
@@ -486,6 +486,21 @@ describe("zero usage breakdowns", () => {
 
   it("drops a parsed string zero", () => {
     expect(exported({ "llm.token_count.prompt_details.cache_read": "0" })).toEqual({});
+  });
+
+  it.each([["0"], [0.5], [false]])("keeps %j, which is not the number 0", (value) => {
+    const key = "gen_ai.usage.cache_read.input_tokens";
+    expect(exported({ [key]: value })).toEqual({ [key]: value });
+  });
+
+  it("drops -0, which is the number 0", () => {
+    expect(exported({ "gen_ai.usage.cache_read.input_tokens": -0 })).toEqual({});
+  });
+
+  it("keeps NaN, which is not 0", () => {
+    expect(exported({ "gen_ai.usage.cache_read.input_tokens": Number.NaN })).toEqual({
+      "gen_ai.usage.cache_read.input_tokens": Number.NaN,
+    });
   });
 
   it("leaves a zero under a key that is no breakdown", () => {
