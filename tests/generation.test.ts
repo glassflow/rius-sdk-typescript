@@ -432,6 +432,36 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(7);
   });
 
+  // A later call can clear what an earlier one recorded, so a breakdown never
+  // outlives the total it is a subset of.
+  it("setUsage lets a later 0 overwrite an earlier count", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({
+      cacheReadInputTokens: 50,
+      cacheWriteInputTokens: 50,
+      reasoningOutputTokens: 50,
+    });
+    gen.setUsage({ cacheReadInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(0);
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(0);
+  });
+
+  it("setUsage leaves a 0 off when no earlier call recorded that count", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({ cacheWriteInputTokens: 50 });
+    gen.setUsage({ cacheReadInputTokens: 0, reasoningOutputTokens: 0 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(50);
+  });
+
   it("setUsage records reasoning output tokens", async () => {
     const gen = startGeneration("chat", { model: "m" });
     gen.setUsage({ outputTokens: 900, reasoningOutputTokens: 700 });
