@@ -336,6 +336,17 @@ export const sum: Converter = (values) => {
 // not.
 
 /**
+ * The registry's own former spellings of a provider value. Unlike the
+ * aliases below they are rewritten even under a native
+ * `gen_ai.provider.name` (see {@link PROVIDER_RENAME_RULES}): an
+ * instrumentation written against the earlier registry, @ai-sdk/otel among
+ * them, still emits them.
+ */
+export const PROVIDER_NAME_RENAMES: Readonly<Record<string, string>> = {
+  mistral_ai: "mistral",
+};
+
+/**
  * Provider spellings the GenAI registry writes differently from the source.
  *
  * Two dialects feed `gen_ai.provider.name` and both carry values the registry
@@ -356,17 +367,6 @@ export const sum: Converter = (values) => {
  * "well-known", not closed, and the langchain instrumentation already
  * forwards any `ls_provider` string it is handed.
  */
-/**
- * The registry's own former spellings of a provider value. Unlike the
- * aliases below they are rewritten even under a native
- * `gen_ai.provider.name` (see {@link PROVIDER_RENAME_RULES}): an
- * instrumentation written against the earlier registry, @ai-sdk/otel among
- * them, still emits them.
- */
-export const PROVIDER_NAME_RENAMES: Readonly<Record<string, string>> = {
-  mistral_ai: "mistral",
-};
-
 export const PROVIDER_NAME_ALIASES: Readonly<Record<string, string>> = {
   // OpenInference enum values
   mistralai: "mistral",

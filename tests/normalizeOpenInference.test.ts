@@ -8,6 +8,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it } from "vitest";
 import { init, type RiusClient } from "../src/client.js";
+import { startGeneration } from "../src/generation.js";
 import {
   INVOCATION_PARAMETER_MEMBERS,
   NORMALIZATION_RULES,
@@ -15,7 +16,7 @@ import {
   OPENINFERENCE_FIRST_TOKEN_EVENT,
   PROVIDER_NAME_ALIASES,
 } from "../src/normalize.js";
-import { kindForOperation, operationForKind, SpanKind } from "../src/semconv.js";
+import { kindForOperation, operationForKind, RIUS_SPAN_PENDING, SpanKind } from "../src/semconv.js";
 import { startSpan } from "../src/spans.js";
 
 /**
@@ -223,8 +224,17 @@ describe("the provider value", () => {
 
   // @ai-sdk/otel writes gen_ai.provider.name itself, under the registry's
   // former Mistral spelling, so the native key is rewritten in place.
-  it("rewrites a native gen_ai.provider.name of mistral_ai to mistral", () => {
-    expect(normalized({ "gen_ai.provider.name": "mistral_ai" })).toEqual({
+  it.each(["mistral_ai", "  Mistral_AI  "])(
+    "rewrites a native gen_ai.provider.name of %j to mistral",
+    (value) => {
+      expect(normalized({ "gen_ai.provider.name": value })).toEqual({
+        "gen_ai.provider.name": "mistral",
+      });
+    },
+  );
+
+  it("rewrites a native mistral_ai that wins over llm.provider", () => {
+    expect(normalized({ "gen_ai.provider.name": "mistral_ai", "llm.provider": "openai" })).toEqual({
       "gen_ai.provider.name": "mistral",
     });
   });
@@ -235,8 +245,8 @@ describe("the provider value", () => {
     expect(attributes).toEqual({ "gen_ai.provider.name": "mistral" });
   });
 
-  it.each(["mistral", "mistralai", "xai", "vertex_ai", "openai"])(
-    "leaves any other native gen_ai.provider.name, %s, as the producer wrote it",
+  it.each(["mistral", "mistralai", "xai", "vertex_ai", "openai", 7])(
+    "leaves any other native gen_ai.provider.name, %j, as the producer wrote it",
     (value) => {
       expect(normalized({ "gen_ai.provider.name": value })).toEqual({
         "gen_ai.provider.name": value,
@@ -317,6 +327,7 @@ describe("a routed model name", () => {
     // LiteLLM records the model as routed: the prefix is the provider.
     ["openai", "openai/gpt-4o-mini", "gpt-4o-mini"],
     ["anthropic", "anthropic/claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"],
+    ["mistralai", "mistral/mistral-small-latest", "mistral-small-latest"],
     // compared under the registry's spelling
     ["vertex_ai", "vertex_ai/gemini-2.5-flash", "gemini-2.5-flash"],
     // a prefix naming anyone else is part of the name
@@ -343,6 +354,15 @@ describe("a routed model name", () => {
       "llm.invocation_parameters": JSON.stringify({ model: "openai/gpt-4o-mini" }),
     };
     expect(normalized(attributes)["gen_ai.request.model"]).toBe("gpt-4o-mini");
+  });
+
+  it("is stripped against a native former provider spelling, under its new name", () => {
+    const out = normalized({
+      "gen_ai.provider.name": "mistral_ai",
+      "llm.invocation_parameters": JSON.stringify({ model: "mistral/mistral-small-latest" }),
+    });
+    expect(out["gen_ai.provider.name"]).toBe("mistral");
+    expect(out["gen_ai.request.model"]).toBe("mistral-small-latest");
   });
 
   it("is never stripped when the producer set it natively", () => {
@@ -1023,6 +1043,25 @@ describe("the spans this SDK emits itself", () => {
   // is a wall-clock bet rather than a correctness bound.
   it("keep their openinference.span.kind", async () => {
     expect((await nativeSpan())["openinference.span.kind"]).toBe("LLM");
+  }, 30_000);
+
+  it("rename a startGeneration provider on the pending and the ended span", async () => {
+    exporter = new InMemorySpanExporter();
+    client = init({
+      spanExporter: exporter,
+      partialSpans: true,
+      heartbeatTransport: async () => {},
+    });
+    await client.ready;
+    startGeneration("chat", { provider: "mistral_ai" }).end();
+    await client.flush();
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(2);
+    expect(spans.filter((span) => span.attributes[RIUS_SPAN_PENDING] === true)).toHaveLength(1);
+    expect(spans.map((span) => span.attributes["gen_ai.provider.name"])).toEqual([
+      "mistral",
+      "mistral",
+    ]);
   }, 30_000);
 
   it("are otherwise unchanged: the rules re-derive exactly what is there", async () => {
