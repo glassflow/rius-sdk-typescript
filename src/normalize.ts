@@ -341,8 +341,12 @@ export const sum: Converter = (values) => {
  * Two dialects feed `gen_ai.provider.name` and both carry values the registry
  * renamed. The pairs come from the registry itself: its `GenAiSystemValues`
  * members carry "Deprecated: Replaced by X" docstrings, and
- * `GenAiProviderNameValues` spells xAI `x_ai` and Mistral `mistral_ai`
- * against OpenInference's `xai` / `mistralai`.
+ * `GenAiProviderNameValues` spells xAI `x_ai` against OpenInference's `xai`.
+ * The registry has since renamed Mistral's value from `mistral_ai` to
+ * `mistral`, so both OpenInference's `mistralai` and the former `mistral_ai`
+ * (still on spans from instrumentations written against it) map to `mistral`.
+ * Not taken from `@opentelemetry/semantic-conventions`, whose
+ * `GEN_AI_PROVIDER_NAME_VALUE_MISTRAL_AI` still spells the old value.
  *
  * Only renames of the SAME provider are listed. OpenInference's `azure`,
  * `aws` and `google` are deliberately NOT translated: each covers several
@@ -352,9 +356,20 @@ export const sum: Converter = (values) => {
  * "well-known", not closed, and the langchain instrumentation already
  * forwards any `ls_provider` string it is handed.
  */
+/**
+ * The registry's own former spellings of a provider value. Unlike the
+ * aliases below they are rewritten even under a native
+ * `gen_ai.provider.name` (see {@link PROVIDER_RENAME_RULES}): an
+ * instrumentation written against the earlier registry, @ai-sdk/otel among
+ * them, still emits them.
+ */
+export const PROVIDER_NAME_RENAMES: Readonly<Record<string, string>> = {
+  mistral_ai: "mistral",
+};
+
 export const PROVIDER_NAME_ALIASES: Readonly<Record<string, string>> = {
   // OpenInference enum values
-  mistralai: "mistral_ai",
+  mistralai: "mistral",
   xai: "x_ai",
   vertexai: "gcp.vertex_ai",
   // legacy gen_ai.system values
@@ -362,6 +377,8 @@ export const PROVIDER_NAME_ALIASES: Readonly<Record<string, string>> = {
   gemini: "gcp.gemini",
   "az.ai.inference": "azure.ai.inference",
   "az.ai.openai": "azure.ai.openai",
+  // the registry's own former spellings
+  ...PROVIDER_NAME_RENAMES,
 };
 
 /** The provider, under the registry's spelling where it differs. */
@@ -411,6 +428,22 @@ export function providerFromSystem(raw: AttributeValue | undefined): Expansion {
   const provider = providerName([raw]);
   if (provider !== undefined) produced[GEN_AI_PROVIDER_NAME] = provider;
   return produced;
+}
+
+/**
+ * A native `gen_ai.provider.name` under the registry's current spelling, in
+ * place: only a former spelling of the registry's own changes, anything else
+ * is the producer's and stays as written. Always returns the key, so the
+ * rule rewrites its own source and never deletes it.
+ */
+export function renamedProvider(raw: AttributeValue | undefined): Expansion {
+  if (typeof raw !== "string") return { [GEN_AI_PROVIDER_NAME]: raw };
+  const key = raw.trim().toLowerCase();
+  return {
+    [GEN_AI_PROVIDER_NAME]: Object.hasOwn(PROVIDER_NAME_RENAMES, key)
+      ? PROVIDER_NAME_RENAMES[key]
+      : raw,
+  };
 }
 
 /** A double, or nothing. Booleans are not numbers here. */
@@ -1123,7 +1156,9 @@ export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Ex
  * The AI SDK's provider ids (`openai.chat`, `google.vertex.chat`,
  * `amazon-bedrock`) and the registry provider each starts with, first match
  * wins. The list is @ai-sdk/otel's own (`mapProviderName`), so a v5/v6 span
- * names the provider exactly as the v7 integration does for the same call.
+ * names the provider exactly as the v7 integration does for the same call,
+ * except Mistral: @ai-sdk/otel still writes the registry's former
+ * `mistral_ai`, which PROVIDER_RENAME_RULES brings to the same `mistral`.
  */
 const VERCEL_PROVIDER_PREFIXES: ReadonlyArray<readonly [prefix: string, provider: string]> = [
   ["google.vertex", "gcp.vertex_ai"],
@@ -1135,7 +1170,7 @@ const VERCEL_PROVIDER_PREFIXES: ReadonlyArray<readonly [prefix: string, provider
   ["openai", "openai"],
   ["azure", "azure.ai.inference"],
   ["google", "gcp.gemini"],
-  ["mistral", "mistral_ai"],
+  ["mistral", "mistral"],
   ["cohere", "cohere"],
   ["bedrock", "aws.bedrock"],
   ["groq", "groq"],
@@ -1730,6 +1765,16 @@ const VERCEL_MS_TO_FIRST_CHUNK = [
 const VERCEL_EMBEDDING_VECTORS = ["ai.embedding", "ai.embeddings"] as const;
 
 /**
+ * A native provider value the registry has renamed since its producer was
+ * written, under the new name. Last, so a value the rules above produced is
+ * already current and passes through. Identity, so a pending snapshot shows
+ * the same name the ended span does.
+ */
+export const PROVIDER_RENAME_RULES: readonly NormalizationRule[] = [
+  { source: GEN_AI_PROVIDER_NAME, expand: renamedProvider, identity: true },
+];
+
+/**
  * The rules `init()` applies. Live in every process: normalization is always
  * on and has no opt-out, so anything listed here is a production rule the
  * moment it is merged — and a mapping rule DELETES its source key, so a rule
@@ -1755,6 +1800,7 @@ export const NORMALIZATION_RULES: readonly NormalizationRule[] = [
   ...TAXONOMY_RULES,
   ...VERCEL_RULES,
   ...OPENINFERENCE_RULES,
+  ...PROVIDER_RENAME_RULES,
 ];
 
 /** A rule's source keys, always as a list. */

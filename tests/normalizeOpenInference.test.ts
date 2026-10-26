@@ -188,7 +188,8 @@ describe("per family", () => {
 describe("the provider value", () => {
   it("translates only the registry's own renames of the same provider", () => {
     expect(PROVIDER_NAME_ALIASES).toEqual({
-      mistralai: "mistral_ai",
+      mistralai: "mistral",
+      mistral_ai: "mistral",
       xai: "x_ai",
       vertexai: "gcp.vertex_ai",
       vertex_ai: "gcp.vertex_ai",
@@ -199,7 +200,8 @@ describe("the provider value", () => {
   });
 
   it.each([
-    ["mistralai", "mistral_ai"],
+    ["mistralai", "mistral"],
+    ["mistral_ai", "mistral"],
     ["xai", "x_ai"],
     ["  XAI  ", "x_ai"],
   ])("renames %s to %s, matched case- and whitespace-insensitively", (source, expected) => {
@@ -210,6 +212,35 @@ describe("the provider value", () => {
     "passes %s through verbatim, because it covers several registry values",
     (source) => {
       expect(normalized({ "llm.provider": source })["gen_ai.provider.name"]).toBe(source);
+    },
+  );
+
+  it("maps the registry's former Mistral spelling, which the deprecated gen_ai.system still carries", () => {
+    const out = normalized({ "gen_ai.system": "mistral_ai" });
+    expect(out["gen_ai.provider.name"]).toBe("mistral");
+    expect(out["gen_ai.system"]).toBeUndefined();
+  });
+
+  // @ai-sdk/otel writes gen_ai.provider.name itself, under the registry's
+  // former Mistral spelling, so the native key is rewritten in place.
+  it("rewrites a native gen_ai.provider.name of mistral_ai to mistral", () => {
+    expect(normalized({ "gen_ai.provider.name": "mistral_ai" })).toEqual({
+      "gen_ai.provider.name": "mistral",
+    });
+  });
+
+  it("rewrites a native mistral_ai at span start, for a pending snapshot", () => {
+    const attributes: Attributes = { "gen_ai.provider.name": "mistral_ai" };
+    new NormalizingSpanProcessor().onStart(startingSpan(attributes), {} as never);
+    expect(attributes).toEqual({ "gen_ai.provider.name": "mistral" });
+  });
+
+  it.each(["mistral", "mistralai", "xai", "vertex_ai", "openai"])(
+    "leaves any other native gen_ai.provider.name, %s, as the producer wrote it",
+    (value) => {
+      expect(normalized({ "gen_ai.provider.name": value })).toEqual({
+        "gen_ai.provider.name": value,
+      });
     },
   );
 
@@ -239,7 +270,7 @@ describe("the provider value", () => {
     ["openai", "openai"],
     ["anthropic", "anthropic"],
     ["cohere", "cohere"],
-    ["mistralai", "mistral_ai"],
+    ["mistralai", "mistral"],
     ["vertexai", "gcp.vertex_ai"],
   ])("falls back to llm.system %s when the host is unknown, and keeps it", (source, expected) => {
     expect(normalized({ "llm.system": source })).toEqual({
@@ -530,7 +561,7 @@ describe("the invocation-parameter bag", () => {
   it.each([
     ["openai", "openai"],
     ["anthropic", "anthropic"],
-    ["mistralai", "mistral_ai"],
+    ["mistralai", "mistral"],
     ["google_vertexai", "google_vertexai"],
   ])("names a LangChain run's provider from ls_provider %s", (lsProvider, expected) => {
     const metadata = JSON.stringify({ ls_provider: lsProvider, ls_model_type: "chat" });

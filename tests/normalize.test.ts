@@ -178,11 +178,12 @@ class Capture implements SpanExporter {
 }
 
 describe("the shipped table", () => {
-  it("is the taxonomy rules, the Vercel ones, then the OpenInference ones", () => {
+  it("is the taxonomy rules, the Vercel ones, the OpenInference ones, then the provider renames", () => {
     // Order is contract, not taste: two sources may target one key and the
     // first to produce it wins, so the Python SDK and the sink list these in
     // the same sequence. A reorder here is a wire change. The Vercel rules are
-    // this SDK's and the sink's only, and come before gen_ai.system's.
+    // this SDK's and the sink's only, and come before gen_ai.system's. The
+    // provider rename is last, so what the rules above produced is current.
     expect(NORMALIZATION_RULES.map((rule) => rule.source)).toEqual([
       "openinference.span.kind",
       "gen_ai.operation.name",
@@ -230,6 +231,7 @@ describe("the shipped table", () => {
       "gen_ai.client.operation.time_to_first_chunk",
       "llm.invocation_parameters",
       "embedding.model_name",
+      "gen_ai.provider.name",
     ]);
   });
 
