@@ -50,51 +50,63 @@
     },
     {
       "key": "gen_ai.usage.cache_read.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.cache_write.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.reasoning.output_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.text.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.text.output_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.text.cache_read.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.image.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.image.output_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.image.cache_read.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.audio.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.audio.output_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "key": "gen_ai.usage.audio.cache_read.input_tokens",
-      "decision": "canonical"
+      "decision": "canonical",
+      "omit_zero": true
     },
     {
       "prefix": "rius.aggregated_usage.",

@@ -70,6 +70,60 @@ describe("the shared cases", () => {
   });
 });
 
+describe("zero usage breakdowns", () => {
+  it("drops a call's zero breakdowns and their sources, keeping zero totals", () => {
+    expect(
+      normalized({
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokens": 0,
+        "ai.usage.outputTokens": 0,
+        "ai.usage.inputTokenDetails.cacheReadTokens": 0,
+        "ai.usage.cachedInputTokens": 0,
+        "ai.usage.inputTokenDetails.cacheWriteTokens": 0,
+        "ai.usage.outputTokenDetails.reasoningTokens": 0,
+      }),
+    ).toEqual({
+      "ai.operationId": "ai.generateText.doGenerate",
+      "gen_ai.operation.name": "chat",
+      "openinference.span.kind": "LLM",
+      "gen_ai.usage.input_tokens": 0,
+      "gen_ai.usage.output_tokens": 0,
+    });
+  });
+
+  it("drops a wrapper's zero breakdowns under the run's usage", () => {
+    expect(
+      normalized({
+        "ai.operationId": "ai.streamText",
+        "ai.usage.inputTokens": 115,
+        "ai.usage.cachedInputTokens": 0,
+        "ai.usage.reasoningTokens": 3,
+      }),
+    ).toEqual({
+      "ai.operationId": "ai.streamText",
+      "gen_ai.operation.name": "invoke_agent",
+      "openinference.span.kind": "AGENT",
+      "rius.aggregated_usage.input_tokens": 115,
+      "rius.aggregated_usage.reasoning.output_tokens": 3,
+    });
+  });
+
+  it("drops @ai-sdk/otel's zero reasoning count on a model call", () => {
+    expect(
+      normalized({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.input_tokens": 9,
+        "gen_ai.usage.cache_read.input_tokens": 0,
+        "ai.usage.outputTokenDetails.reasoningTokens": 0,
+      }),
+    ).toEqual({
+      "gen_ai.operation.name": "chat",
+      "openinference.span.kind": "LLM",
+      "gen_ai.usage.input_tokens": 9,
+    });
+  });
+});
+
 describe("the provider id", () => {
   it.each([
     ["mistral.chat", "mistral"],

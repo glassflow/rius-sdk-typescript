@@ -392,8 +392,8 @@ describe("GenAI-shaped usage spellings", () => {
       expect(exported({ [alternate]: 7, [target]: 99 })).toEqual({ [target]: 99 });
     });
 
-    it("keeps 0 as a real count", () => {
-      expect(exported({ [alternate]: 0 })).toEqual({ [target]: 0 });
+    it("drops a 0, which the conventions recommend only when non-zero", () => {
+      expect(exported({ [alternate]: 0 })).toEqual({});
     });
 
     it("parses a string count as a count", () => {
@@ -432,6 +432,94 @@ describe("GenAI-shaped usage spellings", () => {
     expect(
       exported({ [THINKING]: "many", [THOUGHTS]: 128 })[GEN_AI_USAGE_REASONING_OUTPUT_TOKENS],
     ).toBe(128);
+  });
+});
+
+// The conventions recommend the usage breakdowns only when available and
+// non-zero, and still report the totals at 0. A zero breakdown goes from
+// every span, the SDK's own generations included, whether the producer wrote
+// it under a canonical key or the table mapped it there.
+describe("zero usage breakdowns", () => {
+  const BREAKDOWNS = [
+    "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.cache_write.input_tokens",
+    "gen_ai.usage.reasoning.output_tokens",
+    "gen_ai.usage.text.input_tokens",
+    "gen_ai.usage.text.output_tokens",
+    "gen_ai.usage.text.cache_read.input_tokens",
+    "gen_ai.usage.image.input_tokens",
+    "gen_ai.usage.image.output_tokens",
+    "gen_ai.usage.image.cache_read.input_tokens",
+    "gen_ai.usage.audio.input_tokens",
+    "gen_ai.usage.audio.output_tokens",
+    "gen_ai.usage.audio.cache_read.input_tokens",
+  ];
+
+  it.each(BREAKDOWNS)("drops a native %s of 0", (key) => {
+    expect(exported({ [key]: 0 })).toEqual({});
+  });
+
+  it.each(BREAKDOWNS)("keeps a native %s that is not 0", (key) => {
+    expect(exported({ [key]: 3 })).toEqual({ [key]: 3 });
+  });
+
+  it("keeps zero totals", () => {
+    expect(exported({ "gen_ai.usage.input_tokens": 0, "gen_ai.usage.output_tokens": 0 })).toEqual({
+      "gen_ai.usage.input_tokens": 0,
+      "gen_ai.usage.output_tokens": 0,
+    });
+  });
+
+  it("drops a mapped zero breakdown, and its source with it", () => {
+    expect(
+      exported({
+        "llm.token_count.prompt": 0,
+        "llm.token_count.completion": 0,
+        "llm.token_count.prompt_details.cache_read": 0,
+        "llm.token_count.prompt_details.cache_write": 0,
+        "llm.token_count.completion_details.reasoning": 0,
+        "llm.token_count.prompt_details.audio": 0,
+        "llm.token_count.completion_details.audio": 0,
+      }),
+    ).toEqual({ "gen_ai.usage.input_tokens": 0, "gen_ai.usage.output_tokens": 0 });
+  });
+
+  it("drops a parsed string zero", () => {
+    expect(exported({ "llm.token_count.prompt_details.cache_read": "0" })).toEqual({});
+  });
+
+  it.each([["0"], [0.5], [false]])("keeps %j, which is not the number 0", (value) => {
+    const key = "gen_ai.usage.cache_read.input_tokens";
+    expect(exported({ [key]: value })).toEqual({ [key]: value });
+  });
+
+  it("drops -0, which is the number 0", () => {
+    expect(exported({ "gen_ai.usage.cache_read.input_tokens": -0 })).toEqual({});
+  });
+
+  it("keeps NaN, which is not 0", () => {
+    expect(exported({ "gen_ai.usage.cache_read.input_tokens": Number.NaN })).toEqual({
+      "gen_ai.usage.cache_read.input_tokens": Number.NaN,
+    });
+  });
+
+  it("leaves a zero under a key that is no breakdown", () => {
+    expect(exported({ "gen_ai.usage.details.audio_tokens": 0 })).toEqual({
+      "gen_ai.usage.details.audio_tokens": 0,
+    });
+  });
+
+  it("drops a zero breakdown of a run's usage moved aside", () => {
+    expect(
+      exported({
+        "rius.aggregated_usage.input_tokens": 0,
+        "rius.aggregated_usage.cache_read.input_tokens": 0,
+        "rius.aggregated_usage.reasoning.output_tokens": 4,
+      }),
+    ).toEqual({
+      "rius.aggregated_usage.input_tokens": 0,
+      "rius.aggregated_usage.reasoning.output_tokens": 4,
+    });
   });
 });
 
@@ -522,7 +610,8 @@ describe("through init()", () => {
     await client.flush();
     const out = exporter.spans[0].attributes;
     expect(out[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS]).toBe(40);
-    expect(out[GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]).toBe(0);
+    // A zero breakdown is not recorded, and its source goes with it.
+    expect(out[GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]).toBeUndefined();
     expect(out["gen_ai.usage.cache_creation.input_tokens"]).toBeUndefined();
     expect(out["gen_ai.usage.details.reasoning_tokens"]).toBeUndefined();
   });

@@ -434,7 +434,7 @@ describe("generations", () => {
 
   // A later call can clear what an earlier one recorded, so a breakdown never
   // outlives the total it is a subset of.
-  it("setUsage lets a later 0 overwrite an earlier count", async () => {
+  it("setUsage lets a later 0 clear an earlier count", async () => {
     const gen = startGeneration("chat", { model: "m" });
     gen.setUsage({
       cacheReadInputTokens: 50,
@@ -445,9 +445,11 @@ describe("generations", () => {
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
-    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(0);
-    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(0);
+    // The 0 overwrites the live attribute, and the normalizer then drops the
+    // zero breakdown at end, so the earlier count does not survive.
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
   });
 
   it("setUsage leaves a 0 off when no earlier call recorded that count", async () => {
