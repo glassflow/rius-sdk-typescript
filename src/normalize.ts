@@ -1780,8 +1780,11 @@ export const USAGE_BREAKDOWN_SUFFIXES: readonly string[] = [
  * `gen_ai.usage.*` and under the `rius.aggregated_usage.*` a run's usage
  * moves to. Whoever wrote it, the producer natively or the table mapping a
  * dialect's count: the source of a mapped one is already gone, so the zero
- * leaves the span entirely. Only the number 0; a count of another shape is
- * the producer's and stays.
+ * leaves the span entirely. Only the number 0 (`-0` included; `NaN` is not
+ * 0); a count of another shape is the producer's and stays.
+ *
+ * Runs on every span at end, the SDK's own generations included: a breakdown
+ * `setUsage` wrote and a later call set to 0 leaves here too.
  */
 export function dropZeroUsageBreakdowns(
   attributes: Record<string, AttributeValue | undefined>,
@@ -2838,7 +2841,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // After the table, which mapped the Vercel AI SDK's identity keys; ahead
     // of every pass below, so their setDefault sees what the dialect said.
     normalizeVercelSpan(attributes);
-    // After every pass that maps usage, the table's and the AI SDK's.
+    // After every pass that maps usage, the table's and the AI SDK's. The
+    // moves further down (moveAggregatedUsage, moveWrappedCallUsage) only
+    // relocate what survives this, so they never bring a zero back.
     dropZeroUsageBreakdowns(attributes);
     // After the table, on its output: the table has already taken the request
     // knobs out of the bag, so what this pass re-serializes is the remainder.
