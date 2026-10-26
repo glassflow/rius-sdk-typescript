@@ -4,7 +4,8 @@
 // registry/usage_keys.yaml as JSON, synced by scripts/sync-semconv-fixtures.sh.
 // Every row it says the TypeScript SDK maps must reach its target here, and no
 // row it says is ignored may be read: the TypeScript counterpart of the Python
-// SDK's test_usage_keys.py.
+// SDK's test_usage_keys.py. The breakdowns the normalizer drops at 0 are
+// exactly the rows it marks omit_zero.
 //
 // A row outside the AI SDK's ai.* namespace is a rule of NORMALIZATION_RULES
 // with that target, as in Python's table. The AI SDK's usage spellings are not
@@ -16,7 +17,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AttributeValue } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
-import { NORMALIZATION_RULES, normalizeVercelSpan } from "../src/normalize.js";
+import {
+  NORMALIZATION_RULES,
+  normalizeVercelSpan,
+  USAGE_BREAKDOWN_SUFFIXES,
+} from "../src/normalize.js";
+import { GEN_AI_USAGE_PREFIX } from "../src/semconv.js";
 
 const REGISTRY = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -31,6 +37,7 @@ interface Row {
   decision: string;
   target?: string;
   mapped_by?: string[];
+  omit_zero?: boolean;
 }
 
 const rows: Row[] = JSON.parse(readFileSync(REGISTRY, "utf8")).keys;
@@ -113,5 +120,18 @@ describe("usage_keys.json", () => {
       .filter((row) => normalizedModelCall(row.key)[row.key] !== 7)
       .map((row) => row.key);
     expect(moved).toEqual([]);
+  });
+});
+
+describe("the zero-dropped usage breakdowns", () => {
+  it("are the rows marked omit_zero", () => {
+    const omitted = rows.filter((row) => row.omit_zero === true).map((row) => row.key);
+    expect(
+      omitted.length,
+      "no row is marked omit_zero: is usage_keys.json synced?",
+    ).toBeGreaterThan(0);
+    expect(USAGE_BREAKDOWN_SUFFIXES.map((suffix) => GEN_AI_USAGE_PREFIX + suffix).sort()).toEqual(
+      [...omitted].sort(),
+    );
   });
 });

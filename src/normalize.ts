@@ -1760,7 +1760,7 @@ export function normalizeVercelSpan(attributes: Record<string, AttributeValue | 
  * non-zero: the cache and reasoning subsets and the per-modality counts. The
  * input and output totals are not among them; they are reported even at 0.
  */
-const USAGE_BREAKDOWN_SUFFIXES: readonly string[] = [
+export const USAGE_BREAKDOWN_SUFFIXES: readonly string[] = [
   GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
   GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
