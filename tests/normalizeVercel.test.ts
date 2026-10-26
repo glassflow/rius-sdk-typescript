@@ -1,7 +1,11 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import type { ReadableSpan, Span, TimedEvent } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
-import { NormalizingSpanProcessor, VERCEL_FIRST_CHUNK_EVENT } from "../src/normalize.js";
+import {
+  NormalizingSpanProcessor,
+  VERCEL_FIRST_CHUNK_EVENT,
+  vercelProviderName,
+} from "../src/normalize.js";
 import fixture from "./fixtures/vercel_cases.json" with { type: "json" };
 import { nonCanonical } from "./mediaContract.js";
 
@@ -63,6 +67,17 @@ describe("the shared cases", () => {
 
   it.each(cases.map((c) => [c.name, c] as const))("%s: every media part is canonical", (_n, c) => {
     expect(nonCanonical(normalized(c.input))).toEqual([]);
+  });
+});
+
+describe("the provider id", () => {
+  it.each([
+    ["mistral.chat", "mistral"],
+    ["mistral.embedding", "mistral"],
+    ["xai.chat", "x_ai"],
+    ["google.vertex.chat", "gcp.vertex_ai"],
+  ])("names %s as the registry's %s", (id, expected) => {
+    expect(vercelProviderName([id])).toBe(expected);
   });
 });
 

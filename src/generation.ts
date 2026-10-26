@@ -291,7 +291,10 @@ export class Generation extends Observation {
    * the conventions require the instrumentation to do the summing, so when
    * the generation's provider is `"anthropic"` the emitted total is
    * `inputTokens` plus both cache counts. Every other provider is recorded
-   * verbatim.
+   * verbatim. The conventions recommend the cache and reasoning counts only
+   * when non-zero, so a 0 there is not recorded unless an earlier call already
+   * recorded that count, which the 0 then overwrites; the totals are recorded
+   * even at 0.
    */
   setUsage(usage: {
     inputTokens?: number;
@@ -321,14 +324,19 @@ export class Generation extends Observation {
     if (usage.outputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_OUTPUT_TOKENS, usage.outputTokens);
     }
-    if (usage.cacheReadInputTokens !== undefined) {
-      this.span.setAttribute(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, usage.cacheReadInputTokens);
-    }
-    if (usage.cacheWriteInputTokens !== undefined) {
-      this.span.setAttribute(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, usage.cacheWriteInputTokens);
-    }
-    if (usage.reasoningOutputTokens !== undefined) {
-      this.span.setAttribute(GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, usage.reasoningOutputTokens);
+    // A 0 breakdown is left off, unless an earlier call recorded it: then the
+    // 0 overwrites it, so a breakdown never outlives the total it is a subset
+    // of. Only the SDK span exposes its attributes; any other span reads as
+    // carrying none.
+    const recorded = (this.span as { attributes?: Record<string, unknown> }).attributes ?? {};
+    for (const [key, count] of [
+      [GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, usage.cacheReadInputTokens],
+      [GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, usage.cacheWriteInputTokens],
+      [GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, usage.reasoningOutputTokens],
+    ] as const) {
+      if (count !== undefined && (count !== 0 || Object.hasOwn(recorded, key))) {
+        this.span.setAttribute(key, count);
+      }
     }
     return this;
   }

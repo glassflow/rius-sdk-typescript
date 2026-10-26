@@ -409,14 +409,57 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBeUndefined();
   });
 
-  it("setUsage writes zero cache tokens as the number 0, not skipped", async () => {
+  // The conventions recommend the breakdowns only when non-zero; the totals
+  // are still reported at 0.
+  it("setUsage skips zero cache tokens", async () => {
     const gen = startGeneration("chat", { model: "m" });
-    gen.setUsage({ cacheReadInputTokens: 0, cacheWriteInputTokens: 0 });
+    gen.setUsage({ inputTokens: 10, cacheReadInputTokens: 0, cacheWriteInputTokens: 0 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(10);
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBeUndefined();
+  });
+
+  it("setUsage keeps a non-zero cache count beside a zero one", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({ cacheReadInputTokens: 0, cacheWriteInputTokens: 7 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(7);
+  });
+
+  // A later call can clear what an earlier one recorded, so a breakdown never
+  // outlives the total it is a subset of.
+  it("setUsage lets a later 0 overwrite an earlier count", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({
+      cacheReadInputTokens: 50,
+      cacheWriteInputTokens: 50,
+      reasoningOutputTokens: 50,
+    });
+    gen.setUsage({ cacheReadInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 });
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
     expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
     expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(0);
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(0);
+  });
+
+  it("setUsage leaves a 0 off when no earlier call recorded that count", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setUsage({ cacheWriteInputTokens: 50 });
+    gen.setUsage({ cacheReadInputTokens: 0, reasoningOutputTokens: 0 });
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.cache_write.input_tokens"]).toBe(50);
   });
 
   it("setUsage records reasoning output tokens", async () => {
@@ -437,13 +480,14 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
   });
 
-  it("setUsage writes zero reasoning tokens as the number 0, not skipped", async () => {
+  it("setUsage skips zero reasoning tokens", async () => {
     const gen = startGeneration("chat", { model: "m" });
-    gen.setUsage({ reasoningOutputTokens: 0 });
+    gen.setUsage({ outputTokens: 5, reasoningOutputTokens: 0 });
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(0);
+    expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(5);
+    expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined();
   });
 
   it("setUsage writes zero-token usage as the number 0, not skipped", async () => {
