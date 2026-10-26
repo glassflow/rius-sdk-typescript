@@ -291,7 +291,8 @@ export class Generation extends Observation {
    * the conventions require the instrumentation to do the summing, so when
    * the generation's provider is `"anthropic"` the emitted total is
    * `inputTokens` plus both cache counts. Every other provider is recorded
-   * verbatim.
+   * verbatim. The conventions recommend the cache and reasoning counts only
+   * when non-zero, so a 0 there is not recorded; the totals are, even at 0.
    */
   setUsage(usage: {
     inputTokens?: number;
@@ -321,13 +322,13 @@ export class Generation extends Observation {
     if (usage.outputTokens !== undefined) {
       this.span.setAttribute(GEN_AI_USAGE_OUTPUT_TOKENS, usage.outputTokens);
     }
-    if (usage.cacheReadInputTokens !== undefined) {
+    if (usage.cacheReadInputTokens !== undefined && usage.cacheReadInputTokens !== 0) {
       this.span.setAttribute(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, usage.cacheReadInputTokens);
     }
-    if (usage.cacheWriteInputTokens !== undefined) {
+    if (usage.cacheWriteInputTokens !== undefined && usage.cacheWriteInputTokens !== 0) {
       this.span.setAttribute(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, usage.cacheWriteInputTokens);
     }
-    if (usage.reasoningOutputTokens !== undefined) {
+    if (usage.reasoningOutputTokens !== undefined && usage.reasoningOutputTokens !== 0) {
       this.span.setAttribute(GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, usage.reasoningOutputTokens);
     }
     return this;
