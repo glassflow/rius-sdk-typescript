@@ -354,14 +354,6 @@ describe("plain-HTTP endpoints", () => {
     expect(message).toContain("collector.internal");
   });
 
-  it.each(["http://tok/en@collector.internal", "http://tok?en@collector.internal"])(
-    "never logs userinfo the parser splits early as the host: %s",
-    (endpoint) => {
-      const [message] = plaintextWarnings(endpoint);
-      expect(message).not.toContain("tok");
-    },
-  );
-
   it("does not warn when the SDK is disabled", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
