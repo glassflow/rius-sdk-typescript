@@ -274,6 +274,9 @@ export const DEFAULT_SPAN_EVENT_COUNT_LIMIT = 128;
  * The events go straight onto the ended span's list, which the span's own
  * `addEvent` would no longer take, so the span's event count limit is applied
  * here: what does not fit is counted as dropped, as the span would count it.
+ * The span is flagged either way: the response reported a compaction even when
+ * a full span has no room to say so, and without the flag Rius would read the
+ * drop in context size as a silent one.
  * `eventCountLimit` is the limit the provider was built with; without one the
  * environment and OpenTelemetry's default stand in for it.
  * An event's attribute count is fixed and small, and its one large value, the
@@ -302,7 +305,6 @@ export function addProviderCompactions(
       enumerable: true,
     });
   }
-  if (kept.length === 0) return;
   const time = span.endTime ?? span.startTime ?? [0, 0];
   for (const event of kept) {
     events.push({

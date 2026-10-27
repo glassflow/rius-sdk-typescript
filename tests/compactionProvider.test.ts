@@ -581,10 +581,43 @@ describe("the span's event limit", () => {
     expect(compactionEvents(span)).toHaveLength(1);
   });
 
-  it("adds nothing, and flags nothing, to a span that is already full", () => {
+  it("adds no event to a span that is already full, but still flags it as compacted", () => {
     const span = withLimit("2", () => ended(respond(edits), [other(1), other(2)]));
     expect(compactionEvents(span)).toEqual([]);
-    expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBeUndefined();
+    expect(span.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+  });
+
+  it("counts every compaction it could not add as dropped on a full span", () => {
+    const fake = {
+      attributes: respond(edits),
+      events: [other(1), other(2)] as FakeEvent[],
+      links: [],
+      status: { code: SpanStatusCode.UNSET },
+      startTime: [1600, 0],
+      endTime: END_TIME,
+    };
+    new NormalizingSpanProcessor(undefined, 2).onEnd(fake as unknown as ReadableSpan);
+    expect(compactionEvents(fake)).toEqual([]);
+    expect((fake as { droppedEventsCount?: number }).droppedEventsCount).toBe(3);
+    expect(fake.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+  });
+
+  it("flags a full span through the real tracer, so the flag reaches the exporter", () => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({
+      spanLimits: { eventCountLimit: 1 },
+      spanProcessors: [
+        new NormalizingSpanProcessor(undefined, 1),
+        new SimpleSpanProcessor(exporter),
+      ],
+    });
+    const span = provider.getTracer("test").startSpan("llm", { attributes: respond(edits) });
+    span.addEvent("other");
+    span.end();
+    const [exported] = exporter.getFinishedSpans();
+    expect(compactionEvents(exported as unknown as { events: FakeEvent[] })).toEqual([]);
+    expect(exported.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+    expect(exported.droppedEventsCount).toBe(3);
   });
 });
 
