@@ -257,6 +257,33 @@ function numberSetting(
   return value === undefined ? fallback : clamp(env.name, value, min, max, fallback);
 }
 
+function isLoopbackHost(host: string): boolean {
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "[::1]") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+/**
+ * Warns when traces and the API key would leave the machine unencrypted.
+ * A warning, not a refusal: plain HTTP to a collector inside the same
+ * cluster or private network is a legitimate setup. Loopback stays quiet
+ * for local testing. Only the host is logged, never userinfo, path or
+ * query, which can hold secrets.
+ */
+function warnIfPlaintext(endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return;
+  }
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== "http:" || isLoopbackHost(host)) return;
+  console.warn(
+    `[rius] endpoint ${host} uses http://: traces, prompt content and the API key are sent unencrypted. Use an https:// endpoint unless this host is on a trusted network.`,
+  );
+}
+
 /**
  * Clamps a value to [min, max], warning (but never throwing) when it's out of
  * range. NaN and the infinities compare false against both bounds, so they
@@ -408,6 +435,7 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
   // traces to the relative `/v1/traces`, an empty name stamped
   // `service.name=""`.
   const endpoint = (options.endpoint || env.RIUS_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/+$/, "");
+  warnIfPlaintext(endpoint);
   const serviceName = options.serviceName || env.RIUS_SERVICE_NAME || DEFAULT_SERVICE_NAME;
 
   const sampleRate = numberSetting(

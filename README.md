@@ -590,6 +590,8 @@ variables, then the defaults below.
 | `setGlobal`        | (options only)           | `true` (`false` builds a scoped client that registers no OpenTelemetry global; see "Scoped clients") |
 
 Traces are posted to `<endpoint>/v1/traces`.
+An `http://` endpoint outside `localhost` logs a warning, since traces and
+the API key travel unencrypted.
 
 `apiKey` is sent as an `Authorization: Bearer <apiKey>` header. `headers` adds
 your own headers to every request the SDK sends: span exports and the
