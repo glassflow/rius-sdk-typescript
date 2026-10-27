@@ -283,12 +283,8 @@ function warnIfPlaintext(endpoint: string): void {
     return;
   }
   if (url.protocol !== "http:" || isLoopbackHost(url.hostname)) return;
-  // Userinfo holding an unencoded "/" or "?" ends the host early, so the
-  // parsed host is the start of the credential. Name no host then.
-  const splitUserinfo = endpoint.split("://", 2)[1]?.includes("@") && url.username === "";
-  const host = splitUserinfo ? "<host not shown>" : url.hostname;
   console.warn(
-    `[rius] endpoint ${host} uses http://: traces, prompt content and the API key are sent unencrypted. Use an https:// endpoint.`,
+    `[rius] endpoint ${url.hostname} uses http://: traces, prompt content and the API key are sent unencrypted. Use an https:// endpoint.`,
   );
 }
 
