@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.2](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.1...v1.8.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* keep the compacted flag when a span is at its event cap (RIUS-1578) ([#217](https://github.com/glassflow/rius-sdk-typescript/issues/217)) ([2a1f91d](https://github.com/glassflow/rius-sdk-typescript/commit/2a1f91df03bede28a4a6fa0d4543cfc827364413))
+* warn when the endpoint sends traces over plain http (RIUS-1687) ([#219](https://github.com/glassflow/rius-sdk-typescript/issues/219)) ([355a67a](https://github.com/glassflow/rius-sdk-typescript/commit/355a67a8dd00ddd0e17132ae6123b54df158dc5b))
+
 ## [1.8.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.0...v1.8.1) (2026-10-27)
 
 
