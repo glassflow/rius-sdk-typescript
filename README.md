@@ -433,6 +433,10 @@ compaction (with `rius.compaction.executor` `provider`) and the same
   its final `response.completed` payload is recorded as JSON.
 - OpenAI's standalone `/responses/compact` endpoint is not instrumented by
   OpenInference, so a call to it produces no span and no event.
+- A span already at its event limit (`OTEL_SPAN_EVENT_COUNT_LIMIT`, default
+  128) has no room for the `rius.compaction` events. It still gets the
+  `gen_ai.conversation.compacted` flag, and the events that did not fit are
+  counted in the span's dropped events.
 - The encrypted content of an OpenAI compaction item is never read or
   recorded.
 

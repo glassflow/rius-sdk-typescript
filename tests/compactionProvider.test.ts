@@ -617,6 +617,7 @@ describe("the span's event limit", () => {
     const [exported] = exporter.getFinishedSpans();
     expect(compactionEvents(exported as unknown as { events: FakeEvent[] })).toEqual([]);
     expect(exported.attributes[GEN_AI_CONVERSATION_COMPACTED]).toBe(true);
+    expect(exported.droppedEventsCount).toBe(3);
   });
 });
 
