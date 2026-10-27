@@ -69,6 +69,7 @@ describe("semconv", () => {
       semconv.GEN_AI_TOOL_NAME,
       semconv.GEN_AI_TOOL_CALL_ID,
       semconv.GEN_AI_TOOL_TYPE,
+      semconv.GEN_AI_SKILL_NAME,
       semconv.GEN_AI_OUTPUT_TYPE,
       semconv.GEN_AI_DATA_SOURCE_ID,
       semconv.GEN_AI_RETRIEVAL_TOP_K,
