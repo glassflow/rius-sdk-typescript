@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.8.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.0...v1.8.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* align Mistral provider name and zero usage counts with GenAI semconv ([#213](https://github.com/glassflow/rius-sdk-typescript/issues/213)) ([9616863](https://github.com/glassflow/rius-sdk-typescript/commit/961686311f2b6015a9cceded350c5b3045883c9f))
+* drop zero usage breakdowns from third-party spans ([#215](https://github.com/glassflow/rius-sdk-typescript/issues/215)) ([4c095e7](https://github.com/glassflow/rius-sdk-typescript/commit/4c095e7a73a4a3e94a65fbb9c4d9fd73e91d84c6))
+* re-pin rius-semconv to v1.10.0 ([#216](https://github.com/glassflow/rius-sdk-typescript/issues/216)) ([fdea6e8](https://github.com/glassflow/rius-sdk-typescript/commit/fdea6e8a03749d37c9c5a6488483f677ca904923))
+
 ## [1.8.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.7.0...v1.8.0) (2026-10-23)
 
 
