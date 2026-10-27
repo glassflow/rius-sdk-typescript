@@ -313,14 +313,17 @@ describe("plain-HTTP endpoints", () => {
     }
   }
 
-  it.each(["http://collector.internal:4318", "HTTP://ingest.example.com", "http://10.0.0.5:4318"])(
-    "warns that traffic to a remote http endpoint is unencrypted: %s",
-    (endpoint) => {
-      const [message, ...rest] = plaintextWarnings(endpoint);
-      expect(rest).toEqual([]);
-      expect(message).toContain("https://");
-    },
-  );
+  it.each([
+    "http://collector.internal:4318",
+    "HTTP://ingest.example.com",
+    "http://10.0.0.5:4318",
+    // Resolvers send subdomains of localhost to DNS, which may answer remotely.
+    "http://agent.localhost:4318",
+  ])("warns that traffic to a remote http endpoint is unencrypted: %s", (endpoint) => {
+    const [message, ...rest] = plaintextWarnings(endpoint);
+    expect(rest).toEqual([]);
+    expect(message).toContain("https://");
+  });
 
   it("warns for an http endpoint from RIUS_ENDPOINT too", () => {
     expect(
@@ -333,10 +336,13 @@ describe("plain-HTTP endpoints", () => {
     "https://collector.internal:4318",
     "http://localhost:4318",
     "http://LOCALHOST:4318",
-    "http://agent.localhost:4318",
     "http://127.0.0.1:8787",
     "http://127.5.5.5",
     "http://[::1]:4318",
+    "http://localhost.:4318",
+    "http://127.0.0.1.:4318",
+    "http://127.1:4318",
+    "http://2130706433",
   ])("does not warn for https or loopback: %s", (endpoint) => {
     expect(plaintextWarnings(endpoint)).toEqual([]);
   });
@@ -346,5 +352,26 @@ describe("plain-HTTP endpoints", () => {
     for (const secret of ["hunter2", "user:", "t0k", "gf_secret"])
       expect(message).not.toContain(secret);
     expect(message).toContain("collector.internal");
+  });
+
+  it.each(["http://tok/en@collector.internal", "http://tok?en@collector.internal"])(
+    "never logs userinfo the parser splits early as the host: %s",
+    (endpoint) => {
+      const [message] = plaintextWarnings(endpoint);
+      expect(message).not.toContain("tok");
+    },
+  );
+
+  it("does not warn when the SDK is disabled", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      resolveConfig({ endpoint: "http://collector.internal:4318", disabled: true }, {});
+      resolveConfig({ endpoint: "http://collector.internal:4318" }, { RIUS_DISABLED: "true" });
+      expect(warnSpy.mock.calls.filter((args) => String(args[0]).includes("unencrypted"))).toEqual(
+        [],
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

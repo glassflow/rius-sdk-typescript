@@ -257,18 +257,23 @@ function numberSetting(
   return value === undefined ? fallback : clamp(env.name, value, min, max, fallback);
 }
 
+/**
+ * The URL parser already folds IPv4 shorthand (127.1, 2130706433) into
+ * dotted form. A trailing dot names the same host, as in DNS. Only
+ * `localhost` itself counts: resolvers send `*.localhost` to DNS, which may
+ * answer with a remote address.
+ */
 function isLoopbackHost(host: string): boolean {
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (host === "[::1]") return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  const name = host.endsWith(".") ? host.slice(0, -1) : host;
+  if (name === "localhost" || name === "[::1]") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(name);
 }
 
 /**
  * Warns when traces and the API key would leave the machine unencrypted.
- * A warning, not a refusal: plain HTTP to a collector inside the same
- * cluster or private network is a legitimate setup. Loopback stays quiet
- * for local testing. Only the host is logged, never userinfo, path or
- * query, which can hold secrets.
+ * A warning, not a refusal, so a misconfigured endpoint never stops the
+ * agent. Loopback stays quiet. Only the host is logged, never userinfo,
+ * path or query, which can hold secrets.
  */
 function warnIfPlaintext(endpoint: string): void {
   let url: URL;
@@ -277,10 +282,13 @@ function warnIfPlaintext(endpoint: string): void {
   } catch {
     return;
   }
-  const host = url.hostname.toLowerCase();
-  if (url.protocol !== "http:" || isLoopbackHost(host)) return;
+  if (url.protocol !== "http:" || isLoopbackHost(url.hostname)) return;
+  // Userinfo holding an unencoded "/" or "?" ends the host early, so the
+  // parsed host is the start of the credential. Name no host then.
+  const splitUserinfo = endpoint.split("://", 2)[1]?.includes("@") && url.username === "";
+  const host = splitUserinfo ? "<host not shown>" : url.hostname;
   console.warn(
-    `[rius] endpoint ${host} uses http://: traces, prompt content and the API key are sent unencrypted. Use an https:// endpoint unless this host is on a trusted network.`,
+    `[rius] endpoint ${host} uses http://: traces, prompt content and the API key are sent unencrypted. Use an https:// endpoint.`,
   );
 }
 
@@ -435,7 +443,6 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
   // traces to the relative `/v1/traces`, an empty name stamped
   // `service.name=""`.
   const endpoint = (options.endpoint || env.RIUS_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/+$/, "");
-  warnIfPlaintext(endpoint);
   const serviceName = options.serviceName || env.RIUS_SERVICE_NAME || DEFAULT_SERVICE_NAME;
 
   const sampleRate = numberSetting(
@@ -463,6 +470,8 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
   );
 
   const apiKey = options.apiKey ?? env.RIUS_API_KEY;
+  const disabled = options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false);
+  if (!disabled) warnIfPlaintext(endpoint);
   return {
     endpoint,
     apiKey,
@@ -477,7 +486,7 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
       env.RIUS_SERVICE_VERSION ||
       otelResourceAttribute(otelResource, SERVICE_VERSION) ||
       undefined,
-    disabled: options.disabled ?? bool("RIUS_DISABLED", env.RIUS_DISABLED, false),
+    disabled,
     sampleRate,
     captureContent:
       options.captureContent ?? bool("RIUS_CAPTURE_CONTENT", env.RIUS_CAPTURE_CONTENT, true),
