@@ -708,6 +708,9 @@ describe("@ai-sdk/otel speech, decision and provider-metadata keys", () => {
 // way their content keys are ours to strip.
 
 const THIRD_PARTY_CONTENT_KEYS = [
+  // Agent Skills (GenAI conventions), sensitive upstream: Google ADK, Agno, Strands
+  "gen_ai.skill.source.uri",
+  "gen_ai.skill.description",
   // langfuse 3.15, langfuse/_client/attributes.py
   "langfuse.observation.input",
   "langfuse.observation.output",
@@ -796,6 +799,7 @@ const THIRD_PARTY_CONTENT_KEYS = [
  */
 const THIRD_PARTY_KEYS_THAT_SURVIVE = [
   "input_tokens",
+  "gen_ai.skill.name",
   "gen_ai.usage.input_tokens",
   "gen_ai.usage.output_tokens",
   "input.mime_type",
