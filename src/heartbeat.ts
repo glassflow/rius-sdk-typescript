@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { SDK_VERSION } from "./version.js";
@@ -22,6 +23,10 @@ import { SDK_VERSION } from "./version.js";
  * - Never throws into user code. Pings have a short timeout, are never
  *   retried or queued (liveness is only true fresh; a late heartbeat is
  *   misinformation), and delivery problems warn once per sender.
+ * - Every ping carries a per-instance secret in the `Rius-Instance-Secret`
+ *   header, minted by the sender and never stored or logged. The receiver
+ *   pins the instance to it on the first ping, so another holder of the same
+ *   workspace key cannot speak for this instance.
  * - No fork handling: Node has no equivalent to `os.register_at_fork`, and
  *   this module installs no exit hook of its own; the caller owns the
  *   start/stop lifecycle. `init()` is that caller: it stops the sender on
@@ -88,7 +93,19 @@ export type HeartbeatTransport = (
  * here: a liveness signal must not become a reason to accept unverified
  * endpoints.
  */
-function httpTransport(url: string, headers: Record<string, string>): HeartbeatTransport {
+/** Header and size of the per-instance secret; the receiver accepts 32 to 64 bytes of unpadded base64url. */
+export const INSTANCE_SECRET_HEADER = "rius-instance-secret";
+const INSTANCE_SECRET_BYTES = 32;
+
+function mintSecret(): string {
+  return randomBytes(INSTANCE_SECRET_BYTES).toString("base64url");
+}
+
+function httpTransport(
+  url: string,
+  headers: Record<string, string>,
+  secret: string,
+): HeartbeatTransport {
   return async (payload, timeoutMs) => {
     const response = await fetch(url, {
       method: "POST",
@@ -99,6 +116,7 @@ function httpTransport(url: string, headers: Record<string, string>): HeartbeatT
           Object.entries(headers).filter(([name]) => name.toLowerCase() !== "content-type"),
         ),
         "content-type": "application/json",
+        [INSTANCE_SECRET_HEADER]: secret,
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
@@ -162,7 +180,9 @@ export class HeartbeatSender {
     this.intervalMs = opts.intervalMs;
     this.pingTimeoutMs = opts.pingTimeoutMs ?? DEFAULT_PING_TIMEOUT_MS;
     this.finalPingTimeoutMs = opts.finalPingTimeoutMs ?? DEFAULT_FINAL_PING_TIMEOUT_MS;
-    this.send = opts.transport ?? httpTransport(opts.url, opts.headers);
+    // Proves this process is the instance; minted here, never persisted,
+    // logged or put in the payload.
+    this.send = opts.transport ?? httpTransport(opts.url, opts.headers, mintSecret());
     this.foreignParentSpans = opts.foreignParentSpans;
   }
 
