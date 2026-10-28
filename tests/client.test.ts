@@ -1,3 +1,4 @@
+import http from "node:http";
 import { context, ROOT_CONTEXT, TraceFlags, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import {
   RiusClient,
   upstreamMainAgentAttributes,
 } from "../src/client.js";
-import type { HeartbeatTransport } from "../src/heartbeat.js";
+import { deriveInstanceId, type HeartbeatTransport } from "../src/heartbeat.js";
 import { REGISTRY } from "../src/instrumentation.js";
 import { GEN_AI_AGENT_NAME, RIUS_SPAN_PENDING, SERVICE_INSTANCE_ID } from "../src/semconv.js";
 import { startAsCurrentSpan } from "../src/spans.js";
@@ -415,8 +416,53 @@ describe("instance identity (service.instance.id)", () => {
     const resourceId = exporter.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
     expect(payloads.length).toBeGreaterThan(0);
     expect(payloads[0]?.instance_id).toBe(resourceId);
-    // Derived from the heartbeat secret: a version 8 UUID, not a random v4.
-    expect(String(resourceId)[14]).toBe("8");
+    // A custom transport is handed the payload only and could never send the
+    // secret, so it pings as a legacy instance: a random v4 id.
+    expect(String(resourceId)[14]).toBe("4");
+  });
+
+  it("derives the id from the secret the default transport sends", async () => {
+    const pings: { instanceId: unknown; secret: string | undefined }[] = [];
+    const server = http.createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        if (request.url === "/v1/heartbeat") {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+          const secret = request.headers["rius-instance-secret"];
+          pings.push({
+            instanceId: body.instance_id,
+            secret: typeof secret === "string" ? secret : undefined,
+          });
+        }
+        response.writeHead(204);
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("test setup: no port");
+    try {
+      const exporter = new InMemorySpanExporter();
+      client = init({
+        apiKey: "k",
+        endpoint: `http://127.0.0.1:${address.port}`,
+        serviceName: "svc",
+        spanExporter: exporter,
+      });
+      getTracer().startSpan("s").end();
+      await client.flush();
+      await vi.waitFor(() => expect(pings.length).toBeGreaterThan(0));
+      const resourceId = exporter.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
+      expect(pings[0]?.instanceId).toBe(resourceId);
+      expect(pings[0]?.secret).toBeDefined();
+      expect(resourceId).toBe(deriveInstanceId(Buffer.from(pings[0]?.secret ?? "", "base64url")));
+    } finally {
+      await client?.shutdown();
+      client = undefined;
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("stamps the id even with the heartbeat disabled", async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   context,
   diag,
@@ -544,8 +545,13 @@ export function init(options: InitOptions = {}): RiusClient {
   // replicas. Workers spawned after init() (cluster/fork patterns) should
   // init() themselves for exact per-worker span identity.
   // Derived from a per-instance secret the heartbeat presents, so another
-  // holder of the workspace key cannot ping as this instance.
-  const { instanceId, secret: instanceSecret } = mintInstanceIdentity();
+  // holder of the workspace key cannot ping as this instance. A custom
+  // transport is handed the payload only and could never send the secret, so
+  // it pings as a legacy instance: liveness as before, never hints.
+  const { instanceId, secret: instanceSecret } =
+    options.heartbeatTransport === undefined
+      ? mintInstanceIdentity()
+      : { instanceId: randomUUID(), secret: undefined };
 
   // telemetry.sdk.* is reserved for the OTel SDK itself, so it comes from
   // OpenTelemetry's own default resource (language, name, version), as the
