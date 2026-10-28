@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { SDK_VERSION } from "./version.js";
@@ -22,6 +23,11 @@ import { SDK_VERSION } from "./version.js";
  * - Never throws into user code. Pings have a short timeout, are never
  *   retried or queued (liveness is only true fresh; a late heartbeat is
  *   misinformation), and delivery problems warn once per sender.
+ * - The instance id is derived from a per-instance secret
+ *   (`mintInstanceIdentity`), and every ping carries that secret in the
+ *   `Rius-Instance-Secret` header. The receiver checks the derivation, so
+ *   another holder of the same workspace key cannot speak for this instance.
+ *   The secret is never stored or logged.
  * - No fork handling: Node has no equivalent to `os.register_at_fork`, and
  *   this module installs no exit hook of its own; the caller owns the
  *   start/stop lifecycle. `init()` is that caller: it stops the sender on
@@ -82,23 +88,69 @@ export type HeartbeatTransport = (
   timeoutMs: number,
 ) => Promise<void>;
 
+/** Header carrying the per-instance secret; the receiver accepts 32 to 64 bytes of unpadded base64url. */
+export const INSTANCE_SECRET_HEADER = "rius-instance-secret";
+const INSTANCE_SECRET_BYTES = 32;
+
+/**
+ * The instance id a secret certifies: the first 16 bytes of its SHA-256 as a
+ * version 8 UUID. Must match the receiver's derivation byte for byte; the
+ * shared test vector pins it.
+ */
+export function deriveInstanceId(secret: Uint8Array): string {
+  const b = createHash("sha256").update(secret).digest().subarray(0, 16);
+  b[6] = (b[6] & 0x0f) | 0x80; // version 8
+  b[8] = (b[8] & 0x3f) | 0x80; // RFC 9562 variant
+  const h = b.toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+/**
+ * A fresh instance identity: 32 random bytes (unpadded base64url, as sent in
+ * the header) and the id derived from them. Holding the secret is what lets
+ * this process, and only this process, ping as that id.
+ */
+export function mintInstanceIdentity(): { instanceId: string; secret: string } {
+  const raw = randomBytes(INSTANCE_SECRET_BYTES);
+  return { instanceId: deriveInstanceId(raw), secret: raw.toString("base64url") };
+}
+
+/** A non-2xx heartbeat response, with its status for the sender's warnings. */
+class HeartbeatHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 /**
  * Default transport: a plain POST with a per-call timeout, no retries. TLS
  * verification is `fetch`'s default and is deliberately not configurable
  * here: a liveness signal must not become a reason to accept unverified
  * endpoints.
  */
-function httpTransport(url: string, headers: Record<string, string>): HeartbeatTransport {
+function httpTransport(
+  url: string,
+  headers: Record<string, string>,
+  secret: string | undefined,
+): HeartbeatTransport {
   return async (payload, timeoutMs) => {
     const response = await fetch(url, {
       method: "POST",
-      // The body is JSON whatever the caller's headers say. Their content
-      // type is dropped in any case: fetch would otherwise send both values.
+      // The body is JSON whatever the caller's headers say, and the secret
+      // is ours. A caller header with either name is dropped in any case:
+      // fetch would otherwise merge both values into one.
       headers: {
         ...Object.fromEntries(
-          Object.entries(headers).filter(([name]) => name.toLowerCase() !== "content-type"),
+          Object.entries(headers).filter(([name]) => {
+            const lower = name.toLowerCase();
+            return lower !== "content-type" && lower !== INSTANCE_SECRET_HEADER;
+          }),
         ),
         "content-type": "application/json",
+        ...(secret === undefined ? {} : { [INSTANCE_SECRET_HEADER]: secret }),
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
@@ -109,7 +161,10 @@ function httpTransport(url: string, headers: Record<string, string>): HeartbeatT
     // whose fetch keeps connections alive that way.
     await response.body?.cancel().catch(() => {});
     if (!response.ok) {
-      throw new Error(`heartbeat POST ${url} returned ${response.status}`);
+      throw new HeartbeatHttpError(
+        `heartbeat POST ${url} returned ${response.status}`,
+        response.status,
+      );
     }
   };
 }
@@ -125,6 +180,12 @@ export interface HeartbeatSenderOptions {
    * is what lets the backend join heartbeats to traces.
    */
   instanceId: string;
+  /**
+   * The secret `instanceId` was derived from (see `mintInstanceIdentity`),
+   * sent in a header on every ping. Absent, no header is sent, which the
+   * receiver accepts only for ids that are not derived.
+   */
+  instanceSecret?: string;
   tracker: OpenRootSpanTracker;
   /** Injected transport for tests; defaults to the fetch-based HTTP POST above. */
   transport?: HeartbeatTransport;
@@ -154,6 +215,7 @@ export class HeartbeatSender {
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
   private deliveryWarned = false;
+  private refusalWarned = false;
 
   constructor(opts: HeartbeatSenderOptions) {
     this.instanceId = opts.instanceId;
@@ -162,7 +224,9 @@ export class HeartbeatSender {
     this.intervalMs = opts.intervalMs;
     this.pingTimeoutMs = opts.pingTimeoutMs ?? DEFAULT_PING_TIMEOUT_MS;
     this.finalPingTimeoutMs = opts.finalPingTimeoutMs ?? DEFAULT_FINAL_PING_TIMEOUT_MS;
-    this.send = opts.transport ?? httpTransport(opts.url, opts.headers);
+    // The secret never leaves the transport closure: not persisted, logged or
+    // put in the payload.
+    this.send = opts.transport ?? httpTransport(opts.url, opts.headers, opts.instanceSecret);
     this.foreignParentSpans = opts.foreignParentSpans;
   }
 
@@ -215,6 +279,17 @@ export class HeartbeatSender {
     try {
       await this.send(this.buildPayload(stopped), timeoutMs);
     } catch (error) {
+      if (error instanceof HeartbeatHttpError && error.status === 403) {
+        // The one refusal a user can act on: something rewrote the instance
+        // id or the secret header between the SDK and the receiver.
+        if (!this.refusalWarned) {
+          this.refusalWarned = true;
+          console.warn(
+            `[rius] heartbeat refused (403): the receiver did not accept this instance secret for instance_id ${this.instanceId}; check that nothing overrides the instance id or strips the ${INSTANCE_SECRET_HEADER} header.`,
+          );
+        }
+        return;
+      }
       if (!this.deliveryWarned) {
         this.deliveryWarned = true;
         const message = error instanceof Error ? error.message : String(error);
