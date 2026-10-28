@@ -415,6 +415,8 @@ describe("instance identity (service.instance.id)", () => {
     const resourceId = exporter.getFinishedSpans()[0].resource.attributes[SERVICE_INSTANCE_ID];
     expect(payloads.length).toBeGreaterThan(0);
     expect(payloads[0]?.instance_id).toBe(resourceId);
+    // Derived from the heartbeat secret: a version 8 UUID, not a random v4.
+    expect(String(resourceId)[14]).toBe("8");
   });
 
   it("stamps the id even with the heartbeat disabled", async () => {

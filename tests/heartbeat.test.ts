@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 import { context, trace } from "@opentelemetry/api";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "../src/heartbeat.js";
+import {
+  deriveInstanceId,
+  HeartbeatSender,
+  type HeartbeatTransport,
+  mintInstanceIdentity,
+  OpenRootSpanTracker,
+} from "../src/heartbeat.js";
 
 const packageVersion = (
   JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf-8")) as {
@@ -294,12 +300,13 @@ describe("default HTTP transport", () => {
     };
   }
 
-  it("sends the same per-instance secret header on every ping, never in the body", async () => {
+  it("sends the instance secret on every ping including the final one, never in the body", async () => {
     const received: { secret?: string | string[]; body: string }[] = [];
     const stub = await stubServer((request, body) => {
       received.push({ secret: request.headers["rius-instance-secret"], body });
       return { status: 204 };
     });
+    const { instanceId, secret } = mintInstanceIdentity();
 
     try {
       const sender = new HeartbeatSender({
@@ -307,50 +314,92 @@ describe("default HTTP transport", () => {
         headers: { authorization: "Bearer test-key" },
         intervalMs: 15_000,
         agentName: "my-agent",
-        instanceId: "test-instance",
+        instanceId,
+        instanceSecret: secret,
         tracker: fakeTracker([]),
       });
       sender.start();
       await vi.waitFor(() => expect(received.length).toBe(1), { timeout: 10_000 });
       await sender.stop();
-      expect(received.length).toBe(2);
-      const [first, second] = received.map((r) => r.secret);
-      expect(typeof first).toBe("string");
-      expect(second).toBe(first);
-      const secret = first as string;
-      // 32 random bytes, unpadded base64url, as the receiver requires.
-      expect(secret).toMatch(/^[A-Za-z0-9_-]+$/);
-      expect(Buffer.from(secret, "base64url").length).toBe(32);
+      expect(received.map((r) => r.secret)).toEqual([secret, secret]);
       for (const r of received) expect(r.body).not.toContain(secret);
     } finally {
       await stub.close();
     }
   });
 
-  it("gives each sender its own secret", async () => {
-    const secrets: (string | string[] | undefined)[] = [];
+  it("sends no secret header when the sender has no secret", async () => {
+    const received: (string | string[] | undefined)[] = [];
     const stub = await stubServer((request) => {
-      secrets.push(request.headers["rius-instance-secret"]);
+      received.push(request.headers["rius-instance-secret"]);
       return { status: 204 };
     });
 
     try {
-      for (const instanceId of ["a", "b"]) {
-        const sender = new HeartbeatSender({
-          url: stub.url,
-          headers: {},
-          intervalMs: 15_000,
-          agentName: "my-agent",
-          instanceId,
-          tracker: fakeTracker([]),
-        });
-        sender.start();
-        await sender.stop();
-      }
-      await vi.waitFor(() => expect(secrets.length).toBe(4), { timeout: 10_000 });
-      expect(secrets[0]).toBeDefined();
-      expect(secrets[2]).not.toBe(secrets[0]);
+      const sender = new HeartbeatSender({
+        url: stub.url,
+        headers: {},
+        intervalMs: 15_000,
+        agentName: "my-agent",
+        instanceId: "legacy-instance",
+        tracker: fakeTracker([]),
+      });
+      sender.start();
+      await sender.stop();
+      expect(received).toEqual([undefined, undefined]);
     } finally {
+      await stub.close();
+    }
+  });
+
+  it("never merges a caller header of the same name into the secret", async () => {
+    const received: (string | string[] | undefined)[] = [];
+    const stub = await stubServer((request) => {
+      received.push(request.headers["rius-instance-secret"]);
+      return { status: 204 };
+    });
+    const { instanceId, secret } = mintInstanceIdentity();
+
+    try {
+      const sender = new HeartbeatSender({
+        url: stub.url,
+        headers: { "Rius-Instance-Secret": "caller-value" },
+        intervalMs: 15_000,
+        agentName: "my-agent",
+        instanceId,
+        instanceSecret: secret,
+        tracker: fakeTracker([]),
+      });
+      sender.start();
+      await sender.stop();
+      expect(received).toEqual([secret, secret]);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("warns once, specifically, when the receiver refuses the secret, without the secret", async () => {
+    const stub = await stubServer(() => ({ status: 403 }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { instanceId, secret } = mintInstanceIdentity();
+
+    try {
+      const sender = new HeartbeatSender({
+        url: stub.url,
+        headers: {},
+        intervalMs: 15_000,
+        agentName: "my-agent",
+        instanceId,
+        instanceSecret: secret,
+        tracker: fakeTracker([]),
+      });
+      sender.start();
+      await sender.stop();
+      const messages = warn.mock.calls.map((call) => String(call[0]));
+      expect(messages.filter((m) => m.includes("instance secret"))).toHaveLength(1);
+      for (const m of messages) expect(m).not.toContain(secret);
+    } finally {
+      warn.mockRestore();
       await stub.close();
     }
   });
@@ -410,5 +459,23 @@ describe("default HTTP transport", () => {
     } finally {
       await stub.close();
     }
+  });
+});
+
+describe("instance identity", () => {
+  it("derives the same id as the receiver for the shared test vector", () => {
+    // Same vector as argus-core heartbeat/secret_test.go and the Python SDK.
+    const secret = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
+    expect(deriveInstanceId(secret)).toBe("630dcd29-66c4-8366-9112-5448bbb25b4f");
+  });
+
+  it("mints a secret and the version 8 id it derives", () => {
+    const { instanceId, secret } = mintInstanceIdentity();
+    const raw = Buffer.from(secret, "base64url");
+    expect(raw.length).toBe(32);
+    expect(secret).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(instanceId).toBe(deriveInstanceId(raw));
+    expect(instanceId[14]).toBe("8");
+    expect(mintInstanceIdentity().instanceId).not.toBe(instanceId);
   });
 });

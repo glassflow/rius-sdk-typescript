@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   context,
   diag,
@@ -55,7 +54,12 @@ import {
   ResourceAdoptingExporter,
   rememberOwnProvider,
 } from "./foreign.js";
-import { HeartbeatSender, type HeartbeatTransport, OpenRootSpanTracker } from "./heartbeat.js";
+import {
+  HeartbeatSender,
+  type HeartbeatTransport,
+  mintInstanceIdentity,
+  OpenRootSpanTracker,
+} from "./heartbeat.js";
 import { enableInstrumentations, type InstrumentModules } from "./instrumentation.js";
 import { MaskingSpanExporter } from "./masking.js";
 import { NativeProviderSpanDemoter } from "./nativeProviderSpans.js";
@@ -539,7 +543,9 @@ export function init(options: InitOptions = {}): RiusClient {
   // heartbeats (payload instance_id) so the backend can join them and count
   // replicas. Workers spawned after init() (cluster/fork patterns) should
   // init() themselves for exact per-worker span identity.
-  const instanceId = randomUUID();
+  // Derived from a per-instance secret the heartbeat presents, so another
+  // holder of the workspace key cannot ping as this instance.
+  const { instanceId, secret: instanceSecret } = mintInstanceIdentity();
 
   // telemetry.sdk.* is reserved for the OTel SDK itself, so it comes from
   // OpenTelemetry's own default resource (language, name, version), as the
@@ -787,6 +793,7 @@ export function init(options: InitOptions = {}): RiusClient {
       intervalMs: config.heartbeatIntervalMs,
       agentName: config.agentName,
       instanceId,
+      instanceSecret,
       tracker,
       transport: options.heartbeatTransport,
       foreignParentSpans: detector === undefined ? undefined : () => detector.count,
