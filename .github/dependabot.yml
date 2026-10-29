@@ -47,7 +47,5 @@ updates:
       # semver-major ignore alone would still let it through.
       - dependency-name: "@opentelemetry/*"
         versions: [">=3.0.0"]
-      - dependency-name: "@opentelemetry/exporter-trace-otlp-proto"
-        versions: [">=0.300.0"]
-      - dependency-name: "@opentelemetry/instrumentation"
-        versions: [">=0.300.0"]
+      - dependency-name: "@opentelemetry/*"
+        versions: [">=0.300.0 <1.0.0"]
