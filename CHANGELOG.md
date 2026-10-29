@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.3](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.2...v1.8.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* **deps:** bump @arizeai/openinference-instrumentation-anthropic from 0.2.11 to 1.0.0 ([#224](https://github.com/glassflow/rius-sdk-typescript/issues/224)) ([1ad314f](https://github.com/glassflow/rius-sdk-typescript/commit/1ad314fcb98c13aacd5c60fa4ff39690adc13604))
+
 ## [1.8.2](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.1...v1.8.2) (2026-10-27)
 
 
