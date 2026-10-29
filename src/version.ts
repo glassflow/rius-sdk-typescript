@@ -7,4 +7,4 @@
  * path relative to this module resolves to the APPLICATION's package.json,
  * and every span would report the app's version as the SDK's.
  */
-export const SDK_VERSION: string = "1.8.2"; // x-release-please-version
+export const SDK_VERSION: string = "1.8.3"; // x-release-please-version
