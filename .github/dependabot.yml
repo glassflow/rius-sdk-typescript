@@ -40,3 +40,14 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "tsup"
         update-types: ["version-update:semver-major"]
+      # OpenTelemetry JS 3.x requires @opentelemetry/api 1.10, while the
+      # OpenInference instrumentations and @ai-sdk/otel still require api
+      # below 1.10, and raising our api peer would break users in a patch
+      # release. 0.300 is the experimental line paired with 3.x, so a
+      # semver-major ignore alone would still let it through.
+      - dependency-name: "@opentelemetry/*"
+        versions: [">=3.0.0"]
+      - dependency-name: "@opentelemetry/exporter-trace-otlp-proto"
+        versions: [">=0.300.0"]
+      - dependency-name: "@opentelemetry/instrumentation"
+        versions: [">=0.300.0"]
