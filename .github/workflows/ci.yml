@@ -94,6 +94,16 @@ jobs:
         run: |
           npm i --no-save @anthropic-ai/sdk@0.133.0
           npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts tests/anthropicNativeSpansBridgedE2E.test.ts
+      # The lockfile pins the latest OpenInference instrumentation, which stops
+      # the SDK's own span for the calls it traces (1.0.1 on). Rius still
+      # demotes that span for users on older releases, so run the latest SDK
+      # against the last release that leaves it.
+      - name: anthropic integration on an OpenInference release that leaves the SDK's span
+        if: matrix.node-version == '24'
+        run: |
+          npm ci
+          npm i --no-save @arizeai/openinference-instrumentation-anthropic@1.0.0
+          npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts tests/anthropicNativeSpansBridgedE2E.test.ts
 
   packaging:
     runs-on: ubuntu-latest

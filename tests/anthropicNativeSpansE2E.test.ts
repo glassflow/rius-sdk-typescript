@@ -10,6 +10,7 @@ import {
   messagesServer,
   REPLY_TEXT,
   REQUEST,
+  SDK_SPAN_UNDER_OPENINFERENCE,
   TRACES_ITSELF,
 } from "./anthropicMessages.js";
 
@@ -17,6 +18,8 @@ import {
 // the OpenInference package init() enables instruments, against a local
 // server. From 0.134 the Anthropic SDK also traces each call itself: as a
 // child of the instrumentation's span for create(), as a sibling for stream().
+// From OpenInference 1.0.1 the instrumentation stops that span for the calls
+// it traces, so there is none.
 // Either way the call must reach the backend as ONE LLM call with one priced
 // model and usage, and the SDK's own span as a plain CLIENT span.
 //
@@ -69,11 +72,15 @@ describe("one Anthropic call", () => {
           messages: [{ role: "user", content: "PROMPT-TEXT" }],
         }),
       );
+      // From OpenInference 1.0.1 the SDK records no span for the call, which
+      // leaves no prompt or reply on one either.
       const native = spans.filter(isNative);
-      expect(native).toHaveLength(1);
-      const text = JSON.stringify(native[0].attributes);
-      for (const content of ["SYSTEM-TEXT", "PROMPT-TEXT", REPLY_TEXT]) {
-        expect(text).not.toContain(content);
+      expect(native).toHaveLength(SDK_SPAN_UNDER_OPENINFERENCE ? 1 : 0);
+      for (const span of native) {
+        const text = JSON.stringify(span.attributes);
+        for (const content of ["SYSTEM-TEXT", "PROMPT-TEXT", REPLY_TEXT]) {
+          expect(text).not.toContain(content);
+        }
       }
     },
   );
