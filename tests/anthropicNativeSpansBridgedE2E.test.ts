@@ -15,7 +15,7 @@ import {
   expectOneLlmCall,
   isNative,
   messagesServer,
-  TRACES_ITSELF,
+  SDK_SPAN_UNDER_OPENINFERENCE,
 } from "./anthropicMessages.js";
 
 // The same calls as anthropicNativeSpansE2E, with another SDK holding the
@@ -72,7 +72,7 @@ describe("one Anthropic call, with Rius bridged onto another provider", () => {
     expectOneLlmCall(await spansOf(call));
     // The other provider's own span is untouched: Rius demotes its copy.
     const theirs = foreignExporter.getFinishedSpans().filter(isNative);
-    expect(theirs).toHaveLength(TRACES_ITSELF ? 1 : 0);
+    expect(theirs).toHaveLength(SDK_SPAN_UNDER_OPENINFERENCE ? 1 : 0);
     for (const span of theirs) {
       expect(span.attributes[GEN_AI_OPERATION_NAME]).toBe("chat");
       expect(span.attributes[GEN_AI_REQUEST_MODEL]).toBe("claude-test");

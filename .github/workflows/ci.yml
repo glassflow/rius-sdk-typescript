@@ -94,6 +94,19 @@ jobs:
         run: |
           npm i --no-save @anthropic-ai/sdk@0.133.0
           npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts tests/anthropicNativeSpansBridgedE2E.test.ts
+      # The lockfile pins the latest OpenInference instrumentation, which stops
+      # the SDK's own span for the calls it traces (1.0.1 on). Rius still
+      # demotes that span for users on older releases, so run the latest SDK
+      # against the last release that leaves it.
+      - name: anthropic integration on an OpenInference release that leaves the SDK's span
+        if: matrix.node-version == '24'
+        run: |
+          npm ci
+          npm i --no-save @arizeai/openinference-instrumentation-anthropic@1.0.0
+          # Otherwise the tests would read 1.0.1, expect no SDK span and pass
+          # without exercising the demotion at all.
+          test "$(node -p "require('./node_modules/@arizeai/openinference-instrumentation-anthropic/package.json').version")" = 1.0.0
+          npx vitest run tests/providerErrorTypeE2E.test.ts tests/compactionInstrumented.test.ts tests/anthropicNativeSpansE2E.test.ts tests/anthropicNativeSpansBridgedE2E.test.ts tests/anthropicToolRunnerCaptureOff.test.ts
 
   packaging:
     runs-on: ubuntu-latest
@@ -252,9 +265,10 @@ jobs:
               if (wantLangchain && !names.includes('CiEcho')) {
                 throw new Error('no CiEcho span was exported: ' + JSON.stringify(names));
               }
-              // Exactly one LLM span for the one call: the registry's latest
-              // @anthropic-ai/sdk traces the call itself as well, and that
-              // span must not count as a second LLM call.
+              // Exactly one LLM span for the one call: an @anthropic-ai/sdk
+              // that traces the call itself must not add a second LLM call,
+              // whether OpenInference stops its span (1.0.1 on) or Rius
+              // demotes it.
               const llm = spans.filter((span) => span.attributes['openinference.span.kind'] === 'LLM').map((span) => span.name);
               if (JSON.stringify(llm) !== JSON.stringify(['Anthropic Messages'])) {
                 throw new Error('expected one Anthropic Messages LLM span, got ' + JSON.stringify(llm) + ' of ' + JSON.stringify(names));

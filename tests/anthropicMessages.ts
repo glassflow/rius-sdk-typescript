@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
+import path from "node:path";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { expect } from "vitest";
 import {
@@ -47,6 +49,42 @@ const SDK_VERSION = (require("@anthropic-ai/sdk/version") as { VERSION: string }
 const [MAJOR, MINOR] = SDK_VERSION.split(".").map(Number);
 /** Whether the installed SDK traces its own calls (0.134 and later). */
 export const TRACES_ITSELF = MAJOR > 0 || MINOR >= 134;
+
+/** The installed version of `name`, whose package.json its exports leave out. */
+function packageVersion(name: string): string {
+  let dir = path.dirname(require.resolve(name));
+  for (;;) {
+    try {
+      const manifest = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as {
+        name?: string;
+        version?: string;
+      };
+      if (manifest.name === name && manifest.version !== undefined) return manifest.version;
+    } catch {
+      // No package.json here, or a build's {"type": ...} stub: keep climbing.
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error(`test setup: no package.json for ${name}`);
+    dir = parent;
+  }
+}
+
+const [OI_MAJOR, OI_MINOR, OI_PATCH] = packageVersion(
+  "@arizeai/openinference-instrumentation-anthropic",
+)
+  .split(/[.+-]/)
+  .map(Number);
+
+/**
+ * Whether a call the OpenInference instrumentation traces still gets the SDK's
+ * own span. From 1.0.1 the instrumentation hands the SDK a non-recording span
+ * with its LLM span's context instead, so the SDK records none and there is
+ * nothing for Rius to demote; before that, an SDK that traces itself adds one.
+ * The SDK's other spans (tool runs, memory stores, a call the instrumentation
+ * does not trace) follow TRACES_ITSELF alone.
+ */
+export const SDK_SPAN_UNDER_OPENINFERENCE =
+  TRACES_ITSELF && (OI_MAJOR === 0 || (OI_MAJOR === 1 && OI_MINOR === 0 && OI_PATCH === 0));
 
 export const REPLY_TEXT = "REPLY-TEXT";
 
@@ -183,7 +221,8 @@ export function backendView(span: ReadableSpan): { badge: string; priced: boolea
 /**
  * The exported spans of one call are one LLM call to the backend: one
  * OpenInference LLM span, badged and priced, and the SDK's own span (where
- * there is one) demoted to a plain CLIENT span that is neither.
+ * the instrumentation leaves one) demoted to a plain CLIENT span that is
+ * neither.
  */
 export function expectOneLlmCall(spans: ReadableSpan[]): void {
   const llm = spans.filter((s) => s.attributes[OPENINFERENCE_SPAN_KIND] === "LLM");
@@ -198,7 +237,7 @@ export function expectOneLlmCall(spans: ReadableSpan[]): void {
   expect(llm.map(backendView)).toEqual([{ badge: "llm", priced: true }]);
 
   const native = spans.filter(isNative);
-  expect(native).toHaveLength(TRACES_ITSELF ? 1 : 0);
+  expect(native).toHaveLength(SDK_SPAN_UNDER_OPENINFERENCE ? 1 : 0);
   for (const span of native) {
     // Demoted, not dropped: still the call's CLIENT span, with its HTTP facts.
     const genAi = Object.keys(span.attributes).filter((k) => k.startsWith("gen_ai."));
