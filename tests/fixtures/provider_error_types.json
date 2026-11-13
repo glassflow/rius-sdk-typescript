@@ -34,9 +34,9 @@
     {
       "package": "anthropic",
       "status": 413,
-      "typescript": "anthropic.APIError",
+      "typescript": "anthropic.ContentTooLargeError",
       "python": "anthropic.RequestTooLargeError",
-      "divergence": "the JS SDK has no class for 413"
+      "divergence": "the two SDKs name the class for 413 differently; the JS SDK had none before it added ContentTooLargeError, and raised APIError"
     },
     {
       "package": "anthropic",
@@ -59,9 +59,8 @@
     {
       "package": "anthropic",
       "status": 529,
-      "typescript": "anthropic.InternalServerError",
-      "python": "anthropic.OverloadedError",
-      "divergence": "the JS SDK has no class for 529 (overloaded)"
+      "typescript": "anthropic.OverloadedError",
+      "python": "anthropic.OverloadedError"
     },
     {
       "package": "anthropic",

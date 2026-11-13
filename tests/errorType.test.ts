@@ -45,14 +45,28 @@ function providerError(pkg: string, status: number | null): Error {
 }
 
 describe("the provider SDK errors this relies on", () => {
-  it("inherit the generic name, so err.name alone says nothing", () => {
-    // If a provider starts setting its own name, the constructor fallback is
-    // no longer what names it; this pins the premise.
-    for (const pkg of Object.keys(SDKS)) {
-      const error = providerError(pkg, 404);
-      expect(error.name).toBe("Error");
-      expect(error.constructor.name).toBe("NotFoundError");
+  // Which of the two names an error: its own `name`, or the class it was
+  // constructed from when the name is the inherited generic one. Each SDK is
+  // pinned to what the installed release does, so a change in either shows.
+  it("openai inherits the generic name, so only the class says what failed", () => {
+    const error = providerError("openai", 404);
+    expect(error.name).toBe("Error");
+    expect(error.constructor.name).toBe("NotFoundError");
+  });
+
+  it("anthropic sets a name of its own, the same as its class", () => {
+    for (const status of [404, 413, 529, null]) {
+      const error = providerError("anthropic", status);
+      expect(error.name).not.toBe("Error");
+      expect(error.name).toBe(error.constructor.name);
     }
+  });
+
+  it("an anthropic error with the generic name is still named for its class", () => {
+    // What releases before the SDK set a name produced.
+    const error = providerError("anthropic", 404);
+    Object.defineProperty(error, "name", { value: "Error" });
+    expect(errorType(error)).toBe("anthropic.NotFoundError");
   });
 });
 
