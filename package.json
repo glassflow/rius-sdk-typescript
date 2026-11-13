@@ -99,7 +99,7 @@
     "@arizeai/openinference-instrumentation-openai": "^4.4.1",
     "@biomejs/biome": "^2.5.15",
     "@langchain/core": "^1.2.5",
-    "@langchain/openai": "1.6.2",
+    "@langchain/openai": "1.8.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@tanstack/ai": "^1.4.0",
     "@types/node": "^20.0.0",
