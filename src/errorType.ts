@@ -2,11 +2,13 @@
  * `error.type` and `exception.type` for a thrown value, and the seam that
  * makes a third-party instrumentor's exception event use the same spelling.
  *
- * Why this exists: the Anthropic and OpenAI JS SDKs' error classes never set
- * their own `name`, so `err.name` is the inherited `"Error"` for every
- * provider failure (auth, rate limit, not found, overloaded). OTel JS fills
- * `exception.type` from `err.name`, so every one of them collapsed into a
- * single "Error" group. The class is the fact that tells them apart.
+ * Why this exists: the OpenAI JS SDK's error classes, and the Anthropic one's
+ * in its older releases, never set their own `name`, so `err.name` is the
+ * inherited `"Error"` for every provider failure (auth, rate limit, not found,
+ * overloaded). OTel JS fills `exception.type` from `err.name`, so every one of
+ * them collapsed into a single "Error" group. The class is the fact that tells
+ * them apart. Newer Anthropic releases set `name` to the class name, which
+ * gives the same spelling.
  */
 import type { Exception, Span, TimeInput } from "@opentelemetry/api";
 
