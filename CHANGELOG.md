@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.3...v1.9.0) (2026-11-13)
+
+
+### Features
+
+* map TanStack AI's otelMiddleware spans and count each model call once ([#247](https://github.com/glassflow/rius-sdk-typescript/issues/247)) ([993c34a](https://github.com/glassflow/rius-sdk-typescript/commit/993c34ad7b54192f78f8af61b404d53bb7db70a3))
+
+
+### Bug Fixes
+
+* **deps:** bump @opentelemetry/semantic-conventions from 1.44.0 to 1.45.0 in the opentelemetry group ([#242](https://github.com/glassflow/rius-sdk-typescript/issues/242)) ([34c6dd2](https://github.com/glassflow/rius-sdk-typescript/commit/34c6dd27565fac91c3345eec52e309e4c0151a53))
+
 ## [1.8.3](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.2...v1.8.3) (2026-10-29)
 
 
