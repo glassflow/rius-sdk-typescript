@@ -1,4 +1,4 @@
-import type { AttributeValue } from "@opentelemetry/api";
+import { type AttributeValue, SpanKind as OtelSpanKind } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { serializeMessages } from "./messages.js";
 import {
@@ -7,6 +7,7 @@ import {
   GEN_AI_OUTPUT_MESSAGES,
   GEN_AI_TOOL_CALL_ARGUMENTS,
   GEN_AI_TOOL_CALL_RESULT,
+  GEN_AI_TOOL_NAME,
   GEN_AI_USAGE_PREFIX,
   OPENINFERENCE_SPAN_KIND,
   operationForKind,
@@ -31,6 +32,9 @@ import {
  * - A tool span is a tool execution (`execute_tool`). The middleware records
  *   the arguments and the result as one-message lists; they become
  *   `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result`.
+ * - The spans of the media activities (image, speech, transcription and the
+ *   like) are left as the middleware wrote them: nothing marks a finished one
+ *   as TanStack's.
  * - Messages are `{role, content}` objects; they are rewritten in the GenAI
  *   `{role, parts}` schema. The run span has its input and output only under
  *   the Langfuse keys the middleware mirrors them to.
@@ -53,9 +57,16 @@ import {
 const TANSTACK_ITERATION = "tanstack.ai.iteration";
 /** Set on the run span when the run finishes: how many model calls it made. */
 const TANSTACK_ITERATIONS = "tanstack.ai.iterations";
-/** Set on the run span when the run is cancelled. */
+/**
+ * Set when a run is cancelled, on every span the middleware closes for it: the
+ * run span, the model call in flight and each tool span still open. A media
+ * generation that is cancelled gets it too.
+ */
 const TANSTACK_COMPLETION_REASON = "tanstack.ai.completion.reason";
-/** Set on a tool span when the tool returns or throws. */
+/**
+ * Set on a tool span when the tool returns or throws. A tool span closed
+ * because its run was cancelled or failed has none.
+ */
 const TANSTACK_TOOL_OUTCOME = "tanstack.ai.tool.outcome";
 
 const LANGFUSE_OBSERVATION_INPUT = "langfuse.observation.input";
@@ -65,15 +76,10 @@ const LANGFUSE_TRACE_OUTPUT = "langfuse.trace.output";
 
 /**
  * The events the middleware adds to a model call's span when it captures
- * content: one for each message sent, and one for the answer.
+ * content: one for each message sent, named for the message's role, and one
+ * for the answer.
  */
-const TANSTACK_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
-  "gen_ai.system.message",
-  "gen_ai.user.message",
-  "gen_ai.assistant.message",
-  "gen_ai.tool.message",
-  "gen_ai.choice",
-]);
+const TANSTACK_MESSAGE_EVENT = /^gen_ai\.(?:choice|.+\.message)$/;
 
 const INVOKE_AGENT = operationForKind(SpanKind.AGENT);
 const EXECUTE_TOOL = operationForKind(SpanKind.TOOL);
@@ -95,19 +101,41 @@ const MAX_TRACKED = 10_000;
  */
 const runs = new Map<string, true>();
 
+/**
+ * The model calls that ended under a run still on the books, each with its
+ * run. A tool span is parented by the model call that asked for the tool, and
+ * when a run fails the middleware ends that model call before the tool spans
+ * it closes, which then carry no key of TanStack's own: they are known by
+ * their parent.
+ */
+const calls = new Map<string, string>();
+
 function idOf(span: ReadableSpan): string {
   const { traceId, spanId } = span.spanContext();
   return `${traceId}/${spanId}`;
 }
 
-function rememberRun(id: string): void {
-  runs.delete(id);
-  runs.set(id, true);
-  while (runs.size > MAX_TRACKED) {
-    const oldest = runs.keys().next().value;
+function dropOldest(book: Map<string, unknown>): void {
+  while (book.size > MAX_TRACKED) {
+    const oldest = book.keys().next().value;
     if (oldest === undefined) break;
-    runs.delete(oldest);
+    book.delete(oldest);
   }
+}
+
+function rememberCall(id: string, run: string): void {
+  runs.delete(run);
+  runs.set(run, true);
+  dropOldest(runs);
+  calls.set(id, run);
+  dropOldest(calls);
+}
+
+/** Take a run off the books, with its model calls. True when it was on them. */
+function forgetRun(id: string): boolean {
+  if (!runs.delete(id)) return false;
+  for (const [call, run] of calls) if (run === id) calls.delete(call);
+  return true;
 }
 
 function parseList(value: AttributeValue | undefined): unknown[] | undefined {
@@ -167,23 +195,28 @@ function mapToolPayload(attributes: Bag, target: string, source: string, mirror:
   delete attributes[mirror];
 }
 
+/**
+ * Name the span, unless the app's enricher already did. The operation is only
+ * filled in beside the kind it belongs to: a span the app gave another kind
+ * does not get this one's operation.
+ */
 function setKind(attributes: Bag, kind: SpanKind, operation: string | undefined): void {
   attributes[OPENINFERENCE_SPAN_KIND] ??= kind;
-  if (operation !== undefined) attributes[GEN_AI_OPERATION_NAME] ??= operation;
+  if (operation !== undefined && attributes[OPENINFERENCE_SPAN_KIND] === kind) {
+    attributes[GEN_AI_OPERATION_NAME] ??= operation;
+  }
 }
 
 function normalizeRun(attributes: Bag): void {
   setKind(attributes, SpanKind.AGENT, INVOKE_AGENT);
-  // Only an agent run repeats its calls' usage. A span an app's enricher named
-  // as something else keeps what it carries.
-  if (attributes[GEN_AI_OPERATION_NAME] === INVOKE_AGENT) {
-    for (const key of Object.keys(attributes)) {
-      if (!key.startsWith(GEN_AI_USAGE_PREFIX)) continue;
-      const value = attributes[key];
-      delete attributes[key];
-      const target = RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length);
-      if (value !== undefined && attributes[target] === undefined) attributes[target] = value;
-    }
+  // The run repeats its calls' usage whatever the app's enricher named it, so
+  // the move does not depend on the kind or the operation.
+  for (const key of Object.keys(attributes)) {
+    if (!key.startsWith(GEN_AI_USAGE_PREFIX)) continue;
+    const value = attributes[key];
+    delete attributes[key];
+    const target = RIUS_AGGREGATED_USAGE_PREFIX + key.slice(GEN_AI_USAGE_PREFIX.length);
+    if (value !== undefined && attributes[target] === undefined) attributes[target] = value;
   }
   mapMessages(
     attributes,
@@ -213,7 +246,7 @@ function dropMessageEvents(span: ReadableSpan): void {
   if (events === undefined) return;
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
-    if (event !== undefined && TANSTACK_MESSAGE_EVENTS.has(event.name)) events.splice(index, 1);
+    if (event !== undefined && TANSTACK_MESSAGE_EVENT.test(event.name)) events.splice(index, 1);
   }
 }
 
@@ -249,25 +282,35 @@ function normalizeTool(attributes: Bag): void {
  * spelling are already under their canonical keys.
  */
 export function normalizeTanstackSpan(span: ReadableSpan, attributes: Bag): void {
-  if (attributes[TANSTACK_TOOL_OUTCOME] !== undefined) {
-    normalizeTool(attributes);
-    return;
-  }
+  const parent = span.parentSpanContext;
   if (attributes[TANSTACK_ITERATION] !== undefined) {
-    const parent = span.parentSpanContext;
-    if (parent !== undefined) rememberRun(`${parent.traceId}/${parent.spanId}`);
+    if (parent !== undefined) rememberCall(idOf(span), `${parent.traceId}/${parent.spanId}`);
     normalizeModelCall(attributes);
     dropMessageEvents(span);
     return;
   }
-  // The books are empty unless a TanStack model call is in flight, so a span
-  // of any other producer normally stops at the two lookups below.
-  const hadModelCalls = runs.size > 0 && runs.delete(idOf(span));
-  if (
-    hadModelCalls ||
-    attributes[TANSTACK_ITERATIONS] !== undefined ||
-    attributes[TANSTACK_COMPLETION_REASON] !== undefined
-  ) {
+  const cancelled = attributes[TANSTACK_COMPLETION_REASON] !== undefined;
+  if (attributes[TANSTACK_TOOL_OUTCOME] !== undefined) {
+    normalizeTool(attributes);
+    return;
+  }
+  if (attributes[GEN_AI_TOOL_NAME] !== undefined) {
+    // A tool span the middleware closed without an outcome, because its run
+    // was cancelled or failed under it. Any other span that names a tool is
+    // another producer's.
+    const underCall =
+      calls.size > 0 && parent !== undefined && calls.has(`${parent.traceId}/${parent.spanId}`);
+    if (cancelled || underCall) normalizeTool(attributes);
+    return;
+  }
+  // The books hold a run from its first model call until it ends, and a run
+  // whose stream was abandoned for good. While they are empty, a span of any
+  // other producer stops at the lookups below without its id being read.
+  const hadModelCalls = runs.size > 0 && forgetRun(idOf(span));
+  // A cancelled media generation carries the cancellation key too: it is a
+  // client span with an operation of its own, and no run.
+  const cancelledRun = cancelled && span.kind !== OtelSpanKind.CLIENT;
+  if (hadModelCalls || cancelledRun || attributes[TANSTACK_ITERATIONS] !== undefined) {
     normalizeRun(attributes);
   }
 }

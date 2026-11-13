@@ -2,7 +2,13 @@
 // each model call and a span for each tool execution. These tests drive the
 // real middleware with the package's scripted fake model, so what they pin is
 // what the middleware writes, not a hand-built copy of it.
-import { type Attributes, SpanKind as OtelSpanKind, ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import {
+  type Attributes,
+  SpanKind as OtelSpanKind,
+  ROOT_CONTEXT,
+  SpanStatusCode,
+  trace,
+} from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -49,6 +55,11 @@ interface RunOptions {
   /** Extra init() options, such as the privacy controls. */
   init?: Parameters<typeof init>[0];
   attributeEnricher?: (info: { kind: string }) => Record<string, string | undefined>;
+  /**
+   * A second middleware that stops the run when the tool is about to execute,
+   * by cancelling it or by throwing. The tool's span is open at that point.
+   */
+  guard?: "abort" | "throw";
 }
 
 /** One chat() call that asks for a tool, runs it, and answers. */
@@ -79,6 +90,7 @@ async function runChat(options: RunOptions = {}): Promise<ReadableSpan[]> {
     return { conditions: "light rain" };
   });
 
+  const streamed = options.failingModel === true || options.guard !== undefined;
   const run = chat({
     adapter: model,
     systemPrompts: ["You are a travel assistant."],
@@ -92,14 +104,29 @@ async function runChat(options: RunOptions = {}): Promise<ReadableSpan[]> {
         captureContent: options.captureContent ?? true,
         attributeEnricher: options.attributeEnricher as never,
       }),
+      ...(options.guard === undefined
+        ? []
+        : [
+            {
+              name: "guard",
+              onBeforeToolCall: () => {
+                if (options.guard === "throw") throw new Error("guard broke");
+                return { type: "abort", reason: "policy" };
+              },
+            },
+          ]),
     ],
     // A failed model call reaches a streamed run as a RUN_ERROR chunk, and
     // the middleware ends the run's spans on it.
-    stream: options.failingModel === true,
+    stream: streamed,
   } as never) as unknown;
-  if (options.failingModel) {
-    for await (const _chunk of run as AsyncIterable<unknown>) {
-      // Drain: the spans end with the stream.
+  if (streamed) {
+    try {
+      for await (const _chunk of run as AsyncIterable<unknown>) {
+        // Drain: the spans end with the stream.
+      }
+    } catch {
+      // A run stopped by the guard may reject; its spans have ended.
     }
   } else await run;
   await live.flush();
@@ -213,7 +240,28 @@ describe("a TanStack AI chat() run traced by its otelMiddleware", () => {
     const tool = byName(spans, "execute_tool get_weather");
     expect(tool.attributes[OPENINFERENCE_SPAN_KIND]).toBe("TOOL");
     expect(tool.attributes["tanstack.ai.tool.outcome"]).toBe("error");
+    expect(tool.status.code).toBe(SpanStatusCode.ERROR);
+    expect(tool.events.map((event) => event.name)).toContain("exception");
   });
+
+  for (const guard of ["abort", "throw"] as const) {
+    it(`keeps a tool span a tool execution when the run stops under it (${guard})`, async () => {
+      const spans = await runChat({ guard });
+      const tool = byName(spans, "execute_tool get_weather");
+      // The middleware closes it without an outcome.
+      expect(tool.attributes["tanstack.ai.tool.outcome"]).toBeUndefined();
+      expect(tool.attributes[OPENINFERENCE_SPAN_KIND]).toBe("TOOL");
+      expect(tool.attributes[GEN_AI_OPERATION_NAME]).toBe("execute_tool");
+      expect(tool.attributes[GEN_AI_TOOL_CALL_ARGUMENTS]).toBe('{"city":"Berlin"}');
+      expect(tool.attributes[GEN_AI_INPUT_MESSAGES]).toBeUndefined();
+      expect(keysUnder(tool.attributes, "langfuse."), tool.name).toEqual([]);
+
+      const run = byName(spans, "chat fake-model");
+      expect(run.attributes[OPENINFERENCE_SPAN_KIND]).toBe("AGENT");
+      expect(keysUnder(run.attributes, GEN_AI_USAGE_PREFIX)).toEqual([]);
+      expect(Number(run.attributes[aggregated(GEN_AI_USAGE_INPUT_TOKENS)])).toBeGreaterThan(0);
+    });
+  }
 
   it("moves the usage of a run that failed part way: it never learns its iteration count", async () => {
     const spans = await runChat({ failingModel: true });
@@ -232,6 +280,11 @@ describe("a TanStack AI chat() run traced by its otelMiddleware", () => {
     });
     const run = byName(spans, "chat fake-model");
     expect(run.attributes[OPENINFERENCE_SPAN_KIND]).toBe("CHAIN");
+    // The operation is not filled in beside a kind it does not match.
+    expect(run.attributes[GEN_AI_OPERATION_NAME]).toBeUndefined();
+    // Whatever the app calls the span, it still repeats its calls' usage.
+    expect(keysUnder(run.attributes, GEN_AI_USAGE_PREFIX)).toEqual([]);
+    expect(Number(run.attributes[aggregated(GEN_AI_USAGE_INPUT_TOKENS)])).toBeGreaterThan(0);
   });
 });
 
@@ -289,6 +342,36 @@ describe("spans the TanStack AI mapping leaves alone", () => {
     expect(child?.attributes[GEN_AI_USAGE_INPUT_TOKENS]).toBe(10);
     expect(parent?.attributes[GEN_AI_USAGE_INPUT_TOKENS]).toBe(10);
     expect(parent?.attributes[OPENINFERENCE_SPAN_KIND]).toBeUndefined();
+  });
+
+  it("does not call a cancelled media generation an agent run", () => {
+    const [media] = finish((provider) => {
+      // What the middleware writes for an image generation that was cancelled.
+      const span = provider.getTracer("my-app").startSpan("image_generation some-model", {
+        kind: OtelSpanKind.CLIENT,
+        attributes: {
+          [GEN_AI_OPERATION_NAME]: "image_generation",
+          "tanstack.ai.completion.reason": "cancelled",
+          [GEN_AI_USAGE_INPUT_TOKENS]: 5,
+        },
+      });
+      span.end();
+    });
+    expect(media?.attributes[OPENINFERENCE_SPAN_KIND]).not.toBe("AGENT");
+    expect(media?.attributes[GEN_AI_OPERATION_NAME]).toBe("image_generation");
+    expect(media?.attributes[GEN_AI_USAGE_INPUT_TOKENS]).toBe(5);
+  });
+
+  it("drops a model call's message event whatever the role in its name", () => {
+    const [call] = finish((provider) => {
+      const span = provider.getTracer("my-app").startSpan("chat some-model #0", {
+        attributes: { "tanstack.ai.iteration": 0 },
+      });
+      span.addEvent("gen_ai.developer.message", { content: "a prompt" });
+      span.addEvent("exception", { "exception.message": "kept" });
+      span.end();
+    });
+    expect(call?.events.map((event) => event.name)).toEqual(["exception"]);
   });
 
   it("leaves a tool span's message list whole when it is not the middleware's shape", () => {

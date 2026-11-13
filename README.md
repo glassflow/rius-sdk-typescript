@@ -502,10 +502,12 @@ The SDK maps what the middleware writes onto the conventions. The span of a
 `chat()` call is an agent run (`invoke_agent`), and its token usage, which is
 the sum of its model calls, moves to `rius.aggregated_usage.*` so each call is
 counted once. A tool span is an `execute_tool` span with its arguments and
-result. Messages are stored in the GenAI `{role, parts}` schema. Tested with
-`@tanstack/ai` 1.4.0. The middleware records prompts and answers only with
-`captureContent: true`; `captureContent: false` and `mask` on `init()` apply to
-what it records.
+result. Messages are stored in the GenAI `{role, parts}` schema. The mapping
+covers `chat()`: the spans of the media activities (image, speech,
+transcription and the like) are exported as the middleware writes them. Tested
+with `@tanstack/ai` 1.4.0. The middleware records prompts and answers only
+with `captureContent: true`; `captureContent: false` and `mask` on `init()`
+apply to what it records.
 
 ### pnpm and serverless deployments
 
