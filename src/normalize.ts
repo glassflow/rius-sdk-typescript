@@ -124,6 +124,7 @@ import {
   TOOL_NAME,
 } from "./semconv.js";
 import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
+import { normalizeTanstackSpan } from "./tanstackAi.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -2841,6 +2842,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
     // After the table, which mapped the Vercel AI SDK's identity keys; ahead
     // of every pass below, so their setDefault sees what the dialect said.
     normalizeVercelSpan(attributes);
+    // After the table too, for the provider and usage spellings it renamed.
+    // TanStack AI's spans carry no `ai.*` key, so the two never meet.
+    normalizeTanstackSpan(span, attributes);
     // After every pass that maps usage, the table's and the AI SDK's. The
     // moves further down (moveAggregatedUsage, moveWrappedCallUsage) only
     // relocate what survives this, so they never bring a zero back.
