@@ -481,6 +481,32 @@ ones. A package that is installed but fails to load logs a warning
 naming the integration and the underlying error. In every case the SDK
 continues without the integration.
 
+### TanStack AI
+
+TanStack AI needs no integration here: its own `otelMiddleware` writes the
+spans, and takes the tracer from the provider `init()` registers.
+
+```ts
+import { init } from "@glassflow-ai/rius";
+import { trace } from "@opentelemetry/api";
+import { chat } from "@tanstack/ai";
+import { otelMiddleware } from "@tanstack/ai/middlewares/otel";
+
+init({ serviceName: "my-agent" });
+const otel = otelMiddleware({ tracer: trace.getTracer("my-agent"), captureContent: true });
+
+await chat({ adapter, messages, threadId, middleware: [otel], stream: false });
+```
+
+The SDK maps what the middleware writes onto the conventions. The span of a
+`chat()` call is an agent run (`invoke_agent`), and its token usage, which is
+the sum of its model calls, moves to `rius.aggregated_usage.*` so each call is
+counted once. A tool span is an `execute_tool` span with its arguments and
+result. Messages are stored in the GenAI `{role, parts}` schema. Tested with
+`@tanstack/ai` 1.4.0. The middleware records prompts and answers only with
+`captureContent: true`; `captureContent: false` and `mask` on `init()` apply to
+what it records.
+
 ### pnpm and serverless deployments
 
 The SDK finds its optional peers by importing them at runtime, relative to
