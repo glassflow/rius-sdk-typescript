@@ -642,12 +642,14 @@ function escapeEnd(text: string, at: number): number {
 /**
  * The escapes of the checked string literal starting at `start`: three numbers
  * per decoded unit an escape wrote, the unit's index and the escape's raw span
- * (see {@link rawSpan}). Built only for a string an edit lands in.
+ * (see {@link rawSpan}). Built only for a string an edit lands in. Throws
+ * {@link NotJson} if the text ends before the string does.
  */
 export function stringEscapes(text: string, start: number): number[] {
   const escapes: number[] = [];
   let units = 0;
   for (let i = start + 1; text[i] !== '"'; ) {
+    if (i >= text.length) throw new NotJson();
     if (text[i] !== "\\") {
       units++;
       i++;

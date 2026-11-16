@@ -172,4 +172,12 @@ describe("reading a JSON string by position", () => {
     expect(scanString('"plain é 😀"', 0)).toEqual({ end: 12, escaped: false });
     expect(stringEscapes('"plain"', 0)).toEqual([]);
   });
+
+  it("rejects a string the text ends inside, instead of reading past the end", () => {
+    for (const text of ['"', '"abc', '"a\\n', '"\\ud83d\\ude00']) {
+      expect(() => stringEscapes(text, 0), text).toThrow(
+        expect.objectContaining({ constructor: expect.objectContaining({ name: "NotJson" }) }),
+      );
+    }
+  });
 });
