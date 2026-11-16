@@ -144,9 +144,28 @@ function renderable(raw: unknown, value: unknown): unknown {
   return value;
 }
 
-/** A byte object's marker: the strip's replacement, unknown mime, its size in bytes. */
+/**
+ * A byte object's marker: the strip's replacement, unknown mime, its size in
+ * bytes, or an unknown size when its bytes cannot be read. A detached buffer
+ * reports a byteLength of 0, which is not its size, as the Python SDK writes
+ * a released memoryview's size as unknown.
+ */
 export function byteObjectMarker(bytes: { byteLength: number }): string {
-  return replacement(undefined, bytes.byteLength);
+  return replacement(undefined, readBytes(bytes)?.byteLength);
+}
+
+/**
+ * A byte object's bytes, or `undefined` when they cannot be read (a detached
+ * ArrayBuffer, or a view on one): a typed array cannot be made over them.
+ */
+function readBytes(bytes: { byteLength: number }): Uint8Array | undefined {
+  try {
+    return ArrayBuffer.isView(bytes)
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new Uint8Array(bytes as ArrayBufferLike);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The built-in tags of the byte objects that are not views. */
@@ -272,14 +291,10 @@ function isBlobPart(holder: unknown): boolean {
  * is still written.
  */
 function base64(bytes: { byteLength: number }): string | undefined {
-  try {
-    const view = ArrayBuffer.isView(bytes)
-      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-      : new Uint8Array(bytes as ArrayBufferLike);
-    return Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
-  } catch {
-    return undefined;
-  }
+  const view = readBytes(bytes);
+  return view === undefined
+    ? undefined
+    : Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
 }
 
 const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];

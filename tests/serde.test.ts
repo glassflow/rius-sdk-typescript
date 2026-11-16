@@ -148,6 +148,16 @@ describe("a byte object in a serialized value", () => {
     expect(text).not.toContain('"Buffer"');
   });
 
+  it("writes bytes that cannot be read with an unknown size, never the 0 a detached buffer reports", () => {
+    const detached = new ArrayBuffer(16);
+    structuredClone(detached, { transfer: [detached] });
+    const view = new Uint8Array(new ArrayBuffer(8), 2, 4);
+    structuredClone(view.buffer, { transfer: [view.buffer] });
+    expect(toAttributeValue({ a: detached, b: view })).toBe(
+      '{"a":"[stripped unknown unknown bytes]","b":"[stripped unknown unknown bytes]"}',
+    );
+  });
+
   it.each([
     ["a Uint8Array", "new Uint8Array(3)", 3],
     ["a DataView", "new DataView(new ArrayBuffer(8), 1, 2)", 2],
