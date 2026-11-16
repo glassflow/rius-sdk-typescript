@@ -225,6 +225,111 @@ describe("semconvToolDefinitions", () => {
     expect(semconvToolDefinitions(once, "anthropic")).toEqual(once);
   });
 
+  it("expands every declarations spelling that holds a list", () => {
+    const tools = [
+      { function_declarations: [{ name: "a" }], functionDeclarations: [{ name: "b" }] },
+    ];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+      { type: "function", name: "a" },
+      { type: "function", name: "b" },
+    ]);
+  });
+
+  it("keeps a declarations spelling that is not a list in the rest", () => {
+    const tools = [{ function_declarations: [{ name: "a" }], functionDeclarations: "odd" }];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+      { type: "function", name: "a" },
+      { functionDeclarations: "odd" },
+    ]);
+  });
+
+  it.each(["input_schema", "inputSchema"])(
+    "names a declaration's %s schema parameters",
+    (spelling) => {
+      const tools = [{ function_declarations: [{ name: "a", [spelling]: PARAMETERS }] }];
+      expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+        { type: "function", name: "a", parameters: PARAMETERS },
+      ]);
+    },
+  );
+
+  it("rewrites a nameless declaration by the single-tool rule", () => {
+    const tools = [{ function_declarations: [{ type: "web_search" }] }];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+      { type: "gcp.gemini.web_search" },
+    ]);
+  });
+
+  it("rewrites the rest of a Gemini tool by the single-tool rule", () => {
+    const tools = [{ function_declarations: [{ name: "a" }], name: "x" }];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+      { type: "function", name: "a" },
+      { type: "function", name: "x" },
+    ]);
+  });
+
+  it("does not lift a nested function over a top-level name", () => {
+    const named = { name: "x", function: { name: "y" } };
+    const typed = { type: "function", name: "x", function: { name: "y" } };
+    expect(semconvToolDefinitions([named, typed], "openai")).toEqual([
+      { type: "function", name: "x", function: { name: "y" } },
+      typed,
+    ]);
+  });
+
+  it("lets a null parameters give way to a schema spelling", () => {
+    // A Python model_dump() of a google-genai FunctionDeclaration, as JSON.
+    const tools = [
+      {
+        function_declarations: [
+          { name: "f", parameters: null, parameters_json_schema: PARAMETERS },
+        ],
+      },
+      { name: "g", parameters: null, input_schema: PARAMETERS },
+    ];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+      { type: "function", name: "f", parameters: PARAMETERS },
+      { type: "function", name: "g", parameters: PARAMETERS },
+    ]);
+  });
+
+  it("keeps a null parameters without another schema", () => {
+    const tool = { type: "function", name: "f", parameters: null };
+    expect(semconvToolDefinitions([tool], "openai")).toEqual([tool]);
+  });
+
+  it("gives an empty type no provider prefix", () => {
+    const tool = { type: "", size: 1 };
+    expect(semconvToolDefinitions([tool], "openai")).toEqual([tool]);
+  });
+
+  it("drops an MCP tool's headers", () => {
+    // OpenAI Responses' MCP tool carries the server's request headers, which
+    // can hold an Authorization credential.
+    const tool = {
+      type: "mcp",
+      server_label: "docs",
+      server_url: "https://mcp.example.com",
+      headers: { Authorization: "Bearer secret" },
+      require_approval: "never",
+    };
+    expect(semconvToolDefinitions([tool], "openai")).toEqual([
+      {
+        type: "openai.mcp",
+        server_label: "docs",
+        server_url: "https://mcp.example.com",
+        require_approval: "never",
+      },
+    ]);
+    const namespaced = { type: "openai.mcp", server_label: "docs", headers: { "X-Key": "k" } };
+    expect(semconvToolDefinitions([namespaced], undefined)).toEqual([
+      { type: "openai.mcp", server_label: "docs" },
+    ]);
+    expect(semconvToolDefinitions([{ type: "mcp", headers: {} }], undefined)).toEqual([
+      { type: "mcp" },
+    ]);
+  });
+
   it("does not mutate the caller's list", () => {
     const tools = [{ name: "b", input_schema: PARAMETERS }, { type: "web_search" }];
     semconvToolDefinitions(tools, "openai");

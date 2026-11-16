@@ -326,6 +326,33 @@ describe("gen_ai.tool.definitions from the request bag", () => {
   });
 
   it.each([
+    ["llm.tools", () => indexed([{ function_declarations: [] }])],
+    ["bag tools", () => ({ [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ tools: [], seed: 1 }) })],
+    [
+      "bag declarations",
+      () => ({
+        [LLM_INVOCATION_PARAMETERS]: JSON.stringify({
+          tools: [{ function_declarations: [] }],
+          seed: 1,
+        }),
+      }),
+    ],
+    ["vercel declarations", () => ({ "ai.prompt.tools": ['{"function_declarations":[]}'] })],
+    ["vercel empty", () => ({ "ai.prompt.tools": [] })],
+  ])("writes nothing for definitions that come to nothing (%s)", (route, build) => {
+    // The sink writes nothing for an empty list, and the SDK must agree with
+    // it; the sources still go.
+    const attributes: Attributes = build();
+    normalizeToolDefinitions(attributes);
+    expect(attributes[GEN_AI_TOOL_DEFINITIONS]).toBeUndefined();
+    expect(llmToolsKeys(attributes)).toEqual([]);
+    expect(attributes["ai.prompt.tools"]).toBeUndefined();
+    if (route.startsWith("bag")) {
+      expect(JSON.parse(String(attributes[LLM_INVOCATION_PARAMETERS]))).toEqual({ seed: 1 });
+    }
+  });
+
+  it.each([
     ["unparseable", "{not json"],
     ["not an object", JSON.stringify(["tools"])],
     ["tools not a list", JSON.stringify({ tools: "not-a-list" })],

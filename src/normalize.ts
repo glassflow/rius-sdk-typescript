@@ -2531,21 +2531,13 @@ export function normalizeToolDefinitions(
     // gen_ai.tool.definitions and remove them then, so normalizing twice
     // would differ from normalizing once.
     takeBagDefinitions(attributes);
-    if (!native) {
-      attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(
-        semconvToolDefinitions(schemas, providerOf(attributes)),
-      );
-    }
+    if (!native) setDefinitions(attributes, schemas);
     return;
   }
 
   const definitions = takeBagDefinitions(attributes);
   if (definitions !== undefined) {
-    if (!native) {
-      attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(
-        semconvToolDefinitions(definitions, providerOf(attributes)),
-      );
-    }
+    if (!native) setDefinitions(attributes, definitions);
     return;
   }
 
@@ -2569,11 +2561,20 @@ export function normalizeToolDefinitions(
     }
   }
   delete attributes[VERCEL_PROMPT_TOOLS];
-  if (!native && parsed.length > 0) {
-    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(
-      semconvToolDefinitions(parsed, providerOf(attributes)),
-    );
-  }
+  if (!native) setDefinitions(attributes, parsed);
+}
+
+/**
+ * `gen_ai.tool.definitions` from tools, unless they come to no definition. An
+ * empty list (no tools, or a Gemini tool with no declarations) writes
+ * nothing, as the sink does; the caller removes the sources all the same.
+ */
+function setDefinitions(
+  attributes: Record<string, AttributeValue | undefined>,
+  tools: unknown[],
+): void {
+  const definitions = semconvToolDefinitions(tools, providerOf(attributes));
+  if (definitions.length > 0) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
 }
 
 /** The span's `gen_ai.provider.name`, which prefixes built-in tool types. */
