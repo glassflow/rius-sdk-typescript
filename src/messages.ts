@@ -124,10 +124,14 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
     for (const call of toolCalls) {
       if (!isRecord(call)) continue;
       const fn = isRecord(call.function) ? call.function : {};
+      // The conventions require a tool_call part's name, and a part of a known
+      // type may not fall back to the generic part, so a call without one
+      // cannot be recorded validly: it is skipped.
+      if (typeof fn.name !== "string") continue;
       parts.push({
         type: "tool_call",
         id: call.id ?? null,
-        name: fn.name ?? null,
+        name: fn.name,
         arguments: fn.arguments ?? null,
       });
     }

@@ -125,6 +125,7 @@ import {
 } from "./semconv.js";
 import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
 import { normalizeTanstackSpan } from "./tanstackAi.js";
+import { semconvToolDefinitions } from "./toolDefinitions.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -2463,9 +2464,10 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  *
  * - `llm.tools.N.tool.json_schema`, which the OpenInference instrumentations
  *   write one per tool. Each value is a JSON string; the schemas are parsed
- *   and re-serialized as ONE array, in numeric index order, VERBATIM: an
- *   Anthropic `input_schema` stays an Anthropic `input_schema`, as on the
- *   native `tools` option. The indexed keys are then deleted. If any one
+ *   and re-serialized as ONE array, in numeric index order, in the
+ *   conventions' shape, as on the native `tools` option (see
+ *   toolDefinitions.ts; a built-in tool's type is prefixed with the span's
+ *   `gen_ai.provider.name`). The indexed keys are then deleted. If any one
  *   schema is not a string or does not parse, the whole family is left
  *   untouched rather than reassembled without it: it is content by prefix
  *   already, so nothing escapes, and a partial array would be a silent loss.
@@ -2522,13 +2524,21 @@ export function normalizeToolDefinitions(
     // gen_ai.tool.definitions and remove them then, so normalizing twice
     // would differ from normalizing once.
     takeBagDefinitions(attributes);
-    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(schemas);
+    if (!native) {
+      attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(
+        semconvToolDefinitions(schemas, providerOf(attributes)),
+      );
+    }
     return;
   }
 
   const definitions = takeBagDefinitions(attributes);
   if (definitions !== undefined) {
-    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+    if (!native) {
+      attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(
+        semconvToolDefinitions(definitions, providerOf(attributes)),
+      );
+    }
     return;
   }
 
@@ -2553,8 +2563,16 @@ export function normalizeToolDefinitions(
   }
   delete attributes[VERCEL_PROMPT_TOOLS];
   if (!native && parsed.length > 0) {
-    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(parsed);
+    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(
+      semconvToolDefinitions(parsed, providerOf(attributes)),
+    );
   }
+}
+
+/** The span's `gen_ai.provider.name`, which prefixes built-in tool types. */
+function providerOf(attributes: Record<string, AttributeValue | undefined>): string | undefined {
+  const provider = attributes[GEN_AI_PROVIDER_NAME];
+  return typeof provider === "string" ? provider : undefined;
 }
 
 /** The Vercel AI SDK's tool definitions. A source spelling, inline. */

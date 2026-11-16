@@ -44,40 +44,69 @@ describe("generations", () => {
     expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(17);
   });
 
-  it("records tool definitions verbatim via the tools option", async () => {
-    const tools = [
-      {
-        type: "function",
-        function: {
-          name: "get_weather",
-          parameters: { type: "object", properties: { city: { type: "string" } } },
-        },
-      },
-    ];
+  it("records OpenAI tools in the conventions' shape via the tools option", async () => {
+    const parameters = { type: "object", properties: { city: { type: "string" } } };
+    const tools = [{ type: "function", function: { name: "get_weather", parameters } }];
     const gen = startGeneration("chat", { model: "gpt-4o", tools });
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(JSON.parse(String(span.attributes["gen_ai.tool.definitions"]))).toEqual(tools);
+    expect(JSON.parse(String(span.attributes["gen_ai.tool.definitions"]))).toEqual([
+      { type: "function", name: "get_weather", parameters },
+    ]);
   });
 
-  it("records tool definitions in any provider shape via setToolDefinitions", async () => {
-    // Verbatim on purpose: OpenAI nests under `function`, Anthropic uses
-    // top-level name/input_schema; the backend reads names and sizes from either.
+  it("records Anthropic tools in the conventions' shape via setToolDefinitions", async () => {
+    // Anthropic's custom tool becomes a function tool, and its built-in tool
+    // keeps its fields with the type prefixed by the provider.
+    const parameters = { type: "object", properties: { q: { type: "string" } } };
     const tools = [
-      {
-        name: "search_kb",
-        description: "Search the knowledge base",
-        input_schema: { type: "object", properties: { q: { type: "string" } } },
-      },
+      { name: "search_kb", description: "Search the knowledge base", input_schema: parameters },
+      { type: "web_search_20250305", name: "web_search", max_uses: 5 },
     ];
     const gen = startGeneration("chat", { model: "claude-sonnet-5", provider: "anthropic" });
     gen.setToolDefinitions(tools);
     gen.end();
     await client.flush();
     const span = exporter.getFinishedSpans()[0];
-    expect(JSON.parse(String(span.attributes["gen_ai.tool.definitions"]))).toEqual(tools);
+    expect(span.attributes["gen_ai.tool.definitions"]).toBe(
+      JSON.stringify([
+        {
+          type: "function",
+          name: "search_kb",
+          description: "Search the knowledge base",
+          parameters,
+        },
+        { type: "anthropic.web_search_20250305", name: "web_search", max_uses: 5 },
+      ]),
+    );
   });
+
+  it.each([[{ arguments: "{}" }], [{ name: null }], [{ name: 3 }], [undefined]])(
+    "skips a tool call without a name (function %j)",
+    async (fn) => {
+      // The conventions require a tool_call part's name, and a part with a known
+      // type may no longer fall back to the generic part: a call with no name
+      // cannot be recorded validly, so it is left out rather than written as null.
+      const call: Record<string, unknown> = { id: "call_1", type: "function" };
+      if (fn !== undefined) call.function = fn;
+      const named = { id: "call_2", function: { name: "lookup", arguments: "{}" } };
+      const gen = startGeneration("chat", { model: "m" });
+      gen.setOutput([{ role: "assistant", content: "hi", tool_calls: [call, named] }]);
+      gen.end();
+      await client.flush();
+      const span = exporter.getFinishedSpans()[0];
+      expect(JSON.parse(String(span.attributes["gen_ai.output.messages"]))).toEqual([
+        {
+          role: "assistant",
+          parts: [
+            { type: "text", content: "hi" },
+            { type: "tool_call", id: "call_2", name: "lookup", arguments: "{}" },
+          ],
+        },
+      ]);
+    },
+  );
 
   it("leaves gen_ai.tool.definitions absent when no tools are given", async () => {
     const gen = startGeneration("chat", { model: "m" });

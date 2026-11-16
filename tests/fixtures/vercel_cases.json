@@ -898,7 +898,7 @@
       "expected": {
         "ai.operationId": "ai.generateText.doGenerate",
         "gen_ai.operation.name": "chat",
-        "gen_ai.tool.definitions": "[{\"type\":\"function\",\"name\":\"a\",\"inputSchema\":{\"type\":\"object\"}},{\"type\":\"provider-defined\",\"name\":\"b\",\"id\":\"openai.web_search\",\"args\":{}}]",
+        "gen_ai.tool.definitions": "[{\"type\":\"function\",\"name\":\"a\",\"parameters\":{\"type\":\"object\"}},{\"type\":\"openai.web_search\",\"name\":\"b\",\"id\":\"openai.web_search\",\"args\":{}}]",
         "openinference.span.kind": "LLM"
       }
     },

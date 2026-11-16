@@ -59,8 +59,7 @@ const OPENAI_TOOLS = [
   },
 ];
 
-// Anthropic's own shape (top-level name / input_schema), which must survive
-// verbatim rather than be rewritten into OpenAI's.
+// Anthropic's own shape (top-level name / input_schema).
 const ANTHROPIC_TOOLS = [
   {
     name: "get_weather",
@@ -70,6 +69,17 @@ const ANTHROPIC_TOOLS = [
       properties: { city: { type: "string" } },
       required: ["city"],
     },
+  },
+];
+
+// Both recorded in the conventions' function-tool shape.
+const OPENAI_SEMCONV = OPENAI_TOOLS.map((tool) => ({ type: "function", ...tool.function }));
+const ANTHROPIC_SEMCONV = [
+  {
+    type: "function",
+    name: "get_weather",
+    description: "Weather for a city",
+    parameters: ANTHROPIC_TOOLS[0].input_schema,
   },
 ];
 
@@ -128,7 +138,7 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
       [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ model: "gpt-4o", tool_choice: "auto" }),
       ...indexed(OPENAI_TOOLS),
     });
-    expect(definitions(out)).toEqual(OPENAI_TOOLS);
+    expect(definitions(out)).toEqual(OPENAI_SEMCONV);
     expect(out).toEqual({
       "openinference.span.kind": "LLM",
       [GEN_AI_OPERATION_NAME]: "chat",
@@ -141,14 +151,14 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
     expect(llmToolsKeys(out)).toEqual([]);
   });
 
-  it("keeps an anthropic input_schema verbatim", () => {
+  it("makes anthropic input_schema tools function tools", () => {
     const out = exported({
       "openinference.span.kind": "LLM",
       "llm.provider": "anthropic",
       "llm.request.model_name": "claude-sonnet-4-5",
       ...indexed(ANTHROPIC_TOOLS),
     });
-    expect(definitions(out)).toEqual(ANTHROPIC_TOOLS);
+    expect(definitions(out)).toEqual(ANTHROPIC_SEMCONV);
     expect(llmToolsKeys(out)).toEqual([]);
   });
 
@@ -156,14 +166,16 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
     // One serializer for both paths, so a normalized span and a native one
     // carrying the same tools put the same string on the wire.
     const out = exported(indexed(ANTHROPIC_TOOLS));
-    expect(out[GEN_AI_TOOL_DEFINITIONS]).toBe(toAttributeValue(ANTHROPIC_TOOLS));
-    expect(out[GEN_AI_TOOL_DEFINITIONS]).toBe(JSON.stringify(ANTHROPIC_TOOLS));
+    expect(out[GEN_AI_TOOL_DEFINITIONS]).toBe(toAttributeValue(ANTHROPIC_SEMCONV));
+    expect(out[GEN_AI_TOOL_DEFINITIONS]).toBe(JSON.stringify(ANTHROPIC_SEMCONV));
   });
 
   it("orders by numeric index, not lexically and not by attribute order", () => {
     const tools = Array.from({ length: 12 }, (_, i) => ({ name: `tool_${i}` }));
     const reversed = Object.fromEntries(Object.entries(indexed(tools)).reverse());
-    expect(definitions(exported(reversed))).toEqual(tools);
+    expect(definitions(exported(reversed))).toEqual(
+      tools.map((tool) => ({ type: "function", ...tool })),
+    );
   });
 
   it("lets a native definitions key win, and still deletes the indexed keys", () => {
@@ -199,7 +211,7 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
     });
     expect(out["llm.tools.0.tool.something_else"]).toBe("x");
     expect(out["llm.tools.0.tool.json_schema"]).toBeUndefined();
-    expect(definitions(out)).toEqual([{ name: "a" }]);
+    expect(definitions(out)).toEqual([{ type: "function", name: "a" }]);
   });
 
   it("leaves a span without tools unchanged", () => {
@@ -227,7 +239,7 @@ describe("gen_ai.tool.definitions from the request bag", () => {
         tools: OPENAI_TOOLS,
       }),
     });
-    expect(definitions(out)).toEqual(OPENAI_TOOLS);
+    expect(definitions(out)).toEqual(OPENAI_SEMCONV);
     expect(out[GEN_AI_REQUEST_MODEL]).toBe("gpt-4o");
     expect(out[RIUS_REQUEST_TOOL_CHOICE]).toBe("auto");
     // Every member was promoted somewhere, so the bag goes rather than riding as "{}".
@@ -239,7 +251,7 @@ describe("gen_ai.tool.definitions from the request bag", () => {
     const out = exported({
       [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ functions, custom: 0.1 }),
     });
-    expect(definitions(out)).toEqual(functions);
+    expect(definitions(out)).toEqual([{ type: "function", ...functions[0] }]);
     expect(JSON.parse(String(out[LLM_INVOCATION_PARAMETERS]))).toEqual({ custom: 0.1 });
   });
 
@@ -249,7 +261,10 @@ describe("gen_ai.tool.definitions from the request bag", () => {
     const out = exported({
       [LLM_INVOCATION_PARAMETERS]: JSON.stringify({ functions, tools }),
     });
-    expect(definitions(out)).toEqual([...tools, ...functions]);
+    expect(definitions(out)).toEqual([
+      { type: "function", name: "a" },
+      { type: "function", name: "b" },
+    ]);
     // Nothing else was in the bag, so it goes rather than riding as "{}".
     expect(out[LLM_INVOCATION_PARAMETERS]).toBeUndefined();
   });
@@ -261,7 +276,7 @@ describe("gen_ai.tool.definitions from the request bag", () => {
     });
     expect(out).toEqual({
       [GEN_AI_REQUEST_MODEL]: "gpt-4o",
-      [GEN_AI_TOOL_DEFINITIONS]: '[{"name":"a"}]',
+      [GEN_AI_TOOL_DEFINITIONS]: '[{"type":"function","name":"a"}]',
     });
   });
 
@@ -272,7 +287,7 @@ describe("gen_ai.tool.definitions from the request bag", () => {
       [LLM_INVOCATION_PARAMETERS]: bag,
       ...indexed([{ name: "from-llm-tools" }]),
     });
-    expect(definitions(out)).toEqual([{ name: "from-llm-tools" }]);
+    expect(definitions(out)).toEqual([{ type: "function", name: "from-llm-tools" }]);
     expect(out[RIUS_REQUEST_TOOL_CHOICE]).toBe("auto");
     expect(out[LLM_INVOCATION_PARAMETERS]).toBeUndefined();
   });
@@ -297,6 +312,17 @@ describe("gen_ai.tool.definitions from the request bag", () => {
       [GEN_AI_TOOL_DEFINITIONS]: '[{"name":"native"}]',
       [LLM_INVOCATION_PARAMETERS]: '{"custom":1}',
     });
+  });
+
+  it("prefixes a built-in tool's type with the span's provider", () => {
+    const out = exported({
+      "openinference.span.kind": "LLM",
+      "llm.provider": "anthropic",
+      ...indexed([{ type: "web_search_20250305", name: "web_search" }]),
+    });
+    expect(definitions(out)).toEqual([
+      { type: "anthropic.web_search_20250305", name: "web_search" },
+    ]);
   });
 
   it.each([
@@ -564,7 +590,7 @@ describe("through init()", () => {
       const out = span.attributes;
       expect(llmToolsKeys(out)).toEqual([]);
       if (captureContent) {
-        expect(definitions(out)).toEqual(SECRET);
+        expect(definitions(out)).toEqual([{ type: "function", ...SECRET[0] }]);
       } else {
         expect(out[GEN_AI_TOOL_DEFINITIONS]).toBeUndefined();
         expect(JSON.stringify(out)).not.toContain("SECRET");

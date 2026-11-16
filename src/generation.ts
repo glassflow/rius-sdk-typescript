@@ -36,6 +36,7 @@ import {
 } from "./semconv.js";
 import { attributeValue, toAttributeValue } from "./serde.js";
 import { Observation, runActive, splitScopedArgs } from "./spans.js";
+import { semconvToolDefinitions } from "./toolDefinitions.js";
 import { warnOnce } from "./warn.js";
 
 /**
@@ -71,7 +72,8 @@ export interface GenerationOptions {
   reasoningLevel?: string;
   /**
    * The request's tool/function definitions, recorded immediately via
-   * {@link Generation.setToolDefinitions} — verbatim, any provider shape.
+   * {@link Generation.setToolDefinitions}: any provider shape, recorded in the
+   * conventions' shape.
    */
   tools?: unknown[];
   /**
@@ -253,15 +255,17 @@ export class Generation extends Observation {
 
   /**
    * The request's tool/function definitions (`gen_ai.tool.definitions`).
-   * Serialized verbatim, in whatever shape the provider request used (OpenAI
-   * nests each tool under `function`, Anthropic uses top-level
-   * `name`/`input_schema`) — no normalization, so what is recorded is exactly
-   * what the model was shown. Definitions are content, not identity: they are
-   * masked/stripped under `captureContent: false` like messages are.
+   * Recorded in the conventions' shape whatever shape the provider request
+   * used: a function tool becomes `{type: "function", name, description,
+   * parameters}` (OpenAI's nested `function` is lifted, Anthropic's
+   * `input_schema` becomes `parameters`), and a provider's built-in tool keeps
+   * its fields with its `type` prefixed by the generation's provider
+   * (`anthropic.web_search_20250305`). Definitions are content, not identity:
+   * they are masked/stripped under `captureContent: false` like messages are.
    */
   setToolDefinitions(tools: unknown[]): this {
-    this.tools = tools;
-    this.span.setAttribute(GEN_AI_TOOL_DEFINITIONS, toAttributeValue(tools));
+    this.tools = semconvToolDefinitions(tools, this.provider);
+    this.span.setAttribute(GEN_AI_TOOL_DEFINITIONS, toAttributeValue(this.tools));
     return this;
   }
 
