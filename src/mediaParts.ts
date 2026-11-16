@@ -436,17 +436,34 @@ const [REPLACEMENT_BETWEEN, REPLACEMENT_TAIL] = REPLACEMENT_REST.split("<byte_si
  * again, and never context for rule (e), so stripping twice changes nothing.
  */
 export function isReplacement(value: string): boolean {
+  return parseReplacement(value) !== undefined;
+}
+
+/**
+ * The mime and byte_size a complete replacement names, each undefined when
+ * unknown; undefined when the string is no complete replacement (see
+ * isReplacement).
+ */
+export function parseReplacement(
+  value: string,
+): { mime: string | undefined; byteSize: number | undefined } | undefined {
   const head = REPLACEMENT_HEAD;
   const tail = REPLACEMENT_TAIL;
-  if (value.length < head.length + REPLACEMENT_BETWEEN.length + tail.length) return false;
-  if (!value.startsWith(head) || !value.endsWith(tail)) return false;
+  if (value.length < head.length + REPLACEMENT_BETWEEN.length + tail.length) return undefined;
+  if (!value.startsWith(head) || !value.endsWith(tail)) return undefined;
   const inner = value.slice(head.length, value.length - tail.length);
   const at = inner.lastIndexOf(REPLACEMENT_BETWEEN);
-  if (at < 0) return false;
+  if (at < 0) return undefined;
   const mime = inner.slice(0, at);
   const size = inner.slice(at + REPLACEMENT_BETWEEN.length);
   const digits = /^[0-9]+$/.test(size);
-  return (mime === REPLACEMENT_UNKNOWN || isMime(mime)) && (digits || size === REPLACEMENT_UNKNOWN);
+  if (!(mime === REPLACEMENT_UNKNOWN || isMime(mime))) return undefined;
+  if (!(digits || size === REPLACEMENT_UNKNOWN)) return undefined;
+  return {
+    mime: mime === REPLACEMENT_UNKNOWN ? undefined : mime,
+    // A size past 2^53 - 1 has no exact number, so it is unknown.
+    byteSize: digits && Number.isSafeInteger(Number(size)) ? Number(size) : undefined,
+  };
 }
 
 /**
@@ -1652,7 +1669,8 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * MIME type, else (a uri) from its filename extension, else document. A blob
  * carrying content is stripped of it (sized from it, `not_captured`) and
  * takes its modality from its MIME type first (@ai-sdk/otel labels a PDF an
- * image). A uri holding a data URL is a blob, since a data URL is never a
+ * image). Content that is a complete replacement gives its size, and its
+ * mime when the part has no valid MIME type. A uri holding a data URL is a blob, since a data URL is never a
  * uri, and so is one holding data: past its start, with no size. A file
  * part holding a string base64 or url is a LangChain v1 file block and is
  * read as one (see langchainPart). Undefined when it is not a media part
@@ -1669,7 +1687,17 @@ export function nativeMediaPart(part: Record<string, unknown>): Part[] | undefin
   };
   switch (part.type) {
     case "blob": {
-      if (typeof part.content === "string") return [base64Blob(part.content, kind, mime)];
+      if (typeof part.content === "string") {
+        const replaced = parseReplacement(part.content);
+        if (replaced !== undefined) {
+          // Bytes a strip already measured (an OTLP bytes value, a byte
+          // object): the size the base64 of the same bytes would give, and
+          // the part's own MIME type before the replacement's.
+          const kept = isMime(mime) ? mime : replaced.mime;
+          return [blobPart(kind, kept, replaced.byteSize, NOT_CAPTURED)];
+        }
+        return [base64Blob(part.content, kind, mime)];
+      }
       const out = shaped("blob");
       const size = part.byte_size;
       if (Number.isSafeInteger(size) && (size as number) >= 0) out.byte_size = size;
