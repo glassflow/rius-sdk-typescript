@@ -1016,3 +1016,39 @@ describe("tool-call identity on local tool spans", () => {
     expect(span.name).toBe("execute_tool get_weather");
   });
 });
+
+describe("a blob in messages set through the SDK", () => {
+  it("is stored with its byte_size, the same from bytes as from base64", async () => {
+    // The serializer writes the bytes as the marker and strips the base64 to
+    // a replacement, and the exporter rebuilds each blob with the size its
+    // replacement names.
+    const messages = (content: unknown) => [
+      {
+        role: "user",
+        parts: [{ type: "blob", modality: "image", mime_type: "image/png", content }],
+      },
+    ];
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    for (const [name, content] of [
+      ["bytes", png],
+      ["base64", "iVBORw0KGgo="],
+    ] as const) {
+      const obs = startSpan(name);
+      obs.setAttribute("gen_ai.input.messages", messages(content));
+      obs.end();
+    }
+    await client.flush();
+    const stored = (name: string) =>
+      exporter.getFinishedSpans().find((s) => s.name === name)?.attributes["gen_ai.input.messages"];
+    expect(stored("bytes")).toBe(stored("base64"));
+    expect(JSON.parse(stored("bytes") as string)[0].parts).toEqual([
+      {
+        type: "blob",
+        modality: "image",
+        mime_type: "image/png",
+        byte_size: 8,
+        stripped_reason: "not_captured",
+      },
+    ]);
+  });
+});
