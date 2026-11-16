@@ -705,9 +705,11 @@ completions, tool arguments) is attached to spans. It defaults to
 OpenTelemetry GenAI setting `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT` is
 read: `NO_CONTENT` turns capture off, and so does `EVENT_ONLY`, because Rius
 records content on spans. `SPAN_ONLY` and `SPAN_AND_EVENT` keep it on. The
-value is case-insensitive; an unrecognised one keeps capture on and logs a
-warning. With neither variable set, capture is on, unlike the OpenTelemetry
-default of `NO_CONTENT`. Set it to `false`, or supply a `mask` function, if your spans
+value is case-insensitive. An unrecognised one keeps capture on and logs a
+warning naming the valid values (the OpenTelemetry conventions fall back to
+`NO_CONTENT` instead). An empty value of either variable counts as unset (an
+empty `RIUS_CAPTURE_CONTENT` also logs a warning). With neither variable set,
+capture is on, unlike the OpenTelemetry default of `NO_CONTENT`. Set it to `false`, or supply a `mask` function, if your spans
 must not carry raw content. Both apply to span attributes and to the
 attributes of span events and links, including the `metadata.*` copies
 `@arizeai/openinference-vercel`'s span processor makes of attributes it does

@@ -92,15 +92,53 @@ describe("resolveConfig", () => {
       warnSpy.mockRestore();
     });
 
-    it.each([[""], ["maybe"], ["true"], ["SPAN"]])(
-      "keeps the default and warns on the unrecognised %j",
+    it.each([["maybe"], ["true"], ["false"], ["SPAN"], ["NO-CONTENT"]])(
+      "keeps capture on and warns on the unrecognised %j",
       (raw) => {
+        // Deliberately not the conventions' NO_CONTENT: capture is on by
+        // default in Rius, and the warning names the value and the valid ones.
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
         expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(true);
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(OTEL));
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const message = String(warnSpy.mock.calls[0][0]);
+        expect(message).toContain(`${OTEL}="${raw}" is not recognised`);
+        expect(message).toContain("content capture stays on");
+        for (const valid of ["NO_CONTENT", "SPAN_ONLY", "EVENT_ONLY", "SPAN_AND_EVENT"]) {
+          expect(message).toContain(valid);
+        }
         warnSpy.mockRestore();
       },
     );
+
+    it.each([[""], ["  "]])("reads an empty %j as unset", (raw) => {
+      // OpenTelemetry reads an empty variable as unset; templated deployments
+      // render an omitted value as one.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it.each([
+      ["", "NO_CONTENT", false],
+      ["  ", "NO_CONTENT", false],
+      ["", "SPAN_ONLY", true],
+      ["  ", "SPAN_ONLY", true],
+      ["", undefined, true],
+      ["  ", undefined, true],
+    ])("reads an empty RIUS_CAPTURE_CONTENT %j as unset, so %s applies", (rius, otel, expected) => {
+      // Still a warning, as for the other blank RIUS_* flags, but it does
+      // not shadow the OpenTelemetry setting.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const env: Record<string, string> = { RIUS_CAPTURE_CONTENT: rius };
+      if (otel !== undefined) env[OTEL] = otel;
+      expect(resolveConfig({}, env).captureContent).toBe(expected);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain(
+        "RIUS_CAPTURE_CONTENT is empty; treated as unset",
+      );
+      warnSpy.mockRestore();
+    });
 
     it.each([
       ["true", true],

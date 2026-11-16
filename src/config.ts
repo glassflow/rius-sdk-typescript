@@ -240,21 +240,29 @@ const OTEL_CAPTURE_MODES: ReadonlyMap<string, boolean> = new Map([
 
 /**
  * `RIUS_CAPTURE_CONTENT` when set, else the conventions'
- * `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT`, else on. The conventions'
- * setting is read case-insensitively. Its own default is `NO_CONTENT`, but
- * Rius keeps capture on when neither variable is set, and an unrecognised
- * value keeps that default with a warning, as an unrecognised boolean does.
+ * `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT`, else on.
+ *
+ * An empty (or blank) value of either variable counts as unset, as
+ * OpenTelemetry reads its own variables: templated deployments render an
+ * omitted value as an empty one. A blank `RIUS_CAPTURE_CONTENT` still warns,
+ * as the other blank `RIUS_*` flags do. The conventions' setting is read
+ * case-insensitively. Its own default is `NO_CONTENT`, and the conventions ask
+ * for that on an unrecognised value too. Rius keeps capture on in both cases,
+ * on purpose: capture is on by default, and an unrecognised value warns,
+ * naming the valid ones.
  */
 function captureContentFromEnv(env: Env): boolean {
-  if (env.RIUS_CAPTURE_CONTENT !== undefined) {
-    return bool("RIUS_CAPTURE_CONTENT", env.RIUS_CAPTURE_CONTENT, true);
+  const rius = env.RIUS_CAPTURE_CONTENT;
+  if (rius !== undefined) {
+    if (rius.trim() !== "") return bool("RIUS_CAPTURE_CONTENT", rius, true);
+    console.warn("[rius] RIUS_CAPTURE_CONTENT is empty; treated as unset.");
   }
   const raw = env.OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT;
-  if (raw === undefined) return true;
+  if (raw === undefined || raw.trim() === "") return true;
   const mode = OTEL_CAPTURE_MODES.get(raw.trim().toUpperCase());
   if (mode !== undefined) return mode;
   console.warn(
-    `[rius] OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT="${raw}" is not a recognised capture mode; using the default (true). Accepted: NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT.`,
+    `[rius] OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT="${raw}" is not recognised; content capture stays on. Valid values: NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT.`,
   );
   return true;
 }
