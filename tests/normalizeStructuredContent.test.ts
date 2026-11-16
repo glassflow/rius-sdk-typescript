@@ -221,7 +221,7 @@ describe("a structured content key", () => {
 });
 
 // A phone photo's size: its base64 is past the Python SDK's strip budget
-// (1 MiB), which once cut the whole attribute there.
+// (1 MiB). The attribute must still be rebuilt whole, not cut there.
 const LARGE_PNG = new Uint8Array(800_000);
 LARGE_PNG.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const LARGE_BASE64 = Buffer.from(LARGE_PNG).toString("base64");
