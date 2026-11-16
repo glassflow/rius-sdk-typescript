@@ -6,8 +6,10 @@
 // output.value are written, how setAttribute encodes a value, how messages and
 // rius.context.sizes are recorded, what the masking exporter keeps, how RIUS_*
 // variables resolve, how the resource takes in OTEL_RESOURCE_ATTRIBUTES, how
-// the error on the Anthropic SDK's own spans is named and how a content key
-// another instrumentation set as a structured value is exported.
+// the error on the Anthropic SDK's own spans is named, how a content key
+// another instrumentation set as a structured value is exported and how tool
+// definitions are rewritten into the conventions' shape (the sink runs those
+// too).
 // Their README describes the format, including the tagged values JSON cannot
 // hold ({"$bytes": N}, {"$number": "NaN"}).
 import { readFileSync } from "node:fs";
@@ -27,6 +29,7 @@ import { startGeneration } from "../src/generation.js";
 import { MaskingSpanExporter } from "../src/masking.js";
 import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { startSpan } from "../src/spans.js";
+import { semconvToolDefinitions } from "../src/toolDefinitions.js";
 
 const CASES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "semconv", "sdk_cases");
 
@@ -275,4 +278,14 @@ describe("structured_content.json: content keys set as structured values", () =>
       expect(exported).toEqual(c.expected);
     });
   }
+});
+
+describe("tool_definitions.json", () => {
+  it.each(cases("tool_definitions").map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    const provider = c.provider ?? undefined;
+    const once = semconvToolDefinitions(c.tools, provider);
+    expect(JSON.stringify(once)).toBe(c.expected);
+    // The sink rewrites what the SDK exported: a second pass changes nothing.
+    expect(JSON.stringify(semconvToolDefinitions(once, provider))).toBe(c.expected);
+  });
 });

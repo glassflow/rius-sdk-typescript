@@ -154,6 +154,25 @@
       }
     },
     {
+      "name": "a tool call without a tool name is kept as a text part holding its id and arguments",
+      "input": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.prompt.messages": "[{\"role\":\"user\",\"content\":\"Look it up.\"},{\"role\":\"assistant\",\"content\":[{\"type\":\"tool-call\",\"toolCallId\":\"c1\",\"input\":{\"q\":1}}]}]",
+        "ai.response.toolCalls": "[{\"toolCallId\":\"c2\",\"toolName\":\"\",\"input\":\"{\\\"x\\\":2}\"},{\"toolCallId\":\"c3\",\"toolName\":\"b\",\"input\":\"{}\"}]",
+        "ai.response.finishReason": "tool-calls"
+      },
+      "expected": {
+        "ai.operationId": "ai.generateText.doGenerate",
+        "gen_ai.input.messages": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look it up.\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"{\\\"id\\\":\\\"c1\\\",\\\"arguments\\\":{\\\"q\\\":1}}\"}]}]",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"{\\\"id\\\":\\\"c2\\\",\\\"arguments\\\":{\\\"x\\\":2}}\"},{\"type\":\"tool_call\",\"id\":\"c3\",\"name\":\"b\",\"arguments\":{}}],\"finish_reason\":\"tool_call\"}]",
+        "gen_ai.response.finish_reasons": [
+          "tool-calls"
+        ],
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
       "name": "unreadable tool calls leave the response whole",
       "input": {
         "ai.operationId": "ai.generateText.doGenerate",
@@ -898,7 +917,7 @@
       "expected": {
         "ai.operationId": "ai.generateText.doGenerate",
         "gen_ai.operation.name": "chat",
-        "gen_ai.tool.definitions": "[{\"type\":\"function\",\"name\":\"a\",\"inputSchema\":{\"type\":\"object\"}},{\"type\":\"provider-defined\",\"name\":\"b\",\"id\":\"openai.web_search\",\"args\":{}}]",
+        "gen_ai.tool.definitions": "[{\"type\":\"function\",\"name\":\"a\",\"parameters\":{\"type\":\"object\"}},{\"type\":\"openai.web_search\",\"name\":\"b\",\"id\":\"openai.web_search\",\"args\":{}}]",
         "openinference.span.kind": "LLM"
       }
     },

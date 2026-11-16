@@ -17,6 +17,7 @@ import {
   uriModality,
   urlPart,
 } from "./mediaParts.js";
+import { isToolCallName, unnamedToolCallPart } from "./messages.js";
 import { nameNativeAnthropicError } from "./nativeProviderSpans.js";
 import {
   AI_OPERATION_ID,
@@ -132,6 +133,7 @@ import {
   wellFormed,
 } from "./serde.js";
 import { normalizeTanstackSpan } from "./tanstackAi.js";
+import { semconvToolDefinitions } from "./toolDefinitions.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -1419,6 +1421,7 @@ function vercelPart(part: unknown, raw: boolean): Record<string, unknown> | null
     case "reasoning":
       return { type: "reasoning", content: part.text };
     case "tool-call":
+      if (!isToolCallName(part.toolName)) return unnamedToolCallPart(part.toolCallId, part.input);
       return {
         type: "tool_call",
         id: part.toolCallId ?? null,
@@ -1580,7 +1583,11 @@ function vercelOutput(
     for (const call of calls) {
       const input =
         typeof call.input === "string" ? (parseJson(call.input) ?? call.input) : call.input;
-      parts.push({ type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input });
+      parts.push(
+        isToolCallName(call.toolName)
+          ? { type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input }
+          : unnamedToolCallPart(call.toolCallId, input),
+      );
     }
   }
   const message: Record<string, unknown> = { role: "assistant", parts };
@@ -2246,7 +2253,8 @@ function repeatsToolCall(
  * content first (a `tool_call_response` when the message carries a tool-call
  * id, a text part otherwise), then the multimodal contents, then the tool
  * calls, each family in index order. An empty role, id, name or arguments is
- * omitted rather than written empty; empty content is still a part.
+ * omitted rather than written empty; empty content is still a part. A tool
+ * call left without a name is a text part (`unnamedToolCallPart`).
  */
 function encodeMessage(message: FlatMessage): Record<string, unknown> {
   const parts: Record<string, unknown>[] = [];
@@ -2266,7 +2274,7 @@ function encodeMessage(message: FlatMessage): Record<string, unknown> {
     for (const [field, name] of TOOL_CALL_FIELDS) {
       if (Object.hasOwn(call, field) && call[field]) part[name] = call[field];
     }
-    parts.push(part);
+    parts.push(Object.hasOwn(part, "name") ? part : unnamedToolCallPart(part.id, part.arguments));
   }
   return message.role ? { role: message.role, parts } : { parts };
 }
@@ -2510,9 +2518,10 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  *
  * - `llm.tools.N.tool.json_schema`, which the OpenInference instrumentations
  *   write one per tool. Each value is a JSON string; the schemas are parsed
- *   and re-serialized as ONE array, in numeric index order, VERBATIM: an
- *   Anthropic `input_schema` stays an Anthropic `input_schema`, as on the
- *   native `tools` option. The indexed keys are then deleted. If any one
+ *   and re-serialized as ONE array, in numeric index order, in the
+ *   conventions' shape, as on the native `tools` option (see
+ *   toolDefinitions.ts; a built-in tool's type is prefixed with the span's
+ *   `gen_ai.provider.name`). The indexed keys are then deleted. If any one
  *   schema is not a string or does not parse, the whole family is left
  *   untouched rather than reassembled without it: it is content by prefix
  *   already, so nothing escapes, and a partial array would be a silent loss.
@@ -2569,13 +2578,13 @@ export function normalizeToolDefinitions(
     // gen_ai.tool.definitions and remove them then, so normalizing twice
     // would differ from normalizing once.
     takeBagDefinitions(attributes);
-    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(schemas);
+    if (!native) setDefinitions(attributes, schemas);
     return;
   }
 
   const definitions = takeBagDefinitions(attributes);
   if (definitions !== undefined) {
-    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+    if (!native) setDefinitions(attributes, definitions);
     return;
   }
 
@@ -2599,9 +2608,26 @@ export function normalizeToolDefinitions(
     }
   }
   delete attributes[VERCEL_PROMPT_TOOLS];
-  if (!native && parsed.length > 0) {
-    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(parsed);
-  }
+  if (!native) setDefinitions(attributes, parsed);
+}
+
+/**
+ * `gen_ai.tool.definitions` from tools, unless they come to no definition. An
+ * empty list (no tools, or a Gemini tool with no declarations) writes
+ * nothing, as the sink does; the caller removes the sources all the same.
+ */
+function setDefinitions(
+  attributes: Record<string, AttributeValue | undefined>,
+  tools: unknown[],
+): void {
+  const definitions = semconvToolDefinitions(tools, providerOf(attributes));
+  if (definitions.length > 0) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+}
+
+/** The span's `gen_ai.provider.name`, which prefixes built-in tool types. */
+function providerOf(attributes: Record<string, AttributeValue | undefined>): string | undefined {
+  const provider = attributes[GEN_AI_PROVIDER_NAME];
+  return typeof provider === "string" ? provider : undefined;
 }
 
 /** The Vercel AI SDK's tool definitions. A source spelling, inline. */
