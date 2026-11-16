@@ -501,7 +501,8 @@ function isLowSurrogate(code: number): boolean {
 /**
  * A JSON value: its span on the text, and for an object its members (every
  * duplicate, in document order), for an array its items, for a string its
- * decoded value and its escapes (see {@link rawSpan}).
+ * decoded value and the text it was read from, whose escapes {@link rawSpan}
+ * reads when an edit lands in the string.
  */
 interface JsonNode {
   start: number;
@@ -509,6 +510,7 @@ interface JsonNode {
   members?: [string, JsonNode][];
   items?: JsonNode[];
   text?: string;
+  source?: string;
   escapes?: number[];
 }
 
@@ -578,64 +580,88 @@ class Lexer {
   }
 
   /**
-   * A string, checked and passed. Decoded only when `decode` is set, a run of
-   * plain characters at a time; `escapes` then gets three numbers per decoded
-   * unit an escape wrote: the unit's index and the escape's raw span.
+   * A string, checked and passed by position. Decoded only when `decode` is
+   * set, and then whole: a slice when it holds no escape, else the native
+   * decoder on its checked span. Building it an escape at a time would cost
+   * an allocation per escape, which on a large escaped value is GBs of heap.
    */
-  protected string(decode: boolean, escapes?: number[]): string {
-    this.expect('"');
-    const { text } = this;
-    let out = "";
-    let run = this.i;
-    for (;;) {
-      if (this.i >= text.length) throw new NotJson();
-      const ch = text[this.i];
-      if (ch === '"') break;
-      if (ch < " ") throw new NotJson();
-      if (ch !== "\\") {
-        this.i++;
-        continue;
-      }
-      const at = this.i;
-      const kind = text.slice(at + 1, at + 2);
-      let decoded: string;
-      if (Object.hasOwn(SHORT_ESCAPES, kind)) {
-        decoded = SHORT_ESCAPES[kind];
-        this.i += 2;
-      } else if (kind === "u") {
-        const code = this.hex4(at + 2);
-        this.i += 6;
-        decoded = String.fromCharCode(code);
-        if (code >= 0xd800 && code < 0xdc00 && text.startsWith("\\u", this.i)) {
-          const low = this.hex4(this.i + 2);
-          if (isLowSurrogate(low)) {
-            this.i += 6;
-            decoded = String.fromCharCode(code, low);
-          }
-        }
-      } else {
-        throw new NotJson();
-      }
-      if (decode) {
-        out += text.slice(run, at);
-        // A pair is one character in the reference, two units here: both
-        // map to the whole escape pair, which no edit ever splits.
-        for (let unit = 0; unit < decoded.length; unit++)
-          escapes?.push(out.length + unit, at, this.i);
-        out += decoded;
-      }
-      run = this.i;
-    }
-    if (decode) out += text.slice(run, this.i);
-    this.i++;
-    return out;
+  protected string(decode: boolean): string {
+    const start = this.i;
+    const { end, escaped } = scanString(this.text, start);
+    this.i = end;
+    if (!decode) return "";
+    // JSON.parse decodes exactly the strings scanString accepts.
+    if (escaped) return JSON.parse(this.text.slice(start, end)) as string;
+    return this.text.slice(start + 1, end - 1);
   }
+}
 
-  private hex4(at: number): number {
-    const digits = this.text.slice(at, at + 4);
-    if (!HEX4.test(digits)) throw new NotJson();
-    return Number.parseInt(digits, 16);
+/**
+ * The string literal at `start`, checked: where it ends (past its closing
+ * quote) and whether it holds an escape. Throws NotJson when it is no string.
+ */
+export function scanString(text: string, start: number): { end: number; escaped: boolean } {
+  if (text[start] !== '"') throw new NotJson();
+  let escaped = false;
+  let i = start + 1;
+  for (;;) {
+    if (i >= text.length) throw new NotJson();
+    const ch = text[i];
+    if (ch === '"') return { end: i + 1, escaped };
+    if (ch < " ") throw new NotJson();
+    if (ch !== "\\") {
+      i++;
+      continue;
+    }
+    escaped = true;
+    i = escapeEnd(text, i);
   }
+}
+
+function hex4(text: string, at: number): number {
+  const digits = text.slice(at, at + 4);
+  if (!HEX4.test(digits)) throw new NotJson();
+  return Number.parseInt(digits, 16);
+}
+
+/**
+ * Where the escape at `at` ends: past a `\uD8xx\uDCxx` pair as one escape,
+ * which a decoded character never splits. Throws NotJson on a bad escape.
+ */
+function escapeEnd(text: string, at: number): number {
+  const kind = text[at + 1];
+  if (kind !== undefined && Object.hasOwn(SHORT_ESCAPES, kind)) return at + 2;
+  if (kind !== "u") throw new NotJson();
+  const code = hex4(text, at + 2);
+  if (code >= 0xd800 && code < 0xdc00 && text.startsWith("\\u", at + 6)) {
+    if (isLowSurrogate(hex4(text, at + 8))) return at + 12;
+  }
+  return at + 6;
+}
+
+/**
+ * The escapes of the checked string literal starting at `start`: three numbers
+ * per decoded unit an escape wrote, the unit's index and the escape's raw span
+ * (see {@link rawSpan}). Built only for a string an edit lands in.
+ */
+export function stringEscapes(text: string, start: number): number[] {
+  const escapes: number[] = [];
+  let units = 0;
+  for (let i = start + 1; text[i] !== '"'; ) {
+    if (text[i] !== "\\") {
+      units++;
+      i++;
+      continue;
+    }
+    const end = escapeEnd(text, i);
+    // A pair is one character in the reference, two units here: both map to
+    // the whole escape pair, which no edit ever splits.
+    const written = end - i === 12 ? 2 : 1;
+    for (let unit = 0; unit < written; unit++) escapes.push(units + unit, i, end);
+    units += written;
+    i = end;
+  }
+  return escapes;
 }
 
 /** The strip's view of a candidate: every value as a {@link JsonNode}. */
@@ -653,9 +679,8 @@ class Parser extends Lexer {
     if (ch === "[") return this.array();
     const start = this.i;
     if (ch === '"') {
-      const escapes: number[] = [];
-      const text = this.string(true, escapes);
-      return { start, end: this.i, text, escapes };
+      const text = this.string(true);
+      return { start, end: this.i, text, source: this.text };
     }
     this.scalar();
     return { start, end: this.i };
@@ -723,7 +748,11 @@ class Parser extends Lexer {
  * span per character.
  */
 function rawSpan(node: JsonNode, unit: number): [number, number] {
-  const escapes = node.escapes ?? [];
+  // Every escape is longer than what it writes, so a string as long as its
+  // raw span less the quotes has none.
+  const plain = node.end - node.start - 2 === (node.text ?? "").length;
+  node.escapes ??= plain || node.source === undefined ? [] : stringEscapes(node.source, node.start);
+  const { escapes } = node;
   // How many escaped units come at or before this one.
   let low = 0;
   let high = escapes.length / 3;
