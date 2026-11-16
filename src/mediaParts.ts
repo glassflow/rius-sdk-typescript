@@ -1670,8 +1670,9 @@ const STRIPPED_REASONS: readonly string[] = [NOT_CAPTURED, REDACTED_UPSTREAM];
  * carrying content is stripped of it (sized from it, `not_captured`) and
  * takes its modality from its MIME type first (@ai-sdk/otel labels a PDF an
  * image). Content that is a complete replacement gives its size, and its
- * mime when the part has no valid MIME type. A uri holding a data URL is a blob, since a data URL is never a
- * uri, and so is one holding data: past its start, with no size. A file
+ * mime when the part has no valid MIME type. A uri holding a data URL is a
+ * blob, since a data URL is never a uri, and so is one holding data: past its
+ * start, with no size. A file
  * part holding a string base64 or url is a LangChain v1 file block and is
  * read as one (see langchainPart). Undefined when it is not a media part
  * this can read, which stays as it came.
