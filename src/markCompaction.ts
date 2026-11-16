@@ -1,10 +1,11 @@
 import type { Attributes } from "@opentelemetry/api";
 import { getTracer } from "./client.js";
-import { COMPACTION_OPERATION, droppedTokens, markNextLlmSpanCompacted } from "./compaction.js";
+import { droppedTokens, markNextLlmSpanCompacted } from "./compaction.js";
 import { errorType } from "./errorType.js";
 import {
   composeSpanName,
   GEN_AI_OPERATION_NAME,
+  GEN_AI_OPERATION_NAME_COMPACTION,
   kindAttributes,
   otelSpanKind,
   RIUS_COMPACTION_EXECUTOR,
@@ -168,7 +169,7 @@ function record(options: MarkCompactionOptions): void {
 
   const attributes: Attributes = {
     ...kindAttributes(SpanKind.CHAIN),
-    [GEN_AI_OPERATION_NAME]: COMPACTION_OPERATION,
+    [GEN_AI_OPERATION_NAME]: GEN_AI_OPERATION_NAME_COMPACTION,
     [RIUS_COMPACTION_KIND]: kind,
     [RIUS_COMPACTION_EXECUTOR]: RIUS_COMPACTION_EXECUTOR_CLIENT,
   };
