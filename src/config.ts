@@ -78,6 +78,13 @@ export interface RiusOptions {
   serviceVersion?: string;
   disabled?: boolean;
   sampleRate?: number;
+  /**
+   * Attach input/output content to spans. Resolution: this option, then
+   * `RIUS_CAPTURE_CONTENT`, then the conventions'
+   * `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT` (`NO_CONTENT` and
+   * `EVENT_ONLY` turn capture off, `SPAN_ONLY` and `SPAN_AND_EVENT` keep it
+   * on), then `true`.
+   */
   captureContent?: boolean;
   mask?: Mask;
   /** Seconds between agent-lifetime heartbeat pings. */
@@ -217,6 +224,39 @@ function bool(name: string, raw: string | undefined, fallback: boolean): boolean
     `[rius] ${name}="${raw}" is not a recognised boolean; using the default (${fallback}). Accepted: 1/true/yes/on, 0/false/no/off.`,
   );
   return fallback;
+}
+
+/**
+ * The conventions' capture modes, by whether Rius captures content under them.
+ * Rius records content on spans only, so EVENT_ONLY (content on events, none
+ * on spans) captures none.
+ */
+const OTEL_CAPTURE_MODES: ReadonlyMap<string, boolean> = new Map([
+  ["NO_CONTENT", false],
+  ["EVENT_ONLY", false],
+  ["SPAN_ONLY", true],
+  ["SPAN_AND_EVENT", true],
+]);
+
+/**
+ * `RIUS_CAPTURE_CONTENT` when set, else the conventions'
+ * `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT`, else on. The conventions'
+ * setting is read case-insensitively. Its own default is `NO_CONTENT`, but
+ * Rius keeps capture on when neither variable is set, and an unrecognised
+ * value keeps that default with a warning, as an unrecognised boolean does.
+ */
+function captureContentFromEnv(env: Env): boolean {
+  if (env.RIUS_CAPTURE_CONTENT !== undefined) {
+    return bool("RIUS_CAPTURE_CONTENT", env.RIUS_CAPTURE_CONTENT, true);
+  }
+  const raw = env.OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT;
+  if (raw === undefined) return true;
+  const mode = OTEL_CAPTURE_MODES.get(raw.trim().toUpperCase());
+  if (mode !== undefined) return mode;
+  console.warn(
+    `[rius] OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT="${raw}" is not a recognised capture mode; using the default (true). Accepted: NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT.`,
+  );
+  return true;
 }
 
 /**
@@ -484,8 +524,7 @@ export function resolveConfig(options: RiusOptions = {}, env: Env = process.env)
       undefined,
     disabled,
     sampleRate,
-    captureContent:
-      options.captureContent ?? bool("RIUS_CAPTURE_CONTENT", env.RIUS_CAPTURE_CONTENT, true),
+    captureContent: options.captureContent ?? captureContentFromEnv(env),
     mask: options.mask,
     heartbeat: options.heartbeat ?? bool("RIUS_HEARTBEAT", env.RIUS_HEARTBEAT, true),
     heartbeatIntervalMs: heartbeatIntervalSeconds * 1000,

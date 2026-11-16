@@ -72,6 +72,54 @@ describe("resolveConfig", () => {
     expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "TRUE" }).captureContent).toBe(true);
   });
 
+  describe("the conventions' OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT", () => {
+    const OTEL = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT";
+
+    it.each([
+      ["NO_CONTENT", false],
+      // Rius records content on spans only, so a request for events alone
+      // asks for no content on the spans Rius keeps.
+      ["EVENT_ONLY", false],
+      ["SPAN_ONLY", true],
+      ["SPAN_AND_EVENT", true],
+      // Case-insensitive, as the conventions define it.
+      ["no_content", false],
+      [" span_only ", true],
+    ])("reads %j as capture %s when RIUS_CAPTURE_CONTENT is unset", (raw, expected) => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(expected);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it.each([[""], ["maybe"], ["true"], ["SPAN"]])(
+      "keeps the default and warns on the unrecognised %j",
+      (raw) => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(OTEL));
+        warnSpy.mockRestore();
+      },
+    );
+
+    it.each([
+      ["true", true],
+      ["false", false],
+    ])("loses to RIUS_CAPTURE_CONTENT=%s", (rius, expected) => {
+      const otel = expected ? "NO_CONTENT" : "SPAN_ONLY";
+      const env = { RIUS_CAPTURE_CONTENT: rius, [OTEL]: otel };
+      expect(resolveConfig({}, env).captureContent).toBe(expected);
+    });
+
+    it.each([[true], [false]])("loses to the captureContent option (%s)", (option) => {
+      const env = {
+        RIUS_CAPTURE_CONTENT: String(!option),
+        [OTEL]: option ? "NO_CONTENT" : "SPAN_ONLY",
+      };
+      expect(resolveConfig({ captureContent: option }, env).captureContent).toBe(option);
+    });
+  });
+
   it("recognizes explicit positive value for RIUS_DISABLED", () => {
     expect(resolveConfig({}, { RIUS_DISABLED: "true" }).disabled).toBe(true);
   });
