@@ -159,7 +159,7 @@ const BUFFER_TAGS: readonly string[] = ["[object ArrayBuffer]", "[object SharedA
  * another realm (a vm context, a worker's transfer) has another realm's
  * constructor, so isView and the built-in tag are what recognize it.
  */
-function isByteObject(raw: unknown): raw is { byteLength: number } {
+export function isByteObject(raw: unknown): raw is { byteLength: number } {
   return (
     ArrayBuffer.isView(raw) ||
     (typeof raw === "object" &&
@@ -197,6 +197,29 @@ export function toAttributeValue(value: unknown): string {
     return String(value);
   }
   if (value === null || value === undefined) return "null";
+  return textValue(stringify(value));
+}
+
+/**
+ * A structured value as JSON text in the one encoding, neither stripped nor
+ * cut: the Python SDK's `json_text`. For a value another instrumentation set
+ * structured where the conventions also allow its JSON text, which is then
+ * read and stripped exactly as that string would be. Unlike
+ * {@link toAttributeValue}, a blob part's byte content
+ * (`{type: "blob", content: <bytes>}`) is written as its base64, as a blob
+ * part's JSON carries it, so the media rebuild sizes the part and strips it;
+ * any other byte object is the marker. Must never throw.
+ */
+export function jsonText(value: unknown): string {
+  return stringify(value, true);
+}
+
+/**
+ * The JSON text of a value that is not a string, number, boolean, bigint,
+ * null or undefined, before any cut. `blobBytes` writes a blob part's byte
+ * content as its base64 (see {@link jsonText}).
+ */
+function stringify(value: unknown, blobBytes = false): string {
   // Track the ANCESTOR chain, not every object seen. A global seen-set would
   // report a shared sibling reference ({ a: x, b: x }) as circular and drop
   // real data, which is a plausible shape in LLM message payloads.
@@ -211,7 +234,10 @@ export function toAttributeValue(value: unknown): string {
     const text =
       JSON.stringify({ "": value }[""], function (this: unknown, key: string, v: unknown) {
         const raw = (this as Record<string, unknown> | undefined)?.[key];
-        const rendered = renderable(raw, v);
+        const rendered =
+          blobBytes && key === "content" && isByteObject(raw) && isBlobPart(this)
+            ? base64(raw)
+            : renderable(raw, v);
         if (typeof rendered === "object" && rendered !== null) {
           // `this` is the holder of the current key; unwind to it so the stack
           // reflects the path from the root rather than traversal order.
@@ -226,10 +252,23 @@ export function toAttributeValue(value: unknown): string {
         }
         return rendered;
       }) ?? String(value);
-    return textValue(text);
+    return text;
   } catch {
     return "[unserializable]";
   }
+}
+
+/** A holder that is a semconv blob part: its `type` is `blob`. */
+function isBlobPart(holder: unknown): boolean {
+  return asRecord(holder)?.type === "blob";
+}
+
+/** A byte object's bytes as base64. */
+function base64(bytes: { byteLength: number }): string {
+  const view = ArrayBuffer.isView(bytes)
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes as ArrayBufferLike);
+  return Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
 }
 
 const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];
