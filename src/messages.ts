@@ -27,6 +27,29 @@ function asText(value: unknown): string {
 }
 
 /**
+ * A tool call without a name, as a text part holding its id and arguments.
+ *
+ * The conventions require a `tool_call` part's name (a string), and a part of
+ * a known type may not fall back to the generic part, so a call without one
+ * cannot be a `tool_call` part. Rather than drop it, it is kept the way content
+ * with no part type is: as text, the call's id and arguments as JSON, each
+ * left out when absent (`null` or `undefined`). Every writer of tool-call parts
+ * uses this, as the Python SDK's `unnamed_tool_call_part` and the sink do, so
+ * the bytes agree.
+ */
+export function unnamedToolCallPart(id: unknown, args: unknown): Part {
+  const call: Record<string, unknown> = {};
+  if (id !== null && id !== undefined) call.id = id;
+  if (args !== null && args !== undefined) call.arguments = args;
+  return { type: "text", content: toAttributeValue(call) };
+}
+
+/** A tool-call name the conventions accept: a non-empty string. */
+export function isToolCallName(name: unknown): name is string {
+  return typeof name === "string" && name !== "";
+}
+
+/**
  * The message's own role, else the default. Only an ABSENT role defaults (an
  * `undefined` one is absent too, since JSON drops it): an explicit `null` is
  * kept, as Python's `dict.get` / `setdefault` keep a `None`.
@@ -124,10 +147,10 @@ function normalizeMessage(message: unknown, defaultRole: string): Message {
     for (const call of toolCalls) {
       if (!isRecord(call)) continue;
       const fn = isRecord(call.function) ? call.function : {};
-      // The conventions require a tool_call part's name, and a part of a known
-      // type may not fall back to the generic part, so a call without one
-      // cannot be recorded validly: it is skipped.
-      if (typeof fn.name !== "string") continue;
+      if (!isToolCallName(fn.name)) {
+        parts.push(unnamedToolCallPart(call.id, fn.arguments));
+        continue;
+      }
       parts.push({
         type: "tool_call",
         id: call.id ?? null,

@@ -17,6 +17,7 @@ import {
   uriModality,
   urlPart,
 } from "./mediaParts.js";
+import { isToolCallName, unnamedToolCallPart } from "./messages.js";
 import { nameNativeAnthropicError } from "./nativeProviderSpans.js";
 import {
   AI_OPERATION_ID,
@@ -1413,6 +1414,7 @@ function vercelPart(part: unknown, raw: boolean): Record<string, unknown> | null
     case "reasoning":
       return { type: "reasoning", content: part.text };
     case "tool-call":
+      if (!isToolCallName(part.toolName)) return unnamedToolCallPart(part.toolCallId, part.input);
       return {
         type: "tool_call",
         id: part.toolCallId ?? null,
@@ -1574,7 +1576,11 @@ function vercelOutput(
     for (const call of calls) {
       const input =
         typeof call.input === "string" ? (parseJson(call.input) ?? call.input) : call.input;
-      parts.push({ type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input });
+      parts.push(
+        isToolCallName(call.toolName)
+          ? { type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input }
+          : unnamedToolCallPart(call.toolCallId, input),
+      );
     }
   }
   const message: Record<string, unknown> = { role: "assistant", parts };
@@ -2240,7 +2246,8 @@ function repeatsToolCall(
  * content first (a `tool_call_response` when the message carries a tool-call
  * id, a text part otherwise), then the multimodal contents, then the tool
  * calls, each family in index order. An empty role, id, name or arguments is
- * omitted rather than written empty; empty content is still a part.
+ * omitted rather than written empty; empty content is still a part. A tool
+ * call left without a name is a text part (`unnamedToolCallPart`).
  */
 function encodeMessage(message: FlatMessage): Record<string, unknown> {
   const parts: Record<string, unknown>[] = [];
@@ -2260,7 +2267,7 @@ function encodeMessage(message: FlatMessage): Record<string, unknown> {
     for (const [field, name] of TOOL_CALL_FIELDS) {
       if (Object.hasOwn(call, field) && call[field]) part[name] = call[field];
     }
-    parts.push(part);
+    parts.push(Object.hasOwn(part, "name") ? part : unnamedToolCallPart(part.id, part.arguments));
   }
   return message.role ? { role: message.role, parts } : { parts };
 }

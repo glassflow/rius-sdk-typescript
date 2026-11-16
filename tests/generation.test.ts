@@ -82,31 +82,47 @@ describe("generations", () => {
     );
   });
 
-  it.each([[{ arguments: "{}" }], [{ name: null }], [{ name: 3 }], [undefined]])(
-    "skips a tool call without a name (function %j)",
-    async (fn) => {
-      // The conventions require a tool_call part's name, and a part with a known
-      // type may no longer fall back to the generic part: a call with no name
-      // cannot be recorded validly, so it is left out rather than written as null.
-      const call: Record<string, unknown> = { id: "call_1", type: "function" };
-      if (fn !== undefined) call.function = fn;
-      const named = { id: "call_2", function: { name: "lookup", arguments: "{}" } };
-      const gen = startGeneration("chat", { model: "m" });
-      gen.setOutput([{ role: "assistant", content: "hi", tool_calls: [call, named] }]);
-      gen.end();
-      await client.flush();
-      const span = exporter.getFinishedSpans()[0];
-      expect(JSON.parse(String(span.attributes["gen_ai.output.messages"]))).toEqual([
-        {
-          role: "assistant",
-          parts: [
-            { type: "text", content: "hi" },
-            { type: "tool_call", id: "call_2", name: "lookup", arguments: "{}" },
-          ],
-        },
-      ]);
-    },
-  );
+  it.each([
+    [{ arguments: "{}" }, '{"id":"call_1","arguments":"{}"}'],
+    [{ name: null, arguments: "{}" }, '{"id":"call_1","arguments":"{}"}'],
+    [{ name: 3 }, '{"id":"call_1"}'],
+    [{ name: "", arguments: '{"q":1}' }, '{"id":"call_1","arguments":"{\\"q\\":1}"}'],
+    [undefined, '{"id":"call_1"}'],
+  ])("keeps a tool call without a name as a text part (function %j)", async (fn, content) => {
+    // The conventions require a tool_call part's name, and a part with a known
+    // type may no longer fall back to the generic part. The call is kept as a
+    // text part holding its id and arguments, as other content with no part
+    // type is.
+    const call: Record<string, unknown> = { id: "call_1", type: "function" };
+    if (fn !== undefined) call.function = fn;
+    const named = { id: "call_2", function: { name: "lookup", arguments: "{}" } };
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setOutput([{ role: "assistant", content: "hi", tool_calls: [call, named] }]);
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(JSON.parse(String(span.attributes["gen_ai.output.messages"]))).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "text", content: "hi" },
+          { type: "text", content },
+          { type: "tool_call", id: "call_2", name: "lookup", arguments: "{}" },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps what a tool call without a name or an id has", async () => {
+    const gen = startGeneration("chat", { model: "m" });
+    gen.setOutput([{ role: "assistant", tool_calls: [{}] }]);
+    gen.end();
+    await client.flush();
+    const span = exporter.getFinishedSpans()[0];
+    expect(JSON.parse(String(span.attributes["gen_ai.output.messages"]))).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "{}" }] },
+    ]);
+  });
 
   it("leaves gen_ai.tool.definitions absent when no tools are given", async () => {
     const gen = startGeneration("chat", { model: "m" });

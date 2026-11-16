@@ -117,6 +117,94 @@ describe("semconvToolDefinitions", () => {
     ]);
   });
 
+  // JSON.stringify compares key order too, which must match the Python SDK's.
+  const json = (value: unknown) => JSON.stringify(value);
+
+  it("unwraps Bedrock's toolSpec into a function with its json schema", () => {
+    const tools = [
+      {
+        toolSpec: {
+          name: "get_weather",
+          description: "Weather for a city",
+          inputSchema: { json: PARAMETERS },
+        },
+      },
+    ];
+    expect(json(semconvToolDefinitions(tools, "aws.bedrock"))).toBe(
+      json([
+        {
+          type: "function",
+          name: "get_weather",
+          description: "Weather for a city",
+          parameters: PARAMETERS,
+        },
+      ]),
+    );
+  });
+
+  it("keeps a Bedrock toolSpec without a name, and a cache point", () => {
+    const nameless = { toolSpec: { inputSchema: { json: PARAMETERS } } };
+    const cachePoint = { cachePoint: { type: "default" } };
+    expect(semconvToolDefinitions([nameless, cachePoint], "aws.bedrock")).toEqual([
+      nameless,
+      cachePoint,
+    ]);
+  });
+
+  it.each([
+    ["function_declarations", "parameters"],
+    ["functionDeclarations", "parametersJsonSchema"],
+  ])("expands Gemini %s into one function tool per declaration (%s)", (container, schema) => {
+    const tools = [
+      {
+        [container]: [
+          { name: "get_weather", description: "Weather", [schema]: PARAMETERS },
+          { name: "get_time" },
+        ],
+      },
+      { name: "lookup", input_schema: PARAMETERS },
+    ];
+    expect(json(semconvToolDefinitions(tools, "gcp.gemini"))).toBe(
+      json([
+        { type: "function", name: "get_weather", description: "Weather", parameters: PARAMETERS },
+        { type: "function", name: "get_time" },
+        { type: "function", name: "lookup", parameters: PARAMETERS },
+      ]),
+    );
+  });
+
+  it("names Gemini's snake-case json schema parameters", () => {
+    const tools = [{ function_declarations: [{ name: "f", parameters_json_schema: PARAMETERS }] }];
+    expect(json(semconvToolDefinitions(tools, "gcp.gemini"))).toBe(
+      json([{ type: "function", name: "f", parameters: PARAMETERS }]),
+    );
+  });
+
+  it("keeps Gemini built-ins beside the declarations without a name", () => {
+    // A built-in has no name of its own: inventing one would record a tool
+    // that is offered but never called by that name.
+    const tools = [
+      { function_declarations: [{ name: "f" }], google_search: {} },
+      { code_execution: {} },
+    ];
+    expect(json(semconvToolDefinitions(tools, "gcp.gemini"))).toBe(
+      json([{ type: "function", name: "f" }, { google_search: {} }, { code_execution: {} }]),
+    );
+  });
+
+  it("keeps a Gemini declaration without a name as given", () => {
+    const tools = [{ functionDeclarations: [{ description: "no name" }, "odd"] }];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([
+      { description: "no name" },
+      "odd",
+    ]);
+  });
+
+  it("keeps a Gemini container that is not a list", () => {
+    const tool = { function_declarations: { name: "f" } };
+    expect(semconvToolDefinitions([tool], "gcp.gemini")).toEqual([tool]);
+  });
+
   it.each([["plain"], [3], [null], [["x"]], [{ description: "no name or type" }]])(
     "keeps %j as it is",
     (tool) => {
@@ -129,6 +217,9 @@ describe("semconvToolDefinitions", () => {
       { type: "function", function: { name: "a", parameters: PARAMETERS } },
       { name: "b", input_schema: PARAMETERS },
       { type: "web_search_20250305", name: "web_search" },
+      { toolSpec: { name: "c", inputSchema: { json: PARAMETERS } } },
+      { functionDeclarations: [{ name: "d", parametersJsonSchema: PARAMETERS }] },
+      { function_declarations: [{ name: "e" }], google_search: {} },
     ];
     const once = semconvToolDefinitions(tools, "anthropic");
     expect(semconvToolDefinitions(once, "anthropic")).toEqual(once);

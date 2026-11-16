@@ -14,6 +14,16 @@
  *   either. A definition with a string `name` and no `type` is a function.
  * - The schema is `parameters`; `input_schema` and the Vercel AI SDK's
  *   `inputSchema` are renamed to it, in place.
+ * - Bedrock Converse wraps the function, `{toolSpec: {name, description,
+ *   inputSchema: {json: schema}}}`: it is unwrapped, and `json` becomes
+ *   `parameters`.
+ * - A Gemini tool holds a list of declarations, `{function_declarations:
+ *   [...]}` (`functionDeclarations` in camel case). Each declaration with a
+ *   string `name` becomes its own function tool, its schema taken from
+ *   `parameters` or, failing that, `parametersJsonSchema` /
+ *   `parameters_json_schema`. A declaration without a name, and whatever else
+ *   the Gemini tool holds (a built-in such as `google_search`), is kept as its
+ *   own entry.
  *
  * Any other `type` is a provider's built-in tool (Anthropic's
  * `web_search_20250305`, OpenAI's `web_search`). Its fields are kept, and its
@@ -21,8 +31,10 @@
  * it cannot collide with a type they define later:
  * `anthropic.web_search_20250305`. A type that already holds a dot is taken as
  * namespaced and left alone, which also keeps a second pass from stacking
- * prefixes. Nothing is invented: a built-in tool without a `name` stays
- * without one.
+ * prefixes. Nothing is invented: a built-in tool without a `name` (OpenAI's
+ * `web_search`, Gemini's `google_search`) stays without one. Tool names are
+ * read as the tools the model was offered, and an invented name would be a
+ * tool offered and never called by that name.
  *
  * Anything else (not an object, or no usable `type` or `name`) is kept as it
  * is: it is the caller's data, and there is no shape to vouch for.
@@ -38,6 +50,10 @@ type Definition = Record<string, unknown>;
 const FUNCTION = "function";
 /** Schema spellings renamed to `parameters`, first match wins. */
 const PARAMETER_SPELLINGS = ["input_schema", "inputSchema"] as const;
+/** Gemini's own schema spellings, renamed to `parameters` on a declaration. */
+const GEMINI_PARAMETER_SPELLINGS = ["parametersJsonSchema", "parameters_json_schema"] as const;
+/** A Gemini tool's list of function declarations, snake and camel case. */
+const GEMINI_DECLARATIONS = ["function_declarations", "functionDeclarations"] as const;
 /** The Vercel AI SDK's provider tools, whose `id` is already `<provider>.<tool>`. */
 const VERCEL_PROVIDER_TYPES = new Set(["provider-defined", "provider"]);
 
@@ -45,9 +61,41 @@ function isRecord(value: unknown): value is Definition {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The definitions in the conventions' shape; the caller's list is not mutated. */
+/**
+ * The definitions in the conventions' shape; the caller's list is not mutated.
+ * A Gemini tool expands to one entry per declaration, so the result can be
+ * longer than `tools`.
+ */
 export function semconvToolDefinitions(tools: unknown[], provider: string | undefined): unknown[] {
-  return tools.map((tool) => semconvToolDefinition(tool, provider));
+  const definitions: unknown[] = [];
+  for (const tool of tools) {
+    const expanded = geminiDeclarations(tool);
+    if (expanded === undefined) definitions.push(semconvToolDefinition(tool, provider));
+    else definitions.push(...expanded);
+  }
+  return definitions;
+}
+
+/** A Gemini tool as one entry per declaration, then the rest; undefined if not one. */
+function geminiDeclarations(tool: unknown): unknown[] | undefined {
+  if (!isRecord(tool) || (tool.type ?? null) !== null) return undefined;
+  const key = GEMINI_DECLARATIONS.find((name) => Object.hasOwn(tool, name));
+  if (key === undefined) return undefined;
+  const declarations = tool[key];
+  if (!Array.isArray(declarations)) return undefined;
+  const entries = declarations.map(geminiDeclaration);
+  const rest = Object.entries(tool).filter(([name]) => name !== key);
+  if (rest.length > 0) entries.push(Object.fromEntries(rest));
+  return entries;
+}
+
+function geminiDeclaration(declaration: unknown): unknown {
+  if (!isRecord(declaration) || typeof declaration.name !== "string") return declaration;
+  const rest = Object.entries(declaration).filter(([key]) => key !== "type");
+  return withParameters(
+    Object.fromEntries([["type", FUNCTION], ...rest]),
+    GEMINI_PARAMETER_SPELLINGS,
+  );
 }
 
 function semconvToolDefinition(tool: unknown, provider: string | undefined): unknown {
@@ -72,6 +120,10 @@ function semconvToolDefinition(tool: unknown, provider: string | undefined): unk
     const rest = Object.entries(tool).filter(([key]) => key !== "type");
     return withParameters(Object.fromEntries([["type", FUNCTION], ...rest]));
   }
+  const spec = tool.toolSpec;
+  if (kind === null && isRecord(spec) && typeof spec.name === "string") {
+    return bedrockTool(tool, spec);
+  }
   if (typeof kind !== "string") return tool;
   if (VERCEL_PROVIDER_TYPES.has(kind)) {
     const id = tool.id;
@@ -81,10 +133,33 @@ function semconvToolDefinition(tool: unknown, provider: string | undefined): unk
   return tool;
 }
 
+/** Bedrock's `toolSpec` lifted to a function tool, `inputSchema.json` as parameters. */
+function bedrockTool(tool: Definition, spec: Definition): Definition {
+  const lifted: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(spec)) {
+    if (key === "type") continue;
+    if (key === "inputSchema" && isRecord(value) && Object.hasOwn(value, "json")) {
+      lifted.push(["parameters", value.json]);
+    } else {
+      lifted.push([key, value]);
+    }
+  }
+  // Python's dict assignment keeps a key's first position and its last value.
+  const flat = new Map<string, unknown>([["type", FUNCTION]]);
+  for (const [key, value] of lifted) flat.set(key, value);
+  for (const [key, value] of Object.entries(tool)) {
+    if (key !== "type" && key !== "toolSpec" && !flat.has(key)) flat.set(key, value);
+  }
+  return withParameters(Object.fromEntries(flat));
+}
+
 /** The tool with its schema under `parameters`, renamed where it stood. */
-function withParameters(tool: Definition): Definition {
+function withParameters(
+  tool: Definition,
+  spellings: readonly string[] = PARAMETER_SPELLINGS,
+): Definition {
   if (Object.hasOwn(tool, "parameters")) return tool;
-  for (const spelling of PARAMETER_SPELLINGS) {
+  for (const spelling of spellings) {
     if (Object.hasOwn(tool, spelling)) {
       return Object.fromEntries(
         Object.entries(tool).map(([key, value]) => [key === spelling ? "parameters" : key, value]),
