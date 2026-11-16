@@ -123,7 +123,14 @@ import {
   SpanKind,
   TOOL_NAME,
 } from "./semconv.js";
-import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
+import {
+  byteObjectMarker,
+  isByteObject,
+  jsonText,
+  stripMedia,
+  toAttributeValue,
+  wellFormed,
+} from "./serde.js";
 import { normalizeTanstackSpan } from "./tanstackAi.js";
 
 /**
@@ -2391,6 +2398,46 @@ export function reassembleOpenInferenceMessages(
 }
 
 /**
+ * The content keys the GenAI conventions ask for as structured values (maps
+ * and arrays) rather than JSON strings.
+ */
+const STRUCTURED_CONTENT_KEYS = [
+  GEN_AI_INPUT_MESSAGES,
+  GEN_AI_OUTPUT_MESSAGES,
+  GEN_AI_SYSTEM_INSTRUCTIONS,
+  GEN_AI_TOOL_DEFINITIONS,
+] as const;
+
+/**
+ * The content keys set as structured values, each written as its JSON text,
+ * in place. Every pass after this one, the media rebuild and the strip
+ * included, reads these keys as JSON text, as the conventions used to define
+ * them and as this SDK still writes them. An object or an array is written as
+ * that text ({@link jsonText}: the one JSON encoding, uncut, a blob part's
+ * byte content as its base64 and any other byte object the marker), and from
+ * then on it is that string: a span carrying the structured value and a span
+ * carrying its JSON text end the same. A string, a number or a boolean is not
+ * structured, and is left to the passes as it is. A lone byte object is the
+ * marker, as the Python SDK's media strip writes it: the strip here reads only
+ * strings, and OTLP would export the bytes.
+ *
+ * OpenTelemetry JS drops a mapping attribute when it is set but keeps an
+ * array of primitives, and a span built or edited on a path that does not
+ * validate can carry anything, so any object is read here.
+ *
+ * Ported from the Python SDK's `structured_content_as_json`.
+ */
+export function structuredContentAsJson(
+  attributes: Record<string, AttributeValue | undefined>,
+): void {
+  for (const key of STRUCTURED_CONTENT_KEYS) {
+    const value: unknown = attributes[key];
+    if (typeof value !== "object" || value === null) continue;
+    attributes[key] = isByteObject(value) ? byteObjectMarker(value) : jsonText(value);
+  }
+}
+
+/**
  * Native semconv media parts in the message keys, in their normalized shape,
  * in place: a blob loses its content (any instrumentor writing blob parts,
  * pydantic-ai and @ai-sdk/otel among them), and each media part takes its
@@ -2836,6 +2883,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
   onEnd(span: ReadableSpan): void {
     // Ended spans have no setAttribute; the bag is writable by reference.
     const attributes = span.attributes as Record<string, AttributeValue | undefined>;
+    // First, so every pass below reads the content keys as JSON text, however
+    // the instrumentation set them.
+    structuredContentAsJson(attributes);
     this.normalize(attributes, this.rules, (key, value) => {
       attributes[key] = value;
     });

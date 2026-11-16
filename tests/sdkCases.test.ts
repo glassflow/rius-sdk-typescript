@@ -5,8 +5,9 @@
 // SDKs are held to one expected result for each: how input.value and
 // output.value are written, how setAttribute encodes a value, how messages and
 // rius.context.sizes are recorded, what the masking exporter keeps, how RIUS_*
-// variables resolve, how the resource takes in OTEL_RESOURCE_ATTRIBUTES and
-// how the error on the Anthropic SDK's own spans is named.
+// variables resolve, how the resource takes in OTEL_RESOURCE_ATTRIBUTES, how
+// the error on the Anthropic SDK's own spans is named and how a content key
+// another instrumentation set as a structured value is exported.
 // Their README describes the format, including the tagged values JSON cannot
 // hold ({"$bytes": N}, {"$number": "NaN"}).
 import { readFileSync } from "node:fs";
@@ -16,6 +17,7 @@ import { SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
+  type ReadableSpan,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +25,7 @@ import { type InitOptions, init, type RiusClient } from "../src/client.js";
 import { type Mask, type ResolvedConfig, resolveConfig } from "../src/config.js";
 import { startGeneration } from "../src/generation.js";
 import { MaskingSpanExporter } from "../src/masking.js";
+import { NormalizingSpanProcessor } from "../src/normalize.js";
 import { startSpan } from "../src/spans.js";
 
 const CASES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "semconv", "sdk_cases");
@@ -245,6 +248,31 @@ describe("anthropic_error_type.json: error.type on the Anthropic SDK's own spans
       });
       expect(span.instrumentationScope.name).toBe(c.scope);
       expect(span.attributes["error.type"]).toBe(c.expected);
+    });
+  }
+});
+
+describe("structured_content.json: content keys set as structured values", () => {
+  for (const c of cases("structured_content")) {
+    it(c.name, () => {
+      // An ended span handed to the normalizer as it is: OpenTelemetry JS
+      // drops a mapping attribute when it is set, so no tracer would carry it.
+      const attributes = Object.fromEntries(
+        Object.entries(c.attributes as Record<string, unknown>).map(([k, raw]) => [k, value(raw)]),
+      );
+      const span = {
+        attributes,
+        events: [],
+        links: [],
+        status: { code: SpanStatusCode.UNSET },
+        startTime: [1700000000, 0],
+        endTime: [1700000001, 0],
+      } as unknown as ReadableSpan;
+      new NormalizingSpanProcessor().onEnd(span);
+      const exported = Object.fromEntries(
+        Object.entries(span.attributes).filter(([, v]) => v !== undefined),
+      );
+      expect(exported).toEqual(c.expected);
     });
   }
 });
