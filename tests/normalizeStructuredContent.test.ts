@@ -220,6 +220,76 @@ describe("a structured content key", () => {
   });
 });
 
+// A phone photo's size: its base64 is past the Python SDK's strip budget
+// (1 MiB), which once cut the whole attribute there.
+const LARGE_PNG = new Uint8Array(800_000);
+LARGE_PNG.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const LARGE_BASE64 = Buffer.from(LARGE_PNG).toString("base64");
+
+function withLargeBlob(key: string, content: unknown): unknown {
+  const parts = [
+    { type: "text", content: "describe this" },
+    { type: "blob", mime_type: "image/png", modality: "image", content },
+    { type: "text", content: "and this" },
+  ];
+  if (key === SYSTEM) return parts;
+  return [
+    { role: "user", parts },
+    { role: "assistant", parts: [parts[0]] },
+  ];
+}
+
+function largeBlobParts(key: string, exported: Record<string, AttributeValue>): unknown[] {
+  const payload = JSON.parse(exported[key] as string);
+  if (key === SYSTEM) return payload;
+  expect(payload[1]).toEqual({
+    role: "assistant",
+    parts: [{ type: "text", content: "describe this" }],
+  });
+  return payload[0].parts;
+}
+
+describe("a structured blob of 800 KB", () => {
+  for (const key of [INPUT, OUTPUT, SYSTEM]) {
+    for (const [form, content] of [
+      ["bytes", LARGE_PNG],
+      ["base64", LARGE_BASE64],
+    ] as const) {
+      it(`in ${key} as ${form} is stripped and sized, the other parts kept`, () => {
+        const exported = normalized({ [key]: withLargeBlob(key, content) });
+        expect(exported[key]).not.toContain(LARGE_BASE64.slice(0, 64));
+        expect(largeBlobParts(key, exported)).toEqual([
+          { type: "text", content: "describe this" },
+          {
+            type: "blob",
+            modality: "image",
+            mime_type: "image/png",
+            byte_size: 800_000,
+            stripped_reason: "not_captured",
+          },
+          { type: "text", content: "and this" },
+        ]);
+      });
+    }
+
+    it(`in ${key} exports as the JSON text of its base64 form`, () => {
+      const asText = normalized({ [key]: JSON.stringify(withLargeBlob(key, LARGE_BASE64)) });
+      expect(normalized({ [key]: withLargeBlob(key, LARGE_BASE64) })).toEqual(asText);
+      expect(normalized({ [key]: withLargeBlob(key, LARGE_PNG) })).toEqual(asText);
+    });
+  }
+
+  it("with no MIME type is sized from its bytes", () => {
+    const blob = { type: "blob", modality: "image", content: LARGE_PNG };
+    const asText = JSON.stringify([{ ...blob, content: LARGE_BASE64 }]);
+    const exported = normalized({ [SYSTEM]: [blob] });
+    expect(exported).toEqual(normalized({ [SYSTEM]: asText }));
+    const [part] = JSON.parse(exported[SYSTEM] as string);
+    expect(part.byte_size).toBe(800_000);
+    expect(part).not.toHaveProperty("mime_type");
+  });
+});
+
 describe("a value that is not structured", () => {
   for (const value of ["already text", 3, true]) {
     it(`keeps ${JSON.stringify(value)}`, () => {
