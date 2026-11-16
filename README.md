@@ -601,7 +601,7 @@ variables, then the defaults below.
 | `serviceVersion`   | `RIUS_SERVICE_VERSION`   | none (also read from `service.version` in `OTEL_RESOURCE_ATTRIBUTES`; left off the resource when unset, never defaulted) |
 | `disabled`         | `RIUS_DISABLED`          | `false`                                       |
 | `sampleRate`       | `RIUS_SAMPLE_RATE`       | `1.0`                                         |
-| `captureContent`   | `RIUS_CAPTURE_CONTENT`   | `true`                                        |
+| `captureContent`   | `RIUS_CAPTURE_CONTENT`, then `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT` | `true` |
 | `mask`             | (options only)           | none (`(value, { key }) => unknown`; the return value is stored, JSON-encoded if not a primitive; return `""` to blank, `null` or `undefined` to drop the attribute) |
 | `heartbeat`        | `RIUS_HEARTBEAT`         | `true`                                        |
 | `heartbeatInterval` | `RIUS_HEARTBEAT_INTERVAL` | `15` (seconds; clamped 5-300)               |
@@ -701,7 +701,15 @@ without touching the first.
 
 `captureContent` controls whether input/output content (prompts,
 completions, tool arguments) is attached to spans. It defaults to
-`true`. Set it to `false`, or supply a `mask` function, if your spans
+`true`. When neither the option nor `RIUS_CAPTURE_CONTENT` is set, the
+OpenTelemetry GenAI setting `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT` is
+read: `NO_CONTENT` turns capture off, and so does `EVENT_ONLY`, because Rius
+records content on spans. `SPAN_ONLY` and `SPAN_AND_EVENT` keep it on. The
+value is case-insensitive. An unrecognised one keeps capture on and logs a
+warning naming the valid values (the OpenTelemetry conventions fall back to
+`NO_CONTENT` instead). An empty value of either variable counts as unset (an
+empty `RIUS_CAPTURE_CONTENT` also logs a warning). With neither variable set,
+capture is on, unlike the OpenTelemetry default of `NO_CONTENT`. Set it to `false`, or supply a `mask` function, if your spans
 must not carry raw content. Both apply to span attributes and to the
 attributes of span events and links, including the `metadata.*` copies
 `@arizeai/openinference-vercel`'s span processor makes of attributes it does
