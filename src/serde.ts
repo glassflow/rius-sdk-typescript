@@ -145,7 +145,7 @@ function renderable(raw: unknown, value: unknown): unknown {
 }
 
 /** A byte object's marker: the strip's replacement, unknown mime, its size in bytes. */
-function byteObjectMarker(bytes: { byteLength: number }): string {
+export function byteObjectMarker(bytes: { byteLength: number }): string {
   return replacement(undefined, bytes.byteLength);
 }
 
@@ -236,7 +236,7 @@ function stringify(value: unknown, blobBytes = false): string {
         const raw = (this as Record<string, unknown> | undefined)?.[key];
         const rendered =
           blobBytes && key === "content" && isByteObject(raw) && isBlobPart(this)
-            ? base64(raw)
+            ? (base64(raw) ?? renderable(raw, v))
             : renderable(raw, v);
         if (typeof rendered === "object" && rendered !== null) {
           // `this` is the holder of the current key; unwind to it so the stack
@@ -254,6 +254,8 @@ function stringify(value: unknown, blobBytes = false): string {
       }) ?? String(value);
     return text;
   } catch {
+    // A throwing getter, toJSON or the like lands here, so jsonText never
+    // throws; base64 does not, an unreadable buffer is its marker instead.
     return "[unserializable]";
   }
 }
@@ -263,12 +265,21 @@ function isBlobPart(holder: unknown): boolean {
   return asRecord(holder)?.type === "blob";
 }
 
-/** A byte object's bytes as base64. */
-function base64(bytes: { byteLength: number }): string {
-  const view = ArrayBuffer.isView(bytes)
-    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    : new Uint8Array(bytes as ArrayBufferLike);
-  return Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
+/**
+ * A byte object's bytes as base64, or `undefined` when they cannot be read (a
+ * detached ArrayBuffer, or a view on one): the part then keeps the marker, as
+ * the Python SDK keeps it for a released memoryview, and the rest of the value
+ * is still written.
+ */
+function base64(bytes: { byteLength: number }): string | undefined {
+  try {
+    const view = ArrayBuffer.isView(bytes)
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new Uint8Array(bytes as ArrayBufferLike);
+    return Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
+  } catch {
+    return undefined;
+  }
 }
 
 const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];

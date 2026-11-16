@@ -123,7 +123,14 @@ import {
   SpanKind,
   TOOL_NAME,
 } from "./semconv.js";
-import { isByteObject, jsonText, stripMedia, toAttributeValue, wellFormed } from "./serde.js";
+import {
+  byteObjectMarker,
+  isByteObject,
+  jsonText,
+  stripMedia,
+  toAttributeValue,
+  wellFormed,
+} from "./serde.js";
 import { normalizeTanstackSpan } from "./tanstackAi.js";
 
 /**
@@ -2409,8 +2416,10 @@ const STRUCTURED_CONTENT_KEYS = [
  * that text ({@link jsonText}: the one JSON encoding, uncut, a blob part's
  * byte content as its base64 and any other byte object the marker), and from
  * then on it is that string: a span carrying the structured value and a span
- * carrying its JSON text end the same. A string, a number, a boolean or a lone
- * byte object is not structured, and is left to the passes as it is.
+ * carrying its JSON text end the same. A string, a number or a boolean is not
+ * structured, and is left to the passes as it is. A lone byte object is the
+ * marker, as the Python SDK's media strip writes it: the strip here reads only
+ * strings, and OTLP would export the bytes.
  *
  * OpenTelemetry JS drops a mapping attribute when it is set but keeps an
  * array of primitives, and a span built or edited on a path that does not
@@ -2423,8 +2432,8 @@ export function structuredContentAsJson(
 ): void {
   for (const key of STRUCTURED_CONTENT_KEYS) {
     const value: unknown = attributes[key];
-    if (typeof value !== "object" || value === null || isByteObject(value)) continue;
-    attributes[key] = jsonText(value);
+    if (typeof value !== "object" || value === null) continue;
+    attributes[key] = isByteObject(value) ? byteObjectMarker(value) : jsonText(value);
   }
 }
 

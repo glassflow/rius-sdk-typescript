@@ -119,6 +119,49 @@ describe("a structured content key", () => {
     }
   });
 
+  it("keeps the rest of the value when a blob's bytes cannot be read", () => {
+    const detached = new ArrayBuffer(16);
+    structuredClone(detached, { transfer: [detached] });
+    const out = normalized({
+      [OUTPUT]: [
+        {
+          role: "assistant",
+          parts: [
+            { type: "text", content: "keep me" },
+            { type: "blob", mime_type: "image/png", content: detached },
+          ],
+        },
+      ],
+    });
+    // As the Python SDK writes a blob whose bytes it cannot read: the part
+    // without its content and without a size.
+    expect(JSON.parse(out[OUTPUT] as string)[0].parts).toEqual([
+      { type: "text", content: "keep me" },
+      { type: "blob", modality: "image", mime_type: "image/png", stripped_reason: "not_captured" },
+    ]);
+  });
+
+  it("never leaks a blob's bytes from a value it cannot encode plainly", () => {
+    const image = new Uint8Array(10240).map((_, i) => i % 256);
+    const encoded = Buffer.from(image).toString("base64").slice(0, 64);
+    const blob = { type: "blob", mime_type: "image/png", content: image };
+    const cycle: Record<string, unknown>[] = [{ role: "user", parts: [blob] }];
+    (cycle[0] as Record<string, unknown>).self = cycle;
+    const byteKeyed = [
+      new Map<unknown, unknown>([
+        [PNG, 1],
+        ["parts", [blob]],
+      ]),
+    ];
+    for (const value of [cycle, byteKeyed]) {
+      const text = normalized({ [INPUT]: value })[INPUT] as string;
+      // The encoder's own cycle and Map handling keep the value JSON, so the
+      // blob is still rebuilt and stripped.
+      expect(text).not.toContain(encoded);
+      expect(text).toContain('"byte_size":10240,"stripped_reason":"not_captured"');
+    }
+  });
+
   it("writes any other byte object as the marker", () => {
     const out = normalized({
       [OUTPUT]: [{ role: "assistant", parts: [{ type: "x", data: PNG }] }],
@@ -183,6 +226,12 @@ describe("a value that is not structured", () => {
       expect(normalized({ [INPUT]: value })[INPUT]).toBe(value);
     });
   }
+
+  it("writes a lone byte object as the marker, as the Python SDK does", () => {
+    for (const bytes of [PNG, Buffer.from(PNG), PNG.buffer]) {
+      expect(normalized({ [INPUT]: bytes })[INPUT]).toBe(replacement(undefined, 8));
+    }
+  });
 
   it("keeps a structured value under any other key", () => {
     expect(normalized({ "app.payload": { a: [1, 2] } })["app.payload"]).toEqual({ a: [1, 2] });
