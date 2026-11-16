@@ -68,8 +68,20 @@ export function operationForKind(kind: string): string | undefined {
   return Object.hasOwn(OPERATION_BY_KIND, kind) ? OPERATION_BY_KIND[kind as SpanKind] : undefined;
 }
 
+/**
+ * The taxonomy value for a `gen_ai.operation.name`, or `undefined` if unknown.
+ *
+ * The conventions name a framework entrypoint `invoke_{framework_entrypoint}`
+ * (`invoke_runner` is one) and define it as not being an agent, so no table
+ * can list them all. An `invoke_` operation the table does not know is a CHAIN
+ * span; `invoke_agent` is in the table and stays AGENT.
+ */
 export function kindForOperation(operation: string): string | undefined {
-  return Object.hasOwn(KIND_BY_OPERATION, operation) ? KIND_BY_OPERATION[operation] : undefined;
+  if (Object.hasOwn(KIND_BY_OPERATION, operation)) return KIND_BY_OPERATION[operation];
+  if (operation.startsWith("invoke_") && operation.length > "invoke_".length) {
+    return SpanKind.CHAIN;
+  }
+  return undefined;
 }
 
 export function otelSpanKind(kind: SpanKind): OtelSpanKind {
