@@ -144,9 +144,28 @@ function renderable(raw: unknown, value: unknown): unknown {
   return value;
 }
 
-/** A byte object's marker: the strip's replacement, unknown mime, its size in bytes. */
-function byteObjectMarker(bytes: { byteLength: number }): string {
-  return replacement(undefined, bytes.byteLength);
+/**
+ * A byte object's marker: the strip's replacement, unknown mime, its size in
+ * bytes, or an unknown size when its bytes cannot be read. A detached buffer
+ * reports a byteLength of 0, which is not its size, as the Python SDK writes
+ * a released memoryview's size as unknown.
+ */
+export function byteObjectMarker(bytes: { byteLength: number }): string {
+  return replacement(undefined, readBytes(bytes)?.byteLength);
+}
+
+/**
+ * A byte object's bytes, or `undefined` when they cannot be read (a detached
+ * ArrayBuffer, or a view on one): a typed array cannot be made over them.
+ */
+function readBytes(bytes: { byteLength: number }): Uint8Array | undefined {
+  try {
+    return ArrayBuffer.isView(bytes)
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new Uint8Array(bytes as ArrayBufferLike);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The built-in tags of the byte objects that are not views. */
@@ -159,7 +178,7 @@ const BUFFER_TAGS: readonly string[] = ["[object ArrayBuffer]", "[object SharedA
  * another realm (a vm context, a worker's transfer) has another realm's
  * constructor, so isView and the built-in tag are what recognize it.
  */
-function isByteObject(raw: unknown): raw is { byteLength: number } {
+export function isByteObject(raw: unknown): raw is { byteLength: number } {
   return (
     ArrayBuffer.isView(raw) ||
     (typeof raw === "object" &&
@@ -197,6 +216,29 @@ export function toAttributeValue(value: unknown): string {
     return String(value);
   }
   if (value === null || value === undefined) return "null";
+  return textValue(stringify(value));
+}
+
+/**
+ * A structured value as JSON text in the one encoding, neither stripped nor
+ * cut: the Python SDK's `json_text`. For a value another instrumentation set
+ * structured where the conventions also allow its JSON text, which is then
+ * read and stripped exactly as that string would be. Unlike
+ * {@link toAttributeValue}, a blob part's byte content
+ * (`{type: "blob", content: <bytes>}`) is written as its base64, as a blob
+ * part's JSON carries it, so the media rebuild sizes the part and strips it;
+ * any other byte object is the marker. Must never throw.
+ */
+export function jsonText(value: unknown): string {
+  return stringify(value, true);
+}
+
+/**
+ * The JSON text of a value that is not a string, number, boolean, bigint,
+ * null or undefined, before any cut. `blobBytes` writes a blob part's byte
+ * content as its base64 (see {@link jsonText}).
+ */
+function stringify(value: unknown, blobBytes = false): string {
   // Track the ANCESTOR chain, not every object seen. A global seen-set would
   // report a shared sibling reference ({ a: x, b: x }) as circular and drop
   // real data, which is a plausible shape in LLM message payloads.
@@ -211,7 +253,10 @@ export function toAttributeValue(value: unknown): string {
     const text =
       JSON.stringify({ "": value }[""], function (this: unknown, key: string, v: unknown) {
         const raw = (this as Record<string, unknown> | undefined)?.[key];
-        const rendered = renderable(raw, v);
+        const rendered =
+          blobBytes && key === "content" && isByteObject(raw) && isBlobPart(this)
+            ? (base64(raw) ?? renderable(raw, v))
+            : renderable(raw, v);
         if (typeof rendered === "object" && rendered !== null) {
           // `this` is the holder of the current key; unwind to it so the stack
           // reflects the path from the root rather than traversal order.
@@ -226,10 +271,30 @@ export function toAttributeValue(value: unknown): string {
         }
         return rendered;
       }) ?? String(value);
-    return textValue(text);
+    return text;
   } catch {
+    // A throwing getter, toJSON or the like lands here, so jsonText never
+    // throws; base64 does not, an unreadable buffer is its marker instead.
     return "[unserializable]";
   }
+}
+
+/** A holder that is a semconv blob part: its `type` is `blob`. */
+function isBlobPart(holder: unknown): boolean {
+  return asRecord(holder)?.type === "blob";
+}
+
+/**
+ * A byte object's bytes as base64, or `undefined` when they cannot be read (a
+ * detached ArrayBuffer, or a view on one): the part then keeps the marker, as
+ * the Python SDK keeps it for a released memoryview, and the rest of the value
+ * is still written.
+ */
+function base64(bytes: { byteLength: number }): string | undefined {
+  const view = readBytes(bytes);
+  return view === undefined
+    ? undefined
+    : Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
 }
 
 const SCALAR_TYPES: readonly string[] = ["string", "number", "boolean"];

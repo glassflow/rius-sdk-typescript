@@ -17,6 +17,7 @@ import {
   uriModality,
   urlPart,
 } from "./mediaParts.js";
+import { isToolCallName, unnamedToolCallPart } from "./messages.js";
 import { nameNativeAnthropicError } from "./nativeProviderSpans.js";
 import {
   AI_OPERATION_ID,
@@ -123,8 +124,16 @@ import {
   SpanKind,
   TOOL_NAME,
 } from "./semconv.js";
-import { stripMedia, toAttributeValue, wellFormed } from "./serde.js";
+import {
+  byteObjectMarker,
+  isByteObject,
+  jsonText,
+  stripMedia,
+  toAttributeValue,
+  wellFormed,
+} from "./serde.js";
 import { normalizeTanstackSpan } from "./tanstackAi.js";
+import { semconvToolDefinitions } from "./toolDefinitions.js";
 
 /**
  * Normalization: third-party attribute dialects rewritten to the conventions
@@ -1412,6 +1421,7 @@ function vercelPart(part: unknown, raw: boolean): Record<string, unknown> | null
     case "reasoning":
       return { type: "reasoning", content: part.text };
     case "tool-call":
+      if (!isToolCallName(part.toolName)) return unnamedToolCallPart(part.toolCallId, part.input);
       return {
         type: "tool_call",
         id: part.toolCallId ?? null,
@@ -1573,7 +1583,11 @@ function vercelOutput(
     for (const call of calls) {
       const input =
         typeof call.input === "string" ? (parseJson(call.input) ?? call.input) : call.input;
-      parts.push({ type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input });
+      parts.push(
+        isToolCallName(call.toolName)
+          ? { type: "tool_call", id: call.toolCallId, name: call.toolName, arguments: input }
+          : unnamedToolCallPart(call.toolCallId, input),
+      );
     }
   }
   const message: Record<string, unknown> = { role: "assistant", parts };
@@ -2239,7 +2253,8 @@ function repeatsToolCall(
  * content first (a `tool_call_response` when the message carries a tool-call
  * id, a text part otherwise), then the multimodal contents, then the tool
  * calls, each family in index order. An empty role, id, name or arguments is
- * omitted rather than written empty; empty content is still a part.
+ * omitted rather than written empty; empty content is still a part. A tool
+ * call left without a name is a text part (`unnamedToolCallPart`).
  */
 function encodeMessage(message: FlatMessage): Record<string, unknown> {
   const parts: Record<string, unknown>[] = [];
@@ -2259,7 +2274,7 @@ function encodeMessage(message: FlatMessage): Record<string, unknown> {
     for (const [field, name] of TOOL_CALL_FIELDS) {
       if (Object.hasOwn(call, field) && call[field]) part[name] = call[field];
     }
-    parts.push(part);
+    parts.push(Object.hasOwn(part, "name") ? part : unnamedToolCallPart(part.id, part.arguments));
   }
   return message.role ? { role: message.role, parts } : { parts };
 }
@@ -2391,6 +2406,46 @@ export function reassembleOpenInferenceMessages(
 }
 
 /**
+ * The content keys the GenAI conventions ask for as structured values (maps
+ * and arrays) rather than JSON strings.
+ */
+const STRUCTURED_CONTENT_KEYS = [
+  GEN_AI_INPUT_MESSAGES,
+  GEN_AI_OUTPUT_MESSAGES,
+  GEN_AI_SYSTEM_INSTRUCTIONS,
+  GEN_AI_TOOL_DEFINITIONS,
+] as const;
+
+/**
+ * The content keys set as structured values, each written as its JSON text,
+ * in place. Every pass after this one, the media rebuild and the strip
+ * included, reads these keys as JSON text, as the conventions used to define
+ * them and as this SDK still writes them. An object or an array is written as
+ * that text ({@link jsonText}: the one JSON encoding, uncut, a blob part's
+ * byte content as its base64 and any other byte object the marker), and from
+ * then on it is that string: a span carrying the structured value and a span
+ * carrying its JSON text end the same. A string, a number or a boolean is not
+ * structured, and is left to the passes as it is. A lone byte object is the
+ * marker, as the Python SDK's media strip writes it: the strip here reads only
+ * strings, and OTLP would export the bytes.
+ *
+ * OpenTelemetry JS drops a mapping attribute when it is set but keeps an
+ * array of primitives, and a span built or edited on a path that does not
+ * validate can carry anything, so any object is read here.
+ *
+ * Ported from the Python SDK's `structured_content_as_json`.
+ */
+export function structuredContentAsJson(
+  attributes: Record<string, AttributeValue | undefined>,
+): void {
+  for (const key of STRUCTURED_CONTENT_KEYS) {
+    const value: unknown = attributes[key];
+    if (typeof value !== "object" || value === null) continue;
+    attributes[key] = isByteObject(value) ? byteObjectMarker(value) : jsonText(value);
+  }
+}
+
+/**
  * Native semconv media parts in the message keys, in their normalized shape,
  * in place: a blob loses its content (any instrumentor writing blob parts,
  * pydantic-ai and @ai-sdk/otel among them), and each media part takes its
@@ -2463,9 +2518,10 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  *
  * - `llm.tools.N.tool.json_schema`, which the OpenInference instrumentations
  *   write one per tool. Each value is a JSON string; the schemas are parsed
- *   and re-serialized as ONE array, in numeric index order, VERBATIM: an
- *   Anthropic `input_schema` stays an Anthropic `input_schema`, as on the
- *   native `tools` option. The indexed keys are then deleted. If any one
+ *   and re-serialized as ONE array, in numeric index order, in the
+ *   conventions' shape, as on the native `tools` option (see
+ *   toolDefinitions.ts; a built-in tool's type is prefixed with the span's
+ *   `gen_ai.provider.name`). The indexed keys are then deleted. If any one
  *   schema is not a string or does not parse, the whole family is left
  *   untouched rather than reassembled without it: it is content by prefix
  *   already, so nothing escapes, and a partial array would be a silent loss.
@@ -2522,13 +2578,13 @@ export function normalizeToolDefinitions(
     // gen_ai.tool.definitions and remove them then, so normalizing twice
     // would differ from normalizing once.
     takeBagDefinitions(attributes);
-    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(schemas);
+    if (!native) setDefinitions(attributes, schemas);
     return;
   }
 
   const definitions = takeBagDefinitions(attributes);
   if (definitions !== undefined) {
-    if (!native) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+    if (!native) setDefinitions(attributes, definitions);
     return;
   }
 
@@ -2552,9 +2608,26 @@ export function normalizeToolDefinitions(
     }
   }
   delete attributes[VERCEL_PROMPT_TOOLS];
-  if (!native && parsed.length > 0) {
-    attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(parsed);
-  }
+  if (!native) setDefinitions(attributes, parsed);
+}
+
+/**
+ * `gen_ai.tool.definitions` from tools, unless they come to no definition. An
+ * empty list (no tools, or a Gemini tool with no declarations) writes
+ * nothing, as the sink does; the caller removes the sources all the same.
+ */
+function setDefinitions(
+  attributes: Record<string, AttributeValue | undefined>,
+  tools: unknown[],
+): void {
+  const definitions = semconvToolDefinitions(tools, providerOf(attributes));
+  if (definitions.length > 0) attributes[GEN_AI_TOOL_DEFINITIONS] = toAttributeValue(definitions);
+}
+
+/** The span's `gen_ai.provider.name`, which prefixes built-in tool types. */
+function providerOf(attributes: Record<string, AttributeValue | undefined>): string | undefined {
+  const provider = attributes[GEN_AI_PROVIDER_NAME];
+  return typeof provider === "string" ? provider : undefined;
 }
 
 /** The Vercel AI SDK's tool definitions. A source spelling, inline. */
@@ -2836,6 +2909,9 @@ export class NormalizingSpanProcessor implements SpanProcessor {
   onEnd(span: ReadableSpan): void {
     // Ended spans have no setAttribute; the bag is writable by reference.
     const attributes = span.attributes as Record<string, AttributeValue | undefined>;
+    // First, so every pass below reads the content keys as JSON text, however
+    // the instrumentation set them.
+    structuredContentAsJson(attributes);
     this.normalize(attributes, this.rules, (key, value) => {
       attributes[key] = value;
     });

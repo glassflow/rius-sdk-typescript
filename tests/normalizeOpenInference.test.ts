@@ -790,6 +790,33 @@ describe("taxonomy", () => {
     }
   });
 
+  it("gives framework entrypoint operations the CHAIN kind, but keeps invoke_agent AGENT", () => {
+    // The conventions name a framework entrypoint invoke_{framework_entrypoint}
+    // and define it as not being an agent. invoke_runner is in the table; any
+    // other invoke_ operation lands on CHAIN through the prefix.
+    expect(kindForOperation("invoke_runner")).toBe(SpanKind.CHAIN);
+    expect(kindForOperation("invoke_crew")).toBe(SpanKind.CHAIN);
+    expect(kindForOperation("invoke_workflow")).toBe(SpanKind.CHAIN);
+    expect(kindForOperation("invoke_agent")).toBe(SpanKind.AGENT);
+  });
+
+  it("derives no kind from an operation that only resembles an entrypoint", () => {
+    expect(kindForOperation("invoke_")).toBeUndefined();
+    expect(kindForOperation("invoke")).toBeUndefined();
+    expect(kindForOperation("reinvoke_runner")).toBeUndefined();
+  });
+
+  it("puts the CHAIN kind on a native span with an entrypoint operation", () => {
+    expect(normalized({ "gen_ai.operation.name": "invoke_runner" })).toEqual({
+      "gen_ai.operation.name": "invoke_runner",
+      "openinference.span.kind": "CHAIN",
+    });
+    expect(normalized({ "gen_ai.operation.name": "invoke_crew" })).toEqual({
+      "gen_ai.operation.name": "invoke_crew",
+      "openinference.span.kind": "CHAIN",
+    });
+  });
+
   it("resolves nothing through the prototype chain", () => {
     expect(operationForKind("constructor")).toBeUndefined();
     expect(kindForOperation("toString")).toBeUndefined();

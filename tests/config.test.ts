@@ -72,6 +72,92 @@ describe("resolveConfig", () => {
     expect(resolveConfig({}, { RIUS_CAPTURE_CONTENT: "TRUE" }).captureContent).toBe(true);
   });
 
+  describe("the conventions' OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT", () => {
+    const OTEL = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT";
+
+    it.each([
+      ["NO_CONTENT", false],
+      // Rius records content on spans only, so a request for events alone
+      // asks for no content on the spans Rius keeps.
+      ["EVENT_ONLY", false],
+      ["SPAN_ONLY", true],
+      ["SPAN_AND_EVENT", true],
+      // Case-insensitive, as the conventions define it.
+      ["no_content", false],
+      [" span_only ", true],
+    ])("reads %j as capture %s when RIUS_CAPTURE_CONTENT is unset", (raw, expected) => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(expected);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it.each([["maybe"], ["true"], ["false"], ["SPAN"], ["NO-CONTENT"]])(
+      "keeps capture on and warns on the unrecognised %j",
+      (raw) => {
+        // Deliberately not the conventions' NO_CONTENT: capture is on by
+        // default in Rius, and the warning names the value and the valid ones.
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(true);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const message = String(warnSpy.mock.calls[0][0]);
+        expect(message).toContain(`${OTEL}="${raw}" is not recognised`);
+        expect(message).toContain("content capture stays on");
+        for (const valid of ["NO_CONTENT", "SPAN_ONLY", "EVENT_ONLY", "SPAN_AND_EVENT"]) {
+          expect(message).toContain(valid);
+        }
+        warnSpy.mockRestore();
+      },
+    );
+
+    it.each([[""], ["  "]])("reads an empty %j as unset", (raw) => {
+      // OpenTelemetry reads an empty variable as unset; templated deployments
+      // render an omitted value as one.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(resolveConfig({}, { [OTEL]: raw }).captureContent).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it.each([
+      ["", "NO_CONTENT", false],
+      ["  ", "NO_CONTENT", false],
+      ["", "SPAN_ONLY", true],
+      ["  ", "SPAN_ONLY", true],
+      ["", undefined, true],
+      ["  ", undefined, true],
+    ])("reads an empty RIUS_CAPTURE_CONTENT %j as unset, so %s applies", (rius, otel, expected) => {
+      // Still a warning, as for the other blank RIUS_* flags, but it does
+      // not shadow the OpenTelemetry setting.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const env: Record<string, string> = { RIUS_CAPTURE_CONTENT: rius };
+      if (otel !== undefined) env[OTEL] = otel;
+      expect(resolveConfig({}, env).captureContent).toBe(expected);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain(
+        "RIUS_CAPTURE_CONTENT is empty; treated as unset",
+      );
+      warnSpy.mockRestore();
+    });
+
+    it.each([
+      ["true", true],
+      ["false", false],
+    ])("loses to RIUS_CAPTURE_CONTENT=%s", (rius, expected) => {
+      const otel = expected ? "NO_CONTENT" : "SPAN_ONLY";
+      const env = { RIUS_CAPTURE_CONTENT: rius, [OTEL]: otel };
+      expect(resolveConfig({}, env).captureContent).toBe(expected);
+    });
+
+    it.each([[true], [false]])("loses to the captureContent option (%s)", (option) => {
+      const env = {
+        RIUS_CAPTURE_CONTENT: String(!option),
+        [OTEL]: option ? "NO_CONTENT" : "SPAN_ONLY",
+      };
+      expect(resolveConfig({ captureContent: option }, env).captureContent).toBe(option);
+    });
+  });
+
   it("recognizes explicit positive value for RIUS_DISABLED", () => {
     expect(resolveConfig({}, { RIUS_DISABLED: "true" }).disabled).toBe(true);
   });

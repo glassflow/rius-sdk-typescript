@@ -22,7 +22,9 @@ function sizesOf(index = 0): Record<string, unknown> {
 }
 
 const tools = [{ type: "function", function: { name: "get_weather", parameters: {} } }];
-const toolBytes = Buffer.byteLength(JSON.stringify(tools[0]));
+// Recorded, and so measured, in the conventions' function-tool shape.
+const recordedTools = [{ type: "function", name: "get_weather", parameters: {} }];
+const toolBytes = Buffer.byteLength(JSON.stringify(recordedTools[0]));
 
 describe("rius.context.sizes on generation spans", () => {
   it("is carried by every generation span, even one with no content set", async () => {
@@ -142,6 +144,6 @@ describe("rius.context.sizes on generation spans", () => {
     expect(span.attributes["gen_ai.output.messages"]).toBe(
       '[{"role":"assistant","parts":[{"type":"text","content":"yo"}]}]',
     );
-    expect(span.attributes["gen_ai.tool.definitions"]).toBe(JSON.stringify(tools));
+    expect(span.attributes["gen_ai.tool.definitions"]).toBe(JSON.stringify(recordedTools));
   });
 });

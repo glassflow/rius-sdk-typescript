@@ -7,12 +7,13 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTracer, init, type RiusClient } from "../src/client.js";
-import { COMPACTION_OPERATION, CompactionFlagSpanProcessor } from "../src/compaction.js";
+import { CompactionFlagSpanProcessor } from "../src/compaction.js";
 import { startGeneration } from "../src/generation.js";
 import { markCompaction } from "../src/markCompaction.js";
 import {
   GEN_AI_CONVERSATION_COMPACTED,
   GEN_AI_OPERATION_NAME,
+  GEN_AI_OPERATION_NAME_COMPACTION,
   kindForOperation,
   OPENINFERENCE_SPAN_KIND,
   PENDING_IDENTITY_ATTRIBUTES,
@@ -90,7 +91,7 @@ afterEach(async () => {
 
 describe("the compaction operation", () => {
   it("is the one the registry maps to CHAIN", () => {
-    expect(kindForOperation(COMPACTION_OPERATION)).toBe(SpanKind.CHAIN);
+    expect(kindForOperation(GEN_AI_OPERATION_NAME_COMPACTION)).toBe(SpanKind.CHAIN);
   });
 });
 

@@ -39,13 +39,6 @@ import { textValue } from "./serde.js";
  * {@link CompactionFlagSpanProcessor}.
  */
 
-/**
- * The `gen_ai.operation.name` of a span that is a compaction step of its own.
- * The registry maps the operation to CHAIN but exports no constant for it, so
- * the value is spelled here and a test pins it to that mapping.
- */
-export const COMPACTION_OPERATION = "compaction";
-
 /** The attributes of one `rius.compaction` event. */
 type EventAttributes = Record<string, AttributeValue>;
 
