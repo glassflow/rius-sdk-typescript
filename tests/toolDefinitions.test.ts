@@ -330,6 +330,106 @@ describe("semconvToolDefinitions", () => {
     ]);
   });
 
+  it.each(["mcp", "openai.mcp", "azure.mcp"])(
+    "drops a %s tool's authorization with its headers",
+    (kind) => {
+      // OpenAI's MCP tool also carries `authorization`, an OAuth access token
+      // for the remote server or connector.
+      const tool = {
+        type: kind,
+        server_label: "gh",
+        connector_id: "connector_gmail",
+        authorization: "ya29.token",
+        headers: { Authorization: "Bearer secret" },
+      };
+      const once = semconvToolDefinitions([tool], "openai");
+      expect(once).toEqual([
+        {
+          type: kind === "mcp" ? "openai.mcp" : kind,
+          server_label: "gh",
+          connector_id: "connector_gmail",
+        },
+      ]);
+      expect(semconvToolDefinitions(once, "openai")).toEqual(once);
+    },
+  );
+
+  it("drops the credentials of a Vercel MCP provider tool", () => {
+    // The Vercel AI SDK's id becomes the type: once it reads `*.mcp`, the
+    // credentials go, as they would on a second pass.
+    const tool = { type: "provider", id: "openai.mcp", name: "mcp", authorization: "t" };
+    const once = semconvToolDefinitions([tool], undefined);
+    expect(once).toEqual([{ type: "openai.mcp", id: "openai.mcp", name: "mcp" }]);
+    expect(semconvToolDefinitions(once, undefined)).toEqual(once);
+  });
+
+  it("keeps an authorization member on other tools", () => {
+    const tool = { type: "web_search", authorization: "kept" };
+    expect(semconvToolDefinitions([tool], "openai")).toEqual([
+      { type: "openai.web_search", authorization: "kept" },
+    ]);
+  });
+
+  it("lifts a Chat Completions custom tool and keeps it custom", () => {
+    // Chat Completions nests a custom tool's fields under `custom`; they are
+    // lifted as `function`'s are, and the tool stays a provider tool.
+    const tool = {
+      type: "custom",
+      custom: { name: "code_exec", description: "Runs code", format: { type: "text" } },
+    };
+    const once = semconvToolDefinitions([tool], "openai");
+    expect(once).toEqual([
+      {
+        type: "openai.custom",
+        name: "code_exec",
+        description: "Runs code",
+        format: { type: "text" },
+      },
+    ]);
+    expect(semconvToolDefinitions(once, "openai")).toEqual(once);
+  });
+
+  it("does not lift a nested custom over a top-level name", () => {
+    const tool = { type: "custom", name: "x", custom: { name: "y" } };
+    expect(semconvToolDefinitions([tool], "openai")).toEqual([
+      { type: "openai.custom", name: "x", custom: { name: "y" } },
+    ]);
+  });
+
+  it("makes a lifted custom tool with an input_schema a function", () => {
+    // Anthropic's custom tool rule applies to the lifted tool too, so the
+    // output is the same whether or not the provider prefixed it.
+    const tool = { type: "custom", custom: { name: "f", input_schema: PARAMETERS } };
+    for (const provider of ["anthropic", undefined]) {
+      const once = semconvToolDefinitions([tool], provider);
+      expect(once).toEqual([{ type: "function", name: "f", parameters: PARAMETERS }]);
+      expect(semconvToolDefinitions(once, provider)).toEqual(once);
+    }
+  });
+
+  it.each([
+    { name: "" },
+    { name: "", input_schema: PARAMETERS },
+    { type: "custom", name: "", input_schema: PARAMETERS },
+    { toolSpec: { name: "", inputSchema: { json: PARAMETERS } } },
+  ])("treats an empty name as no name: %j", (tool) => {
+    // As for tool calls, an empty name is a missing one: no function tool
+    // with an empty name is made.
+    const once = semconvToolDefinitions([tool], undefined);
+    expect(once).toEqual([tool]);
+    expect(semconvToolDefinitions(once, undefined)).toEqual(once);
+  });
+
+  it("does not make a Gemini declaration with an empty name a function", () => {
+    const tools = [{ function_declarations: [{ name: "", description: "d" }] }];
+    expect(semconvToolDefinitions(tools, "gcp.gemini")).toEqual([{ name: "", description: "d" }]);
+  });
+
+  it("lifts a nested function over an empty top-level name", () => {
+    const tool = { type: "function", name: "", function: { name: "f" } };
+    expect(semconvToolDefinitions([tool], "openai")).toEqual([{ type: "function", name: "f" }]);
+  });
+
   it("does not mutate the caller's list", () => {
     const tools = [{ name: "b", input_schema: PARAMETERS }, { type: "web_search" }];
     semconvToolDefinitions(tools, "openai");

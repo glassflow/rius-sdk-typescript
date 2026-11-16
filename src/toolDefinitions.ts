@@ -9,11 +9,18 @@
  *
  * - OpenAI Chat Completions nests the function, `{type: "function",
  *   function: {name, ...}}`: the nested object is lifted to the top level,
- *   unless the top level already has a string `name` (then the tool is already
- *   flat, and `function` is one of its fields).
+ *   unless the top level already has a name (then the tool is already flat,
+ *   and `function` is one of its fields).
+ * - Chat Completions nests a custom tool the same way, `{type: "custom",
+ *   custom: {name, description, format}}`: the nested object is lifted by the
+ *   same rule, and the tool stays a custom tool (a provider tool, below),
+ *   unless the lifted tool is Anthropic's custom tool.
  * - Anthropic has no `type` (or `"custom"`) and names the schema
  *   `input_schema`; OpenAI's legacy `functions` entries have no `type`
- *   either. A definition with a string `name` and no `type` is a function.
+ *   either. A definition with a name and no `type` is a function, and so is a
+ *   `custom` one with an `input_schema`.
+ * - A name is a non-empty string. An empty `name` is no name, as it is for a
+ *   tool call: no function tool is made with an empty name.
  * - The schema is `parameters`; `input_schema` and the Vercel AI SDK's
  *   `inputSchema` are renamed to it, in place.
  * - Bedrock Converse wraps the function, `{toolSpec: {name, description,
@@ -21,7 +28,7 @@
  *   `parameters`.
  * - A Gemini tool holds a list of declarations, `{function_declarations:
  *   [...]}` (`functionDeclarations` in camel case; every spelling holding a
- *   list expands, snake case first). Each declaration with a string `name`
+ *   list expands, snake case first). Each declaration with a name
  *   becomes its own function tool, its schema taken from `parameters` or,
  *   failing that, `parametersJsonSchema` / `parameters_json_schema` /
  *   `input_schema` / `inputSchema`. A declaration without a name, and whatever
@@ -43,9 +50,13 @@
  * read as the tools the model was offered, and an invented name would be a
  * tool offered and never called by that name.
  *
- * An MCP tool (OpenAI Responses' `type: "mcp"`) loses its `headers`: they are
- * the requests' headers to the MCP server, and can carry an `Authorization`
- * credential, which never belongs in telemetry.
+ * An MCP tool (OpenAI Responses' `type: "mcp"`, or any `<provider>.mcp` type it
+ * is written as) loses its `headers` and its `authorization`: the headers are
+ * the requests' headers to the MCP server and can carry an `Authorization`
+ * credential, and `authorization` is an OAuth access token for the server or
+ * connector. Credentials never belong in telemetry. This applies to the
+ * definitions rewritten here, not to definitions another instrumentation
+ * already wrote as `gen_ai.tool.definitions`.
  *
  * Anything else (not an object, or no usable `type` or `name`) is kept as it
  * is: it is the caller's data, and there is no shape to vouch for.
@@ -74,11 +85,19 @@ const GEMINI_PARAMETER_SPELLINGS = ["parametersJsonSchema", "parameters_json_sch
 const GEMINI_DECLARATIONS = ["function_declarations", "functionDeclarations"] as const;
 /** The Vercel AI SDK's provider tools, whose `id` is already `<provider>.<tool>`. */
 const VERCEL_PROVIDER_TYPES = new Set(["provider-defined", "provider"]);
-/** OpenAI Responses' MCP tool, as given and once namespaced; its `headers` go. */
-const MCP_TYPES = new Set(["mcp", "openai.mcp"]);
+const CUSTOM = "custom";
+/** OpenAI Responses' MCP tool type; `<provider>.mcp` once namespaced. */
+const MCP = "mcp";
+/** An MCP tool's members that hold credentials, dropped. */
+const MCP_CREDENTIALS = new Set(["headers", "authorization"]);
 
 function isRecord(value: unknown): value is Definition {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A usable tool name: a non-empty string. */
+function isNamed(value: unknown): boolean {
+  return typeof value === "string" && value !== "";
 }
 
 /**
@@ -106,7 +125,7 @@ function geminiDeclarations(tool: unknown, provider: string | undefined): unknow
   const entries: unknown[] = [];
   for (const key of keys) {
     for (const declaration of tool[key] as unknown[]) {
-      if (isRecord(declaration) && typeof declaration.name === "string") {
+      if (isRecord(declaration) && isNamed(declaration.name)) {
         entries.push(geminiDeclaration(declaration));
       } else {
         entries.push(...semconvToolDefinitions([declaration], provider));
@@ -132,29 +151,43 @@ function semconvToolDefinition(tool: unknown, provider: string | undefined): unk
   const kind = tool.type ?? null;
   if (kind === FUNCTION) {
     const nested = tool[FUNCTION];
-    if (!isRecord(nested) || typeof tool.name === "string") return withParameters(tool);
-    // Object.fromEntries defines own properties, so a key such as `__proto__`
-    // in the caller's object stays a key instead of setting a prototype.
-    const lifted = Object.entries(nested).filter(([key]) => key !== "type");
-    const taken = new Set(lifted.map(([key]) => key));
-    const rest = Object.entries(tool).filter(
-      ([key]) => key !== "type" && key !== FUNCTION && !taken.has(key),
-    );
-    return withParameters(Object.fromEntries([["type", FUNCTION], ...lifted, ...rest]));
+    if (!isRecord(nested) || isNamed(tool.name)) return withParameters(tool);
+    return withParameters(liftedTool(tool, FUNCTION, nested));
+  }
+  if (kind === CUSTOM) {
+    const nested = tool[CUSTOM];
+    if (isRecord(nested) && !isNamed(tool.name)) {
+      return semconvToolDefinition(liftedTool(tool, CUSTOM, nested), provider);
+    }
   }
   if (
-    typeof tool.name === "string" &&
-    (kind === null || (kind === "custom" && Object.hasOwn(tool, "input_schema")))
+    isNamed(tool.name) &&
+    (kind === null || (kind === CUSTOM && Object.hasOwn(tool, "input_schema")))
   ) {
     const rest = Object.entries(tool).filter(([key]) => key !== "type");
     return withParameters(Object.fromEntries([["type", FUNCTION], ...rest]));
   }
   const spec = tool.toolSpec;
-  if (kind === null && isRecord(spec) && typeof spec.name === "string") {
+  if (kind === null && isRecord(spec) && isNamed(spec.name)) {
     return bedrockTool(tool, spec);
   }
   if (typeof kind !== "string" || kind === "") return tool;
-  return builtInTool(withoutCredentials(tool, kind), kind, provider);
+  return withoutCredentials(builtInTool(tool, kind, provider));
+}
+
+/**
+ * The tool with its nested `kind` object's members at the top level. The
+ * nested members win; the top level's other members follow.
+ */
+function liftedTool(tool: Definition, kind: string, nested: Definition): Definition {
+  // Object.fromEntries defines own properties, so a key such as `__proto__`
+  // in the caller's object stays a key instead of setting a prototype.
+  const lifted = Object.entries(nested).filter(([key]) => key !== "type");
+  const taken = new Set(lifted.map(([key]) => key));
+  const rest = Object.entries(tool).filter(
+    ([key]) => key !== "type" && key !== kind && !taken.has(key),
+  );
+  return Object.fromEntries([["type", kind], ...lifted, ...rest]);
 }
 
 /** A provider's built-in tool, its type namespaced. */
@@ -167,10 +200,16 @@ function builtInTool(tool: Definition, kind: string, provider: string | undefine
   return tool;
 }
 
-/** An MCP tool without its `headers`, which can carry a credential. */
-function withoutCredentials(tool: Definition, kind: string): Definition {
-  if (!MCP_TYPES.has(kind) || !Object.hasOwn(tool, "headers")) return tool;
-  return Object.fromEntries(Object.entries(tool).filter(([key]) => key !== "headers"));
+/**
+ * An MCP tool (`mcp` or `<provider>.mcp`) without its credential members. Read
+ * from the type the tool is written with, so a second pass drops the same
+ * members.
+ */
+function withoutCredentials(tool: Definition): Definition {
+  const kind = tool.type;
+  if (typeof kind !== "string" || !(kind === MCP || kind.endsWith(`.${MCP}`))) return tool;
+  if (![...MCP_CREDENTIALS].some((key) => Object.hasOwn(tool, key))) return tool;
+  return Object.fromEntries(Object.entries(tool).filter(([key]) => !MCP_CREDENTIALS.has(key)));
 }
 
 /** Bedrock's `toolSpec` lifted to a function tool, `inputSchema.json` as parameters. */
