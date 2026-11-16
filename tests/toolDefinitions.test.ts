@@ -363,6 +363,43 @@ describe("semconvToolDefinitions", () => {
     expect(semconvToolDefinitions(once, undefined)).toEqual(once);
   });
 
+  it("drops the credentials in a Vercel MCP provider tool's args", () => {
+    // The AI SDK's openai.mcp tool carries the request's credentials in args.
+    const tool = {
+      type: "provider",
+      id: "openai.mcp",
+      name: "mcp",
+      args: {
+        serverLabel: "docs",
+        serverUrl: "https://mcp.example.com",
+        authorization: "token",
+        headers: { Authorization: "Bearer secret" },
+        requireApproval: "never",
+      },
+    };
+    const once = semconvToolDefinitions([tool], undefined);
+    expect(once).toEqual([
+      {
+        type: "openai.mcp",
+        id: "openai.mcp",
+        name: "mcp",
+        args: {
+          serverLabel: "docs",
+          serverUrl: "https://mcp.example.com",
+          requireApproval: "never",
+        },
+      },
+    ]);
+    expect(JSON.stringify(semconvToolDefinitions(once, undefined))).toBe(JSON.stringify(once));
+  });
+
+  it("keeps the credentials in other tools' args", () => {
+    const tool = { type: "provider", id: "openai.web_search", args: { authorization: "kept" } };
+    expect(semconvToolDefinitions([tool], undefined)).toEqual([
+      { ...tool, type: "openai.web_search" },
+    ]);
+  });
+
   it("keeps an authorization member on other tools", () => {
     const tool = { type: "web_search", authorization: "kept" };
     expect(semconvToolDefinitions([tool], "openai")).toEqual([

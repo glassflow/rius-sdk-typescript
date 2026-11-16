@@ -54,7 +54,9 @@
  * is written as) loses its `headers` and its `authorization`: the headers are
  * the requests' headers to the MCP server and can carry an `Authorization`
  * credential, and `authorization` is an OAuth access token for the server or
- * connector. Credentials never belong in telemetry. This applies to the
+ * connector. The Vercel AI SDK's `openai.mcp` provider tool holds the same two
+ * members in its `args`, and they go there too. Credentials never belong in
+ * telemetry. This applies to the
  * definitions rewritten here, not to definitions another instrumentation
  * already wrote as `gen_ai.tool.definitions`.
  *
@@ -201,15 +203,33 @@ function builtInTool(tool: Definition, kind: string, provider: string | undefine
 }
 
 /**
- * An MCP tool (`mcp` or `<provider>.mcp`) without its credential members. Read
- * from the type the tool is written with, so a second pass drops the same
- * members.
+ * An MCP tool (`mcp` or `<provider>.mcp`) without its credential members, at
+ * the top level and in a Vercel provider tool's `args`. Read from the type the
+ * tool is written with, so a second pass drops the same members.
  */
 function withoutCredentials(tool: Definition): Definition {
   const kind = tool.type;
   if (typeof kind !== "string" || !(kind === MCP || kind.endsWith(`.${MCP}`))) return tool;
-  if (![...MCP_CREDENTIALS].some((key) => Object.hasOwn(tool, key))) return tool;
-  return Object.fromEntries(Object.entries(tool).filter(([key]) => !MCP_CREDENTIALS.has(key)));
+  let scrubbed = tool;
+  const args = Object.hasOwn(tool, "args") ? tool.args : undefined;
+  if (isRecord(args) && hasCredentials(args)) {
+    // Spreading would set a prototype from an own `__proto__` key; map in place.
+    scrubbed = Object.fromEntries(
+      Object.entries(tool).map(([key, value]) => [
+        key,
+        key === "args" ? withoutMembers(args) : value,
+      ]),
+    );
+  }
+  return hasCredentials(scrubbed) ? withoutMembers(scrubbed) : scrubbed;
+}
+
+function hasCredentials(members: Definition): boolean {
+  return [...MCP_CREDENTIALS].some((key) => Object.hasOwn(members, key));
+}
+
+function withoutMembers(members: Definition): Definition {
+  return Object.fromEntries(Object.entries(members).filter(([key]) => !MCP_CREDENTIALS.has(key)));
 }
 
 /** Bedrock's `toolSpec` lifted to a function tool, `inputSchema.json` as parameters. */
