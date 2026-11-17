@@ -204,6 +204,55 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
     expect(exported(raw)).toEqual(raw);
   });
 
+  it("drops a tool's name and description copies with its schema", () => {
+    // The anthropic instrumentation (1.0.1 on) writes each tool's name and
+    // description beside its schema. They are copies of the schema's own
+    // fields, so they leave with it rather than ride next to the definitions.
+    const out = exported({
+      ...indexed(ANTHROPIC_TOOLS),
+      "llm.tools.0.tool.name": "get_weather",
+      "llm.tools.0.tool.description": "Weather for a city",
+    });
+    expect(definitions(out)).toEqual(ANTHROPIC_SEMCONV);
+    expect(llmToolsKeys(out)).toEqual([]);
+  });
+
+  it("keeps a name at an index with no schema", () => {
+    // Only the copies of a reassembled schema go: a name at an index with no
+    // schema is nothing the definitions hold.
+    const out = exported({ ...indexed([{ name: "a" }]), "llm.tools.1.tool.name": "b" });
+    expect(out["llm.tools.1.tool.name"]).toBe("b");
+    expect(definitions(out)).toEqual([{ type: "function", name: "a" }]);
+  });
+
+  it("keeps a description at an index with no schema", () => {
+    const out = exported({
+      ...indexed([{ name: "a" }]),
+      "llm.tools.1.tool.description": "orphan",
+    });
+    expect(out["llm.tools.1.tool.description"]).toBe("orphan");
+    expect(definitions(out)).toEqual([{ type: "function", name: "a" }]);
+  });
+
+  it("leaves the name and description too when a schema does not parse", () => {
+    const raw = {
+      "llm.tools.0.tool.json_schema": "{not json",
+      "llm.tools.0.tool.name": "ok",
+      "llm.tools.0.tool.description": "fine",
+    };
+    expect(exported(raw)).toEqual(raw);
+  });
+
+  it("drops the copies under a native definitions key as well", () => {
+    const out = exported({
+      [GEN_AI_TOOL_DEFINITIONS]: '[{"name":"native"}]',
+      ...indexed(ANTHROPIC_TOOLS),
+      "llm.tools.0.tool.name": "get_weather",
+      "llm.tools.0.tool.description": "Weather for a city",
+    });
+    expect(out).toEqual({ [GEN_AI_TOOL_DEFINITIONS]: '[{"name":"native"}]' });
+  });
+
   it("does not touch other keys under llm.tools", () => {
     const out = exported({
       ...indexed([{ name: "a" }]),
