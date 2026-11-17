@@ -2514,6 +2514,14 @@ export function stripSpanPayloads(span: ReadableSpan): void {
 const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
 
 /**
+ * The members of a tool the anthropic instrumentation (1.0.1 on) also writes
+ * on their own beside its schema, as `llm.tools.{i}.tool.<member>`. Copies of
+ * the schema's own fields, so they go wherever the schema goes.
+ */
+const LLM_TOOL_SCHEMA_COPIES = ["name", "description"] as const;
+const LLM_TOOL_SCHEMA_SUFFIX = ".tool.json_schema";
+
+/**
  * Reassemble a span's tool definitions into one `gen_ai.tool.definitions`,
  * in place.
  *
@@ -2528,10 +2536,12 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  *   and re-serialized as ONE array, in numeric index order, in the
  *   conventions' shape, as on the native `tools` option (see
  *   toolDefinitions.ts; a built-in tool's type is prefixed with the span's
- *   `gen_ai.provider.name`). The indexed keys are then deleted. If any one
- *   schema is not a string or does not parse, the whole family is left
- *   untouched rather than reassembled without it: it is content by prefix
- *   already, so nothing escapes, and a partial array would be a silent loss.
+ *   `gen_ai.provider.name`). The indexed keys are then deleted, with the
+ *   `llm.tools.N.tool.name` and `.description` copies some instrumentations
+ *   write beside a schema. If any one schema is not a string or does not
+ *   parse, the whole family is left untouched rather than reassembled without
+ *   it: it is content by prefix already, so nothing escapes, and a partial
+ *   array would be a silent loss.
  * - Only when there is no indexed schema at all: the tool-definition members
  *   of `llm.invocation_parameters` (`tools`, then the legacy `functions`),
  *   where litellm and langchain leave them. Both present are concatenated,
@@ -2578,7 +2588,13 @@ export function normalizeToolDefinitions(
         return;
       }
     }
-    for (const key of indexed.values()) delete attributes[key];
+    for (const key of indexed.values()) {
+      delete attributes[key];
+      // Each copy is spelled from its schema key as written, so a copy goes
+      // only when its index is spelled exactly like its schema's.
+      const tool = key.slice(0, -LLM_TOOL_SCHEMA_SUFFIX.length);
+      for (const member of LLM_TOOL_SCHEMA_COPIES) delete attributes[`${tool}.tool.${member}`];
+    }
     // litellm and langchain write the same definitions into the request bag
     // as well. They are duplicates of the ones just reassembled, and go now:
     // left behind, a second normalization would find a native
