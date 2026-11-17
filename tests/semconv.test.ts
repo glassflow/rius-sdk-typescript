@@ -105,7 +105,7 @@ describe("otelSpanKind", () => {
   it("follows the GenAI conventions: remote calls CLIENT, in-process work INTERNAL", () => {
     expect(otelSpanKind(SpanKind.LLM)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.EMBEDDING)).toBe(OtelSpanKind.CLIENT);
-    expect(otelSpanKind(SpanKind.RETRIEVER)).toBe(OtelSpanKind.CLIENT);
+    expect(otelSpanKind(SpanKind.RETRIEVER)).toBe(OtelSpanKind.INTERNAL);
     expect(otelSpanKind(SpanKind.RERANKER)).toBe(OtelSpanKind.CLIENT);
     expect(otelSpanKind(SpanKind.TOOL)).toBe(OtelSpanKind.INTERNAL);
     expect(otelSpanKind(SpanKind.AGENT)).toBe(OtelSpanKind.INTERNAL);
