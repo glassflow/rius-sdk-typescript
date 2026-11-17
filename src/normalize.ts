@@ -390,6 +390,8 @@ export const PROVIDER_NAME_ALIASES: Readonly<Record<string, string>> = {
   gemini: "gcp.gemini",
   "az.ai.inference": "azure.ai.inference",
   "az.ai.openai": "azure.ai.openai",
+  // LiteLLM's route for Ollama's chat endpoint
+  ollama_chat: "ollama",
   // the registry's own former spellings
   ...PROVIDER_NAME_RENAMES,
 };
@@ -1172,6 +1174,8 @@ export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Ex
  * names the provider exactly as the v7 integration does for the same call,
  * except Mistral: @ai-sdk/otel still writes the registry's former
  * `mistral_ai`, which PROVIDER_RENAME_RULES brings to the same `mistral`.
+ * Ollama is added on top: the registry lists `ollama`, and the community
+ * Ollama providers name themselves `ollama.chat` and `ollama.embedding`.
  */
 const VERCEL_PROVIDER_PREFIXES: ReadonlyArray<readonly [prefix: string, provider: string]> = [
   ["google.vertex", "gcp.vertex_ai"],
@@ -1190,6 +1194,7 @@ const VERCEL_PROVIDER_PREFIXES: ReadonlyArray<readonly [prefix: string, provider
   ["deepseek", "deepseek"],
   ["perplexity", "perplexity"],
   ["xai", "x_ai"],
+  ["ollama", "ollama"],
 ];
 
 /**

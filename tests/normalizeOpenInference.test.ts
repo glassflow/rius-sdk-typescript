@@ -197,6 +197,7 @@ describe("the provider value", () => {
       gemini: "gcp.gemini",
       "az.ai.inference": "azure.ai.inference",
       "az.ai.openai": "azure.ai.openai",
+      ollama_chat: "ollama",
     });
   });
 
@@ -205,6 +206,8 @@ describe("the provider value", () => {
     ["mistral_ai", "mistral"],
     ["xai", "x_ai"],
     ["  XAI  ", "x_ai"],
+    // LiteLLM's route for Ollama's chat endpoint
+    ["ollama_chat", "ollama"],
   ])("renames %s to %s, matched case- and whitespace-insensitively", (source, expected) => {
     expect(normalized({ "llm.provider": source })["gen_ai.provider.name"]).toBe(expected);
   });
@@ -328,6 +331,7 @@ describe("a routed model name", () => {
     ["openai", "openai/gpt-4o-mini", "gpt-4o-mini"],
     ["anthropic", "anthropic/claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"],
     ["mistralai", "mistral/mistral-small-latest", "mistral-small-latest"],
+    ["ollama_chat", "ollama_chat/llama3.2", "llama3.2"],
     // compared under the registry's spelling
     ["vertex_ai", "vertex_ai/gemini-2.5-flash", "gemini-2.5-flash"],
     // a prefix naming anyone else is part of the name
