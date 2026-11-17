@@ -130,6 +130,10 @@ describe("the provider id", () => {
     ["mistral.embedding", "mistral"],
     ["xai.chat", "x_ai"],
     ["google.vertex.chat", "gcp.vertex_ai"],
+    ["ollama.chat", "ollama"],
+    ["ollama.embedding", "ollama"],
+    ["ollama.responses", "ollama"],
+    ["ollama", "ollama"],
   ])("names %s as the registry's %s", (id, expected) => {
     expect(vercelProviderName([id])).toBe(expected);
   });
