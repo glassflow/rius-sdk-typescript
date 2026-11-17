@@ -1175,7 +1175,8 @@ export function taxonomyFromVercelOperation(raw: AttributeValue | undefined): Ex
  * except Mistral: @ai-sdk/otel still writes the registry's former
  * `mistral_ai`, which PROVIDER_RENAME_RULES brings to the same `mistral`.
  * Ollama is added on top: the registry lists `ollama`, and the community
- * Ollama providers name themselves `ollama.chat` and `ollama.embedding`.
+ * Ollama providers name themselves `ollama` or `ollama.<kind>`
+ * (`ollama.responses`, `ollama.embedding`).
  */
 const VERCEL_PROVIDER_PREFIXES: ReadonlyArray<readonly [prefix: string, provider: string]> = [
   ["google.vertex", "gcp.vertex_ai"],
