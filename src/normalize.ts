@@ -341,12 +341,13 @@ export const sum: Converter = (values) => {
 // --- OpenInference (openai, anthropic, langchain, llama-index, litellm) ---
 //
 // Source spellings were read from the instrumentors installed at the pinned
-// peer versions, not from memory. Note that each instrumentor NESTS its own
-// copy of @arizeai/openinference-semantic-conventions: the hoisted 2.7.0 has
-// no llm.request.model_name / llm.response.model_name, while the 2.8.0 nested
-// under the anthropic and openai instrumentations does, and that is the one
-// they compile against. Read the nested copy or a rule looks dead when it is
-// not.
+// peer versions, not from memory. Note that an instrumentor may NEST its own
+// copy of @arizeai/openinference-semantic-conventions: the anthropic and
+// langchain instrumentations nest 2.15.0, while the openai one resolves the
+// hoisted 2.16.0. Both define llm.request.model_name and
+// llm.response.model_name. Read the copy each instrumentor resolves, since an
+// older hoisted or nested copy can lack a key and make a rule look dead when
+// it is not.
 
 /**
  * The registry's own former spellings of a provider value. Unlike the
@@ -855,7 +856,7 @@ export const TAXONOMY_RULES: readonly NormalizationRule[] = [
  * - A SUM rule for the input tokens. Every bundled instrumentation already
  *   reports llm.token_count.prompt INCLUSIVE of the cache counts, so summing
  *   again would double-count every cached token. Pinned by a test. For the
- *   Anthropic one that holds only from 0.2.7, below the peer floor: earlier versions
+ *   Anthropic one that holds from 0.2.7, below the current peer floor: earlier versions
  *   copied Anthropic's cache-exclusive input_tokens and dropped both cache
  *   counts, which no rule here could recover.
  */
