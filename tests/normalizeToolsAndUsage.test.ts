@@ -234,6 +234,19 @@ describe("gen_ai.tool.definitions from llm.tools.N.tool.json_schema", () => {
     expect(definitions(out)).toEqual([{ type: "function", name: "a" }]);
   });
 
+  it("drops a copy only when it is spelled like its schema key", () => {
+    // The copy key is the schema key as written, so a zero-padded index takes
+    // its own padded copy and leaves the unpadded one alone.
+    const out = exported({
+      "llm.tools.01.tool.json_schema": JSON.stringify({ name: "a" }),
+      "llm.tools.1.tool.name": "kept",
+      "llm.tools.01.tool.name": "a",
+    });
+    expect(definitions(out)).toEqual([{ type: "function", name: "a" }]);
+    expect(out["llm.tools.1.tool.name"]).toBe("kept");
+    expect(out["llm.tools.01.tool.name"]).toBeUndefined();
+  });
+
   it("leaves the name and description too when a schema does not parse", () => {
     const raw = {
       "llm.tools.0.tool.json_schema": "{not json",

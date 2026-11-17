@@ -2519,6 +2519,7 @@ const LLM_TOOL_SCHEMA = /^llm\.tools\.([0-9]+)\.tool\.json_schema$/;
  * the schema's own fields, so they go wherever the schema goes.
  */
 const LLM_TOOL_SCHEMA_COPIES = ["name", "description"] as const;
+const LLM_TOOL_SCHEMA_SUFFIX = ".tool.json_schema";
 
 /**
  * Reassemble a span's tool definitions into one `gen_ai.tool.definitions`,
@@ -2587,10 +2588,12 @@ export function normalizeToolDefinitions(
         return;
       }
     }
-    for (const [index, key] of indexed) {
+    for (const key of indexed.values()) {
       delete attributes[key];
-      for (const member of LLM_TOOL_SCHEMA_COPIES)
-        delete attributes[`llm.tools.${index}.tool.${member}`];
+      // Each copy is spelled from its schema key as written, so a copy goes
+      // only when its index is spelled exactly like its schema's.
+      const tool = key.slice(0, -LLM_TOOL_SCHEMA_SUFFIX.length);
+      for (const member of LLM_TOOL_SCHEMA_COPIES) delete attributes[`${tool}.tool.${member}`];
     }
     // litellm and langchain write the same definitions into the request bag
     // as well. They are duplicates of the ones just reassembled, and go now:
