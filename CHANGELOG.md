@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.10.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.9.0...v1.10.0) (2026-11-17)
+
+
+### Features
+
+* honour OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT when RIUS_CAPTURE_CONTENT is unset ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+* map invoke_runner and other framework entrypoint operations to the CHAIN kind ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+
+
+### Bug Fixes
+
+* accept structured content attributes from third-party spans ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+* drop MCP credentials from recorded tool definitions ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+* drop the llm.tools name and description copies with their schema ([#259](https://github.com/glassflow/rius-sdk-typescript/issues/259)) ([cf1d13f](https://github.com/glassflow/rius-sdk-typescript/commit/cf1d13f9e252e6fde806cb2bdfa54de4b677efb1))
+* map Ollama provider ids to the registry's ollama ([#257](https://github.com/glassflow/rius-sdk-typescript/issues/257)) ([8529c4b](https://github.com/glassflow/rius-sdk-typescript/commit/8529c4bff358e6d2e71a44e65cb61fec84033a62))
+* record tool definitions in the conventions' function-tool shape ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+* require OpenInference openai 4.4.5 and anthropic 1.0.1 peers ([#258](https://github.com/glassflow/rius-sdk-typescript/issues/258)) ([8dc9045](https://github.com/glassflow/rius-sdk-typescript/commit/8dc9045a049702753c8d4bd66721fdf4660eebc5))
+* RETRIEVER spans use OpenTelemetry span kind INTERNAL ([#260](https://github.com/glassflow/rius-sdk-typescript/issues/260)) ([ba8fd66](https://github.com/glassflow/rius-sdk-typescript/commit/ba8fd667ef603d4ffdc4e7ba5832cdaa31548132))
+* size a blob whose content is a complete strip replacement from that replacement ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+* sync rius-semconv v1.13.0 ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+* write a tool call without a name as a text part instead of an invalid tool-call part ([9cd8209](https://github.com/glassflow/rius-sdk-typescript/commit/9cd8209e946af75577cdfb975b57b79cbe56e255))
+
+
+### Performance Improvements
+
+* read JSON strings by position in the media strip and rebuild ([#256](https://github.com/glassflow/rius-sdk-typescript/issues/256)) ([d73e18b](https://github.com/glassflow/rius-sdk-typescript/commit/d73e18bae62e820021d47c4ebc9e4bfe5b436296))
+
 ## [1.9.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.8.3...v1.9.0) (2026-11-13)
 
 
