@@ -288,7 +288,8 @@ A RETRIEVER span carries
 collection it searched, and `gen_ai.retrieval.top_k` when you pass `topK`.
 Each kind also
 decides the OpenTelemetry `SpanKind` field the conventions expect: LLM,
-EMBEDDING, RETRIEVER and RERANKER spans are CLIENT, everything else INTERNAL. Pass
+EMBEDDING and RERANKER spans are CLIENT, everything else INTERNAL, RETRIEVER
+included, since a retrieval wraps calls that have CLIENT spans of their own. Pass
 `otelKind` to override it, for example CLIENT for a call to a hosted agent.
 Note the name collision: `SpanKind` exported by this package is the taxonomy
 enum; the value for `otelKind` is `SpanKind` from `@opentelemetry/api`, so
