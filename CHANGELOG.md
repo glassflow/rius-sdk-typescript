@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/glassflow/rius-sdk-typescript/compare/v1.10.0...v1.10.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **deps:** bump the opentelemetry group across 1 directory with 5 updates ([#261](https://github.com/glassflow/rius-sdk-typescript/issues/261)) ([ea262c7](https://github.com/glassflow/rius-sdk-typescript/commit/ea262c799cc79b072e1f2d3c89fc2bff6038cb15))
+
 ## [1.10.0](https://github.com/glassflow/rius-sdk-typescript/compare/v1.9.0...v1.10.0) (2026-11-17)
 
 
